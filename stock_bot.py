@@ -265,6 +265,9 @@ class StockBot:
                     pass  # Bunlar sadece referans, config'a eklenmez
                 else:
                     config[key] = value  # Geri kalan her şey STOCK_CONFIG'a
+            # max_pos_usd init'te override'dan ÖNCE atanıyordu → banner/fallback
+            # eski $200'ü gösteriyordu; aggressive değeriyle senkronla
+            self.max_pos_usd = config.get("max_position_usd", self.max_pos_usd)
             logger.info("  📈 PAPER AGGRESSIVE MODE: Aktif")
             logger.info(f"     Max poz: {config.get('max_open_positions')} | "
                         f"Güven: {config.get('min_confidence_score')} | "

@@ -1,32 +1,26 @@
 # Trading Bot — Geliştirme Planı (v4.6 sonrası)
-_Hazırlanma: 2026-07-02 · Güncelleme: Railway TERK EDİLDİ → deploy evi Coolify VPS (91.99.9.121:8000)_
+_Hazırlanma: 2026-07-02 · Güncelleme (aynı gün akşam): FAZ 0 TAMAMLANDI — v4.6 Coolify VPS'te CANLI_
 
 ## Mevcut durum (özet)
-- **LIVE** ($487 gerçek): Bugün hâlâ **v4.5 (5 Mayıs)** kodu işlem yapıyor. 3 aylık sonuç **+%1.4** (yatay). İşlemler ~$26 çünkü Kelly negatifken sizer %5 tabana iniyor.
-- **PAPER** ($64k sanal): 6 Mayıs'tan beri ölüydü (2 ay veri kaybı). 2026-07-02'de **lokalde v4.6 ile yeniden başlatıldı** (watchdog'lu; durdurmak = `trading/` içine `STOP_BOT` dosyası).
-- **Repo taşındı:** `Wolkchen00/trading-bot` (yeni origin; eski Wolkchen0 reposunun push token'ı ölmüştü). v4.6 burada.
+- **LIVE** ($487 gerçek): **v4.6 CANLI** — `SABİT $250/alım`, kill %5, floor $414.
+- **PAPER** ($64k sanal): 2 ay kilitli kaldıktan sonra (bayat kill dosyası) **canlandı** —
+  PAPER AGGRESSIVE + index parking VPS'te çalışıyor; lokal kopya durduruldu (STOP_BOT).
+- **Repo:** `Wolkchen00/trading-bot` (public; eski Wolkchen0 push-ölü, o da public'ti).
+- **Deploy akışı:** push SONRASI deploy OTOMATİK DEĞİL — API ile tetiklenir:
+  `TOKEN=$(ssh root@91.99.9.121 cat /root/.coolify_claude_token)` →
+  `curl -H "Authorization: Bearer $TOKEN" "http://91.99.9.121:8000/api/v1/deploy?uuid=dlyojlxudkezk2bze3f3ypp2"`
+  (Claude'un SSH erişimi var: `~/.ssh/coolify_vps2` anahtarı, root@91.99.9.121)
 
-## FAZ 0 — Coolify'a bağla (İhsan'ın panel adımları, ~5 dk)
-Coolify: `http://91.99.9.121:8000`
-1. **Kaynağı değiştir/oluştur:** Mevcut trading uygulaması varsa → Source'u
-   `github.com/Wolkchen00/trading-bot` (branch `main`) yap. Yoksa → New Resource →
-   **Docker Compose** → repo `Wolkchen00/trading-bot`, compose dosyası `docker-compose.yml`
-   (iki servis birden gelir: `trading-live` + `trading-short`).
-2. **Environment Variables** (Coolify bunları `.env` olarak yazar, compose `env_file: .env`
-   ile okur — lokal `.env` git'e GİTMEZ, o yüzden panele girilmeli):
-   - `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_SECRET_KEY`
-   - `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_SECRET_KEY`
-   - `ALPHA_VANTAGE_KEY`, `MARKETAUX_TOKEN`
-   - (önerilen) `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` → al/sat/kill bildirimleri
-3. **Deploy** butonu. Loglarda şunu doğrula: live banner'da
-   `Boyut: SABİT $250/alım` + paper banner'da `PAPER AGGRESSIVE MODE`.
-4. **ÇİFT BOT KONTROLÜ (kritik):**
-   - Railway hesabında hâlâ çalışan servis varsa SİL (aynı live hesaba iki bot emir
-     basar + boşuna fatura). Kod/konfigden Railway izleri zaten temizlendi.
-   - VPS'te paper konteyneri ayağa kalkınca **lokaldeki paper botu durdur**
-     (`trading/STOP_BOT` dosyası oluştur) — çifte paper işlem olmasın.
-5. (İstersen) bana Coolify **API token** ver (panel → Keys & Tokens → API tokens):
-   sonraki deploy/rollback/log işlerini terminalden ben yönetirim.
+## FAZ 0 — Coolify bağlantısı ✅ TAMAMLANDI (2026-07-02)
+- Coolify app `trading-bot` kaynağı `Wolkchen00/trading-bot`'a çevrildi (API ile).
+- Coolify REST API açıldı (`is_api_enabled`), `claude` API token'ı üretildi
+  (`/root/.coolify_claude_token` — VPS'te, panel > Keys & Tokens'ta da görünür).
+- 3 deploy yapıldı: v4.6 → kill auto-reset → opsiyon mükerrer-emir fix.
+- 2 aylık paper agent verisi (145KB agent_performance.json) redeploy öncesi kurtarıldı
+  → lokal `state_paper/` (meta_labeler girdisi).
+- 27 öksüz AMD PUT emri iptal edildi (mükerrer-emir bug'ı; kod düzeltildi).
+- ❗ KALAN TEK İŞ: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` değerleri (paneldeki
+  kayıtlar boş çıktı) — İhsan token verirse panele girilir → al/sat/kill bildirimleri.
 
 ## FAZ 1 — v4.6 canlıda (deploy sonrası ilk hafta)
 - İlk alımların **~$250** olduğunu doğrula (log: `PositionSizer [LONG-SABİT]`).

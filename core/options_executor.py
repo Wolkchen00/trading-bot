@@ -67,6 +67,28 @@ class OptionsExecutor:
 
             # === KONTROLLER ===
 
+            # 0. Bekleyen emir kontrolü — MÜKERRER EMİR KORUMASI
+            # Limit emri dolmadıkça Alpaca'da pozisyon oluşmaz; sync hafızadaki
+            # kaydı düşürünce sinyal her turda YENİDEN emir basıyordu (2026-07-02:
+            # 28 adet açık AMD PUT emri birikti). Aynı underlying için açık
+            # opsiyon emri varken yenisi gönderilmez.
+            try:
+                from alpaca.trading.requests import GetOrdersRequest
+                from alpaca.trading.enums import QueryOrderStatus
+                open_orders = self.bot.client.get_orders(
+                    GetOrdersRequest(status=QueryOrderStatus.OPEN)
+                )
+                for o in open_orders:
+                    osym = getattr(o, "symbol", "") or ""
+                    # Opsiyon sembolü: AMD260710P00435000 (underlying + YYMMDD + C/P + strike)
+                    if osym.startswith(underlying) and len(osym) > len(underlying) + 8:
+                        logger.debug(
+                            f"  {underlying} OPT: Bekleyen opsiyon emri var ({osym}), yeni emir atlanıyor"
+                        )
+                        return False
+            except Exception as e:
+                logger.debug(f"  {underlying} OPT: Açık emir kontrolü başarısız: {e}")
+
             # 1. Max pozisyon kontrolü
             max_positions = config.get("options_max_positions", 5)
             current_options = len(self.bot.options_positions)

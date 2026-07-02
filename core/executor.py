@@ -30,8 +30,8 @@ class OrderExecutor:
             cash = float(account.cash)
             equity = float(account.equity)
 
-            # Equity floor kontrolü
-            if not bot.is_paper and bot.equity_floor > 0 and equity < bot.equity_floor:
+            # Equity floor kontrolü (A3: live+paper ikisinde de uygulanır)
+            if bot.equity_floor > 0 and equity < bot.equity_floor:
                 logger.warning(
                     f"EQUITY FLOOR! Hesap ${equity:,.2f} < floor ${bot.equity_floor:,.2f} — "
                     f"Yeni alim yapilmiyor."
@@ -94,6 +94,12 @@ class OrderExecutor:
                 return False
 
             qty = round(max_invest / price, 4)  # Fractional shares
+            # TAM PAY tercihi: Alpaca fractional emirleri DAY-only → GTC server-side
+            # stop konulamıyor (gece koruması bot-loop'a kalıyor). Tam pay, hedef
+            # tutarın >=%75'ini karşılıyorsa tam paya yuvarla ki GTC stop çalışsın.
+            whole_qty = int(max_invest / price)
+            if whole_qty >= 1 and whole_qty * price >= 0.75 * max_invest:
+                qty = float(whole_qty)
 
             if qty * price < 1:
                 logger.warning(f"Çok küçük işlem: ${qty * price:.2f}")
@@ -154,12 +160,14 @@ class OrderExecutor:
                     f"(${qty * price:,.2f}) | Komisyon: $0 "
                     f"| {', '.join(analysis.get('reasons', []))}"
                 )
-                # Ayri SL emri
+                # Ayri SL emri — fractional qty'de Alpaca GTC kabul etmez, DAY kullan
+                # (bot-loop stop'u her durumda devrede; DAY en azından bugünü korur)
                 try:
                     limit_price = round(stop_price * 0.995, 2)
+                    sl_tif = TimeInForce.GTC if float(qty) == int(qty) else TimeInForce.DAY
                     sl_request = StopLimitOrderRequest(
                         symbol=symbol, qty=qty,
-                        side=OrderSide.SELL, time_in_force=TimeInForce.GTC,
+                        side=OrderSide.SELL, time_in_force=sl_tif,
                         stop_price=stop_price, limit_price=limit_price,
                     )
                     bot.client.submit_order(sl_request)
@@ -287,6 +295,10 @@ class OrderExecutor:
             )
 
             bot.positions.pop(symbol, None)
+            # A6: tam kapanışta yönetim bayrak önbelleğini temizle (yeniden alımda
+            # eski partial_sold/breakeven taşınmasın)
+            if hasattr(bot, "_exit_flag_cache"):
+                bot._exit_flag_cache.pop(symbol, None)
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({
                 "action": "SELL", "symbol": symbol, "price": current_price,

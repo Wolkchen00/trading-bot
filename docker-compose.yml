@@ -18,6 +18,7 @@ services:
       - PYTHONUNBUFFERED=1
       - FINBERT_CACHE_DIR=/app/models/finbert
     volumes:
+      - state-live:/app/state_live          # KALICI: pdt/kill_switch/agent_perf (redeploy'da silinmez)
       - ./logs/live:/app/logs
     logging:
       driver: "json-file"
@@ -44,9 +45,15 @@ services:
       - PYTHONUNBUFFERED=1
       - FINBERT_CACHE_DIR=/app/models/finbert
     volumes:
+      - state-paper:/app/state_paper        # KALICI: meta_labeler verisi (agent_performance.json) burada birikir
       - ./logs/short:/app/logs
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+# Named volume'lar — container'dan bağımsız, redeploy'da KORUNUR (state kalıcılığı).
+volumes:
+  state-live:
+  state-paper:

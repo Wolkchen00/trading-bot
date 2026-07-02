@@ -22,10 +22,16 @@ class KillSwitch:
         self,
         max_consecutive_errors: int = 3,
         max_daily_loss_pct: float = 0.05,  # %5
-        kill_file: str = "kill_switch.json",
+        kill_file: str = None,
     ):
         self.max_consecutive_errors = max_consecutive_errors
         self.max_daily_loss_pct = max_daily_loss_pct
+        if kill_file is None:
+            try:
+                from config import state_path
+                kill_file = state_path("kill_switch.json")
+            except Exception:
+                kill_file = "kill_switch.json"
         self.kill_file = kill_file
         self.consecutive_errors = 0
         self.is_killed = False

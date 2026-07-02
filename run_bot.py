@@ -12,6 +12,7 @@ Durdurmak için:
 import os
 import sys
 import time
+import json
 import subprocess
 import signal
 from datetime import datetime
@@ -20,6 +21,61 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BOT_SCRIPT = os.path.join(SCRIPT_DIR, "stock_bot.py")
 STOP_FILE = os.path.join(SCRIPT_DIR, "STOP_BOT")
 LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
+
+# State dizini config ile aynı olmalı (live/paper izole) — A1/A4
+try:
+    from config import STATE_DIR as _STATE_DIR
+except Exception:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
+    _mode = "live" if os.getenv("TRADING_MODE", "paper") == "live" else "paper"
+    _STATE_DIR = os.path.join(SCRIPT_DIR, f"state_{_mode}")
+    os.makedirs(_STATE_DIR, exist_ok=True)
+
+LOCK_FILE = os.path.join(_STATE_DIR, "instance.lock")
+KILL_FILE = os.path.join(_STATE_DIR, "kill_switch.json")
+_lock_handle = None  # tek-instance kilidi (süreç ömrü boyunca açık tutulur)
+
+
+def acquire_single_instance_lock():
+    """Aynı moddan (live/paper) ikinci bir watchdog çalışmasını engelle (A1).
+    Sabit byte 0'ı kilitler; başarılı olursa handle süreç ömrü boyunca açık kalır.
+    Returns: True = kilit alındı, False = başka instance çalışıyor."""
+    global _lock_handle
+    try:
+        h = open(LOCK_FILE, "a+")
+        h.seek(0)  # sabit offset (byte 0) kilitle — EOF değil
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(h.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(h.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        try:
+            h.close()
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return True  # Kilit mekanizması yoksa engelleme (eski davranış)
+    # Başarılı: handle'ı global'de tut (GC ile kapanıp kilit serbest kalmasın)
+    _lock_handle = h
+    return True
+
+
+def kill_switch_active():
+    """state dizininde kill_switch.json killed=true ise True döner (A4)."""
+    try:
+        if os.path.exists(KILL_FILE):
+            with open(KILL_FILE, "r") as f:
+                return bool(json.load(f).get("killed", False))
+    except Exception:
+        pass
+    return False
 
 MAX_RESTARTS = 50          # Gunluk max yeniden baslatma
 RESTART_DELAY_BASE = 30    # Ilk bekleme 30 saniye
@@ -118,6 +174,18 @@ def main():
         os.remove(STOP_FILE)
         log("Eski STOP_BOT dosyasi silindi")
 
+    # A1: Tek-instance kilidi — aynı moddan ikinci bir watchdog çalışmasını engelle
+    if not acquire_single_instance_lock():
+        log(f"KRITIK: Bu modda ({_STATE_DIR}) zaten bir bot calisiyor. "
+            f"Cift-instance state cakismasini onlemek icin cikiliyor.")
+        return
+
+    # A4: Onceki oturumda kill-switch tetiklendiyse otomatik baslatma
+    if kill_switch_active():
+        log("🚨 KILL SWITCH AKTIF (onceki oturum). Bot baslatilmiyor. "
+            f"Devam icin: {KILL_FILE} dosyasini sil.")
+        return
+
     restart_count = 0
     last_reset = datetime.now()
     consecutive_fails = 0
@@ -144,6 +212,13 @@ def main():
 
         if result == "STOPPED" or result == "INTERRUPTED":
             log("Bot kullanici tarafindan durduruldu")
+            break
+
+        # A4: Bot kill-switch tetikleyerek çıktıysa YENİDEN BAŞLATMA
+        # (önceki davranış: temiz çıkışta bile 30sn sonra restart → kill etkisiz kalıyordu)
+        if kill_switch_active():
+            log("🚨 KILL SWITCH AKTIF — bot yeniden baslatilmayacak. "
+                f"Devam icin {KILL_FILE} dosyasini sil.")
             break
 
         # Yeniden baslatma mantigi

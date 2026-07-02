@@ -28,7 +28,7 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from config import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY, STOCK_CONFIG, SHORT_CONFIG,
     OPTIONS_CONFIG, PAPER_AGGRESSIVE_CONFIG, STOCK_IDS, SECTOR_MAP,
-    MARKET_REGIME_CONFIG,
+    MARKET_REGIME_CONFIG, COMMISSION_CONFIG,
 )
 
 
@@ -39,25 +39,60 @@ from config import (
 class BacktestEngine:
     """6 aylık tarihsel backtest motoru."""
 
-    def __init__(self, initial_capital: float = 100000.0):
+    def __init__(self, initial_capital: float = 100000.0, use_paper_aggressive: bool = True):
         self.initial_capital = initial_capital
         self.capital = initial_capital
         self.equity_peak = initial_capital
+        self.total_costs = 0.0           # Toplam işlem maliyeti (slippage + SEC + FINRA)
+        self.use_paper_aggressive = use_paper_aggressive
+        self.spy_buyhold_pct = None      # SPY al-tut benchmark (aynı dönem)
 
         # Alpaca data client
         self.data_client = StockHistoricalDataClient(
             api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY,
         )
 
-        # Config — paper aggressive override
+        # Config — paper aggressive override (yalnızca paper modunda)
         self.config = dict(STOCK_CONFIG)
-        for key, value in PAPER_AGGRESSIVE_CONFIG.items():
-            if key.startswith("short_"):
-                pass  # Short ayarları ayrı
-            elif key.startswith("enable_") or key.startswith("prefer_"):
-                pass
-            else:
-                self.config[key] = value
+        if use_paper_aggressive:
+            for key, value in PAPER_AGGRESSIVE_CONFIG.items():
+                if key.startswith("short_"):
+                    pass  # Short ayarları ayrı
+                elif key.startswith("enable_") or key.startswith("prefer_"):
+                    pass
+                else:
+                    self.config[key] = value
+        else:
+            # LIVE config: pozisyon cap'i live_max_position_usd'den (konservatif)
+            self.config["max_position_usd"] = self.config.get("live_max_position_usd", 200)
+
+        # Edge-research deney hook'u: eşikleri env'den override et (config'i kirletmeden sweep)
+        _mc = os.getenv("BT_MIN_CONF")
+        if _mc:
+            self.config["min_confidence_score"] = int(_mc)
+        _msc = os.getenv("BT_MIN_SHORT_CONF")
+        if _msc:
+            SHORT_CONFIG["short_min_confidence"] = int(_msc)
+        # Exp2: LONG trend-gate (sadece teyitli uptrend'de uzun gir)
+        self.long_trend_gate = os.getenv("BT_LONG_TREND_GATE", "") == "1"
+        # Exp3: universe prune (kronik kaybedenleri çıkar)
+        self.exclude_symbols = set(
+            s.strip().upper() for s in os.getenv("BT_EXCLUDE", "").split(",") if s.strip()
+        )
+        # Çoklu-pencere doğrulama: bitiş tarihini geriye kaydır (out-of-sample)
+        self.end_offset_days = int(os.getenv("BT_END_OFFSET", "0"))
+
+        # Rejim-koşullu katılım deneyi (walk_forward / regime_experiment ile test edilir):
+        #   base    = mevcut davranış (BEAR'da buy_conf+10, short-10)
+        #   off     = rejim etkisi yok (temiz baseline)
+        #   flat    = BEAR'da YENİ LONG açma (risk-off); short serbest
+        #   scale   = pozisyon boyutunu rejime göre ölçekle (bull/bear mult)
+        #   overlay = boştaki nakit BEAR-dışı rejimde SPY getirisi kazanır (beta capture)
+        self.regime_mode = os.getenv("BT_REGIME_MODE", "base").lower()
+        self.bear_size_mult = float(os.getenv("BT_BEAR_SIZE_MULT", "0.5"))
+        self.bull_size_mult = float(os.getenv("BT_BULL_SIZE_MULT", "1.0"))
+        # Deney hızlandırma: bar verisini diske cache'le (yalnız BT_CACHE=1)
+        self.use_cache = os.getenv("BT_CACHE", "") == "1"
 
         # Pozisyonlar
         self.positions = {}       # symbol -> {entry_price, qty, entry_date, stop_loss_pct, highest}
@@ -75,6 +110,7 @@ class BacktestEngine:
         self.winning_trades = 0
         self.losing_trades = 0
         self.total_pnl = 0
+        self.overlay_pnl = 0.0   # rejim overlay sleeve — ayrı muhasebe, sizing'i etkilemez
         self.gross_profit = 0
         self.gross_loss = 0
 
@@ -89,13 +125,14 @@ class BacktestEngine:
         print("=" * 70)
 
         # Tarih aralığı
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=self.end_offset_days)
         start_date = end_date - timedelta(days=months * 30)
 
         # Hisse havuzu (endeksler ve ters ETF'ler hariç)
         symbols = [
             s for s in STOCK_IDS.keys()
             if s not in ["SPY", "QQQ", "SQQQ", "SH", "SPXS"]
+            and s not in self.exclude_symbols
         ]
 
         print(f"\n  Tarih: {start_date} → {end_date}")
@@ -108,6 +145,15 @@ class BacktestEngine:
         if spy_df.empty:
             print("  ❌ SPY verisi çekilemedi!")
             return
+
+        # SPY al-tut benchmark (aynı dönem) — botu indeks geçiyor mu?
+        try:
+            self.spy_buyhold_pct = float(
+                (spy_df["close"].iloc[-1] - spy_df["close"].iloc[0])
+                / spy_df["close"].iloc[0] * 100
+            )
+        except Exception:
+            self.spy_buyhold_pct = None
 
         # Her hisse için veri çek
         all_data = {}
@@ -132,6 +178,7 @@ class BacktestEngine:
         print("=" * 70)
 
         day_count = 0
+        prev_spy_close = None  # rejim overlay için gün-üstü SPY getirisi
         for day in trading_days:
             day_count += 1
             day_str = day.strftime("%Y-%m-%d") if hasattr(day, 'strftime') else str(day)[:10]
@@ -167,23 +214,55 @@ class BacktestEngine:
                     confidence = analysis["confidence"]
                     price = analysis["price"]
 
-                    # Rejim bazlı güven ayarlaması
+                    # Rejim bazlı katılım ayarı (regime_mode'a göre)
                     effective_buy_conf = self.config.get("min_confidence_score", 40)
                     effective_short_conf = SHORT_CONFIG.get("short_min_confidence", 45)
+                    size_mult = 1.0
 
-                    if regime == "BEAR":
-                        effective_buy_conf += 10
-                        effective_short_conf -= 10
+                    if self.regime_mode != "off":
+                        if regime == "BEAR":
+                            effective_buy_conf += 10
+                            effective_short_conf -= 10
+                            if self.regime_mode == "scale":
+                                size_mult = self.bear_size_mult
+                        elif regime == "BULL" and self.regime_mode == "scale":
+                            size_mult = self.bull_size_mult
+
+                    # flat mode: BEAR'da yeni long YOK (risk-off)
+                    bear_block_long = (self.regime_mode == "flat" and regime == "BEAR")
 
                     # BUY sinyali
-                    if signal == "BUY" and confidence >= effective_buy_conf:
-                        self._execute_buy(sym, price, confidence, day_str, analysis)
+                    if signal == "BUY" and confidence >= effective_buy_conf and not bear_block_long:
+                        # Exp2: trend-gate — sadece teyitli uptrend'de LONG (düşen bıçak engeli)
+                        if self.long_trend_gate and analysis.get("trend") != "UPTREND":
+                            continue
+                        self._execute_buy(sym, price, confidence, day_str, analysis, size_mult)
                         total_open += 1
 
                     # SHORT sinyali
                     elif signal == "SHORT" and confidence >= effective_short_conf:
                         self._execute_short(sym, price, confidence, day_str, analysis)
                         total_open += 1
+
+            # Rejim overlay (beta capture): boştaki nakit BEAR-dışında SPY ile büyür.
+            # "Aktif trading SPY'ın ÜSTÜNE alpha katıyor mu?" sorusunu dürüst test eder.
+            # Overlay = DÜRÜST "boştaki nakdi index'te tut" benchmark'ı:
+            #   - HER GÜN uygulanır (buy&hold SPY bear'da da tutar; rejim-kapısı koymak
+            #     down günleri atlayıp seçim-yanlılığı yaratır → YASAK)
+            #   - ayrı accumulator → kazanç pozisyon sizing'ini BÜYÜTMEZ (para iki kez çalışmaz)
+            #   - short notional idle'dan düşülür (short da buying-power tutar)
+            try:
+                curr_spy_close = float(spy_slice["close"].iloc[-1])
+                if self.regime_mode == "overlay" and prev_spy_close:
+                    short_notional = sum(
+                        p["entry_price"] * p["qty"]
+                        for p in self.short_positions.values()
+                    )
+                    idle = max(0.0, self.capital - short_notional)
+                    self.overlay_pnl += idle * (curr_spy_close / prev_spy_close - 1.0)
+                prev_spy_close = curr_spy_close
+            except Exception:
+                pass
 
             # Günlük equity kaydı
             equity = self._calculate_equity(day, all_data)
@@ -214,11 +293,28 @@ class BacktestEngine:
         # Son açık pozisyonları kapat
         self._close_all(trading_days[-1], all_data)
 
+        # Rejim overlay sleeve'ini final getiriye ekle — pozisyon sizing'ini etkilemeden
+        # (ayrı muhasebe → para iki kez çalışmaz; daily_equity'ye girmediği için Sharpe da şişmez)
+        self.total_pnl += self.overlay_pnl
+
         # Sonuçları raporla
         self._print_report()
 
     def _get_bars(self, symbol: str, start: date, end: date) -> pd.DataFrame:
-        """Alpaca'dan saatlik bar verisi çek."""
+        """Alpaca'dan saatlik bar verisi çek (BT_CACHE=1 ile diske cache'lenir)."""
+        cache_file = None
+        if self.use_cache:
+            import hashlib
+            os.makedirs(".bt_cache", exist_ok=True)
+            key = f"{symbol}_{start}_{end}_H"
+            cache_file = os.path.join(
+                ".bt_cache", hashlib.md5(key.encode()).hexdigest() + ".pkl"
+            )
+            if os.path.exists(cache_file):
+                try:
+                    return pd.read_pickle(cache_file)
+                except Exception:
+                    pass
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
@@ -232,6 +328,11 @@ class BacktestEngine:
                 try:
                     df = df.droplevel("symbol")
                 except (KeyError, ValueError):
+                    pass
+            if cache_file is not None and not df.empty:
+                try:
+                    df.to_pickle(cache_file)
+                except Exception:
                     pass
             return df
         except Exception as e:
@@ -375,19 +476,31 @@ class BacktestEngine:
         except Exception as e:
             return None
 
+    def _trade_cost(self, qty: float, price: float, side: str) -> float:
+        """Tek bacak işlem maliyeti: slippage (her iki taraf) + SEC/FINRA (sadece satış).
+        Alpaca hisse komisyonu $0; gerçekçi sürtünme için slippage + düzenleyici ücretler.
+        """
+        notional = qty * price
+        cost = notional * COMMISSION_CONFIG.get("estimated_slippage_pct", 0.001)
+        if side == "sell":
+            cost += notional * COMMISSION_CONFIG.get("sec_fee_per_dollar", 0.0)
+            cost += qty * COMMISSION_CONFIG.get("finra_taf_per_share", 0.0)
+        return cost
+
     def _execute_buy(self, symbol: str, price: float, confidence: float,
-                     day: str, analysis: Dict):
+                     day: str, analysis: Dict, size_mult: float = 1.0):
         """Simüle BUY emri."""
         max_usd = min(
             self.config.get("max_position_usd", 5000),
             self.capital * self.config.get("max_position_pct", 0.15),
             self.capital * 0.9,  # Max %90 sermaye kullan
-        )
+        ) * size_mult
         if max_usd < 50:
             return
 
         qty = max_usd / price
         cost = qty * price
+        entry_fee = self._trade_cost(qty, price, "buy")
 
         # ATR bazlı stop-loss
         atr = analysis.get("atr", 0)
@@ -410,8 +523,10 @@ class BacktestEngine:
             "reasons": analysis.get("reasons", []),
             "breakeven_set": False,
             "partial_sold": False,
+            "entry_fee": entry_fee,
         }
-        self.capital -= cost
+        self.capital -= (cost + entry_fee)
+        self.total_costs += entry_fee
 
     def _execute_short(self, symbol: str, price: float, confidence: float,
                        day: str, analysis: Dict):
@@ -520,9 +635,11 @@ class BacktestEngine:
     def _close_long(self, symbol: str, price: float, day: str, reason: str):
         """LONG pozisyon kapat."""
         pos = self.positions.pop(symbol)
-        pnl = (price - pos["entry_price"]) * pos["qty"]
+        exit_fee = self._trade_cost(pos["qty"], price, "sell")
+        pnl = (price - pos["entry_price"]) * pos["qty"] - pos.get("entry_fee", 0.0) - exit_fee
 
-        self.capital += pos["qty"] * price
+        self.capital += pos["qty"] * price - exit_fee
+        self.total_costs += exit_fee
         self.total_trades += 1
         self.total_pnl += pnl
 
@@ -550,8 +667,10 @@ class BacktestEngine:
     def _close_short(self, symbol: str, price: float, day: str, reason: str):
         """SHORT pozisyon kapat."""
         pos = self.short_positions.pop(symbol)
-        pnl = (pos["entry_price"] - price) * pos["qty"]
+        exit_fee = self._trade_cost(pos["qty"], price, "buy")  # cover = alış
+        pnl = (pos["entry_price"] - price) * pos["qty"] - pos.get("entry_fee", 0.0) - exit_fee
 
+        self.total_costs += exit_fee
         self.total_trades += 1
         self.total_pnl += pnl
 
@@ -651,6 +770,11 @@ class BacktestEngine:
         print(f"  Net P&L:        ${self.total_pnl:>+12,.2f}")
         print(f"  Getiri:         {total_return:>+11.2f}%")
         print(f"  Yıllık Getiri:  {total_return * 2:>+11.2f}%  (6ay→12ay)")
+        print(f"  İşlem Maliyeti: ${self.total_costs:>12,.2f}  (slippage+SEC+FINRA, net düşüldü)")
+        if self.spy_buyhold_pct is not None:
+            alpha = total_return - self.spy_buyhold_pct
+            print(f"  SPY Al-Tut:     {self.spy_buyhold_pct:>+11.2f}%  (aynı dönem benchmark)")
+            print(f"  Alpha (vs SPY): {alpha:>+11.2f}%  ({'GECIYOR +' if alpha > 0 else 'GERIDE -'})")
 
         print(f"\n  {'─' * 40}")
         print(f"  📈 TRADE İSTATİSTİKLERİ")
@@ -759,6 +883,9 @@ class BacktestEngine:
                 "max_drawdown": self.max_drawdown,
                 "avg_win": avg_win,
                 "avg_loss": avg_loss,
+                "total_costs": self.total_costs,
+                "spy_buyhold_pct": self.spy_buyhold_pct,
+                "config_mode": "paper_aggressive" if self.use_paper_aggressive else "live",
                 "trades": self.trades[-50:],  # Son 50 trade
             }
             with open("backtest_results.json", "w") as f:
@@ -774,17 +901,25 @@ class BacktestEngine:
 if __name__ == "__main__":
     months = 6
     capital = 100000.0
+    live_mode = False
 
-    if len(sys.argv) > 1:
+    args = list(sys.argv[1:])
+    if "--live" in args:
+        live_mode = True
+        args.remove("--live")
+
+    if len(args) > 0:
         try:
-            months = int(sys.argv[1])
+            months = int(args[0])
         except ValueError:
             pass
-    if len(sys.argv) > 2:
+    if len(args) > 1:
         try:
-            capital = float(sys.argv[2])
+            capital = float(args[1])
         except ValueError:
             pass
 
-    engine = BacktestEngine(initial_capital=capital)
+    mode_str = "LIVE config (konservatif)" if live_mode else "PAPER AGGRESSIVE config"
+    print(f"  ⚙️  Backtest config modu: {mode_str}")
+    engine = BacktestEngine(initial_capital=capital, use_paper_aggressive=not live_mode)
     engine.run(months=months)

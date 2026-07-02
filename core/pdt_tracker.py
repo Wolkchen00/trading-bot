@@ -25,8 +25,15 @@ class PDTTracker:
     PDT_EQUITY_THRESHOLD = 25_000  # $25K üzerinde PDT kuralı geçersiz
     STATE_FILE = "pdt_state.json"
 
-    def __init__(self, equity: float = 0):
+    def __init__(self, equity: float = 0, state_file: str = None):
         self.equity = equity
+        if state_file is None:
+            try:
+                from config import state_path
+                state_file = state_path("pdt_state.json")
+            except Exception:
+                state_file = self.STATE_FILE
+        self.STATE_FILE = state_file  # instance, live/paper izole
         self.day_trades: List[Dict] = []  # [{date, symbol, buy_time, sell_time}]
         self._load_state()
         logger.info(

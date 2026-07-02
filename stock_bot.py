@@ -44,7 +44,7 @@ from config import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY, TRADING_MODE, BOT_MODE,
     get_base_url, STOCK_CONFIG, SHORT_CONFIG, STOCK_IDS, STOCK_SEARCH_TERMS,
     SECTOR_MAP, MARKET_REGIME_CONFIG,
-    OPTIONS_CONFIG, PAPER_AGGRESSIVE_CONFIG,
+    OPTIONS_CONFIG, PAPER_AGGRESSIVE_CONFIG, state_path,
 )
 
 # Core modüller
@@ -125,6 +125,14 @@ class StockBot:
     def __init__(self):
         config = STOCK_CONFIG
 
+        # State dosyaları live/paper için izole (A1)
+        self.POSITIONS_FILE = state_path("bot_positions.json")
+        self._daily_baseline_file = state_path("daily_baseline.json")
+        # Yönetim bayrakları (partial_sold/breakeven_set/highest_price) pozisyon
+        # geçici olarak sync'ten düşse bile kaybolmasın diye cache (A6 — cascade önleme)
+        self._exit_flag_cache = {}
+        self._floor_block = False  # Equity floor ihlalinde yeni alım durdurma (A3)
+
         # Alpaca istemcileri
         is_paper = TRADING_MODE != "live"
         self.is_paper = is_paper
@@ -139,13 +147,22 @@ class StockBot:
         # Hesap bilgileri
         account = self.client.get_account()
         equity = float(account.equity)
-        self.initial_equity = equity
+        # Günlük kayıp baz çizgisi: restart'ta SIFIRLANMAZ (A2).
+        # Diskte bugünün (ET) bazı varsa onu kullan; yoksa Alpaca'nın
+        # gün-başı (last_equity) değerini baz al ve kalıcı yaz.
+        self.initial_equity = self._load_or_init_daily_baseline(account, equity)
         self.equity = equity
 
         # Pozisyon limitleri
         self.max_pos_usd = config.get("live_max_position_usd", 200)
         if is_paper:
             self.max_pos_usd = config.get("max_position_usd", 200)
+        else:
+            # LIVE: sizer/executor'ın okuduğu ortak anahtarları live değerleriyle doldur.
+            # fixed_position_usd > 0 → PositionSizer sabit boyut modunda çalışır
+            # (Kelly tabanının ürettiği ~$25'lik işlemler yerine kullanıcı boyutu).
+            config["fixed_position_usd"] = config.get("live_fixed_position_usd", 0)
+            config["max_position_usd"] = self.max_pos_usd
 
         self.equity_floor = equity * config.get("equity_floor_pct", 0.85)
 
@@ -253,6 +270,11 @@ class StockBot:
                         f"Güven: {config.get('min_confidence_score')} | "
                         f"Pozisyon: ${config.get('max_position_usd')}")
 
+        # === INDEX PARKING (boştaki nakit → SPY beta; paper-first, config-gated) ===
+        # Sync'ten ÖNCE kurulmalı: sync parking pozisyonunu dışlamak için manager'ı kullanır.
+        from core.index_parking import IndexParkingManager
+        self.index_parking = IndexParkingManager(self, config)
+
         # === POZİSYON SENKRONİZASYONU (restart-safe) ===
         self._sync_positions_from_alpaca()
         self._load_position_metadata()
@@ -264,7 +286,9 @@ class StockBot:
         logger.info(f"  STOCK TRADING BOT BASLATILDI")
         logger.info(f"  Mod: {mode_str} | Bot: {bot_mode_str}")
         logger.info(f"  Equity: ${equity:,.2f}")
-        logger.info(f"  Max pozisyon: ${self.max_pos_usd} | Floor: ${self.equity_floor:,.2f}")
+        fixed_usd = config.get("fixed_position_usd", 0)
+        size_mode = f"SABİT ${fixed_usd}/alım" if fixed_usd else "Kelly-ATR adaptif"
+        logger.info(f"  Max pozisyon: ${self.max_pos_usd} | Boyut: {size_mode} | Floor: ${self.equity_floor:,.2f}")
         logger.info(f"  Hisse havuzu: {len(config['symbols'])} hisse")
         logger.info(f"  Acik pozisyon: {len(self.positions)} long | {len(self.short_positions)} short")
         logger.info(f"  Options: {options_str} | Opsiyon poz: {len(self.options_positions)}")
@@ -346,6 +370,15 @@ class StockBot:
                     if self.kill_switch.check_api_error(e):
                         continue
 
+                # EQUITY FLOOR — live+paper: ihlalde YENİ ALIM durdurulur,
+                # mevcut pozisyonlar yönetilmeye devam eder (A3).
+                self._floor_block = self.equity_floor > 0 and self.equity < self.equity_floor
+                if self._floor_block and self._heartbeat_counter % 30 == 0:
+                    logger.warning(
+                        f"  🛑 EQUITY FLOOR: ${self.equity:,.2f} < floor ${self.equity_floor:,.2f} "
+                        f"— yeni alım DURDURULDU (pozisyonlar yönetiliyor)"
+                    )
+
                 # Piyasa rejim tespiti (her 30 dk) — v3.0 gelismis rejim
                 self._update_market_regime()
 
@@ -385,9 +418,16 @@ class StockBot:
                         else:
                             logger.debug(f"  Options pozisyon yonetim hatasi: {e}")
 
-                # Signal Queue kontrolu — bekleyen sinyalleri kontrol et
+                # Idle-cash index parking (paper-first) — günde 1 rebalance, nakit → beta
                 try:
-                    ready_signals = self.signal_queue.check_entries(self)
+                    self.index_parking.maybe_rebalance()
+                except Exception as e:
+                    logger.debug(f"  Index parking hatasi: {e}")
+
+                # Signal Queue kontrolu — bekleyen sinyalleri kontrol et
+                # (Equity floor ihlalinde yeni giriş yapılmaz — A3)
+                try:
+                    ready_signals = [] if self._floor_block else self.signal_queue.check_entries(self)
                     for sig in ready_signals:
                         sym = sig["symbol"]
                         sig_analysis = sig.get("analysis", {})
@@ -458,8 +498,8 @@ class StockBot:
                 except Exception as e:
                     logger.debug(f"  Jeopolitik tarama hatası: {e}")
 
-                # Hisse analizi
-                symbols = self._get_symbols_to_analyze()
+                # Hisse analizi (Equity floor ihlalinde yeni alım yapılmaz — A3)
+                symbols = [] if self._floor_block else self._get_symbols_to_analyze()
                 for symbol in symbols:
                     if len(self.positions) >= max_positions:
                         break
@@ -637,6 +677,10 @@ class StockBot:
         BOT_MODE: 'long_only' | 'short_only' | 'both'
         """
         try:
+            # Parking sembolü asla trade edilmez (bot'un nakit-sleeve'i, agent'a girmez)
+            if self.index_parking.is_parking_symbol(symbol):
+                return
+
             # Teknik analiz
             analysis = self._get_technical_analysis(symbol, config)
             if analysis is None:
@@ -1129,6 +1173,11 @@ class StockBot:
                 unrealized_pl = float(pos.unrealized_pl)
                 asset_class = getattr(pos, 'asset_class', 'us_equity')
 
+                # Index parking pozisyonu — bot'un nakit-sleeve'i, normal pozisyon DEĞİL.
+                # Agent/stop-loss/max-pozisyon mantığından dışla (sleeve, trade değil).
+                if self.index_parking.is_parking_symbol(symbol):
+                    continue
+
                 # OPTIONS pozisyon (us_option asset class)
                 if asset_class == 'us_option' or (len(symbol) > 10 and any(c in symbol for c in 'CP')):
                     if symbol not in self.options_positions:
@@ -1162,13 +1211,19 @@ class StockBot:
                 if qty > 0:
                     # LONG pozisyon
                     if symbol not in self.positions and BOT_MODE in ("long_only", "both"):
+                        # A6: pozisyon geçici düşüp geri geldiyse yönetim bayraklarını koru
+                        cached = self._exit_flag_cache.get(symbol, {})
                         self.positions[symbol] = {
                             "entry_price": entry_price,
                             "qty": qty,
-                            "entry_time": datetime.now().isoformat(),
+                            "entry_time": cached.get("entry_time") or datetime.now().isoformat(),
                             "synced_from_alpaca": True,
-                            "highest_price": current_price,
+                            "highest_price": max(current_price, cached.get("highest_price", 0) or 0),
+                            "breakeven_set": cached.get("breakeven_set", False),
+                            "partial_sold": cached.get("partial_sold", False),
                         }
+                        if cached.get("stop_loss_pct") is not None:
+                            self.positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
                         synced_long += 1
                         logger.info(
                             f"  🔄 LONG sync: {symbol} | "
@@ -1178,13 +1233,20 @@ class StockBot:
                 elif qty < 0:
                     # SHORT pozisyon (Alpaca negatif qty = short)
                     if symbol not in self.short_positions and BOT_MODE in ("short_only", "both"):
+                        # A6: yönetim bayraklarını koru (partial_covered/breakeven)
+                        cached = self._exit_flag_cache.get(symbol, {})
+                        lc = cached.get("lowest_price", 0) or 0
                         self.short_positions[symbol] = {
                             "entry_price": entry_price,
                             "qty": abs(qty),
-                            "entry_time": datetime.now().isoformat(),
+                            "entry_time": cached.get("entry_time") or datetime.now().isoformat(),
                             "synced_from_alpaca": True,
-                            "lowest_price": current_price,
+                            "lowest_price": min(current_price, lc) if lc > 0 else current_price,
+                            "breakeven_set": cached.get("breakeven_set", False),
+                            "partial_covered": cached.get("partial_covered", False),
                         }
+                        if cached.get("stop_loss_pct") is not None:
+                            self.short_positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
                         synced_short += 1
                         logger.info(
                             f"  🔄 SHORT sync: {symbol} | "
@@ -1209,11 +1271,13 @@ class StockBot:
             for symbol in list(self.positions.keys()):
                 if symbol not in alpaca_long_symbols:
                     logger.warning(f"  🗑️ LONG temizlendi (Alpaca'da yok): {symbol}")
+                    self._stash_exit_flags(symbol, self.positions[symbol])  # A6
                     self.positions.pop(symbol)
 
             for symbol in list(self.short_positions.keys()):
                 if symbol not in alpaca_short_symbols:
                     logger.warning(f"  🗑️ SHORT temizlendi (Alpaca'da yok): {symbol}")
+                    self._stash_exit_flags(symbol, self.short_positions[symbol])  # A6
                     self.short_positions.pop(symbol)
 
             for symbol in list(self.options_positions.keys()):
@@ -1227,6 +1291,20 @@ class StockBot:
 
         except Exception as e:
             logger.error(f"  Pozisyon sync hatası: {e}")
+
+    def _stash_exit_flags(self, symbol: str, pos_data: Dict):
+        """Pozisyon geçici olarak sync'ten düşerse yönetim bayraklarını sakla (A6).
+        Böylece geri geldiğinde partial_sold/breakeven_set sıfırlanıp cascade satış olmaz."""
+        if not isinstance(pos_data, dict):
+            return
+        keep = {}
+        for k in ("highest_price", "lowest_price", "breakeven_set",
+                  "partial_sold", "partial_covered", "stop_loss_pct", "entry_time"):
+            v = pos_data.get(k)
+            if v is not None:
+                keep[k] = v
+        if keep:
+            self._exit_flag_cache[symbol] = keep
 
     def _save_position_metadata(self):
         """Pozisyon metadata'sını dosyaya kaydet (restart-safe)."""
@@ -1294,9 +1372,51 @@ class StockBot:
     # GÜNLÜK RESET & ACİL DURUM
     # ============================================================
 
+    def _et_today(self) -> date:
+        """Borsanın (US/Eastern) bugünkü tarihi — gün-sınırları sunucu saatinden bağımsız (A2/C5)."""
+        try:
+            import pytz
+            return datetime.now(pytz.timezone('US/Eastern')).date()
+        except Exception:
+            return date.today()
+
+    def _save_daily_baseline(self, et_date: str, baseline_equity: float):
+        """Günlük kayıp baz çizgisini kalıcı yaz (restart-safe)."""
+        try:
+            with open(self._daily_baseline_file, "w") as f:
+                json.dump({"date": et_date, "baseline_equity": baseline_equity}, f)
+        except Exception as e:
+            logger.debug(f"  Günlük baz kaydı hatası: {e}")
+
+    def _load_or_init_daily_baseline(self, account, current_equity: float) -> float:
+        """
+        Günlük kayıp baz çizgisini döndürür.
+        - Diskte bugünün (ET) bazı varsa onu kullan (restart'ta sıfırlanmaz).
+        - Yoksa Alpaca last_equity (gün-başı equity) baz alınır, diske yazılır.
+        """
+        et_today = self._et_today().isoformat()
+        try:
+            if os.path.exists(self._daily_baseline_file):
+                with open(self._daily_baseline_file, "r") as f:
+                    data = json.load(f)
+                if data.get("date") == et_today and float(data.get("baseline_equity", 0)) > 0:
+                    base = float(data["baseline_equity"])
+                    logger.info(f"  📆 Günlük baz diskten yüklendi: ${base:,.2f} (ET {et_today})")
+                    return base
+        except Exception as e:
+            logger.debug(f"  Günlük baz okuma hatası: {e}")
+        # Yeni gün / dosya yok → gün-başı (SOD) equity
+        try:
+            sod = float(getattr(account, "last_equity", 0) or 0)
+        except Exception:
+            sod = 0.0
+        baseline = sod if sod > 0 else current_equity
+        self._save_daily_baseline(et_today, baseline)
+        return baseline
+
     def _daily_reset(self):
         """Her yeni gün başında değişkenleri sıfırla."""
-        today = date.today()
+        today = self._et_today()
         if self._daily_reset_date == today:
             return
 
@@ -1316,8 +1436,15 @@ class StockBot:
         self.trades_today = []
         self._daily_buys_count = 0
         self._morning_scan_done = False
-        self.initial_equity = self.equity  # Günlük PnL için baz
-        logger.info(f"  📆 Günlük reset: {today} | Başlangıç equity: ${self.equity:,.2f}")
+        # Yeni günün baz çizgisi: gün-başı (SOD) equity, kalıcı yazılır (A2)
+        try:
+            account = self.client.get_account()
+            sod = float(getattr(account, "last_equity", 0) or 0)
+            self.initial_equity = sod if sod > 0 else self.equity
+        except Exception:
+            self.initial_equity = self.equity
+        self._save_daily_baseline(today.isoformat(), self.initial_equity)
+        logger.info(f"  📆 Günlük reset (ET): {today} | Başlangıç equity: ${self.initial_equity:,.2f}")
 
     def _emergency_close_all(self, reason: str):
         """KillSwitch tarafından çağrılır — tüm pozisyonları kapat."""

@@ -252,6 +252,9 @@ class ShortExecutor:
             logger.info(f"  🔺 COVER {symbol}: {qty:.4f} | Sebep: {reason}")
 
             bot.short_positions.pop(symbol, None)
+            # A6: tam kapanışta yönetim bayrak önbelleğini temizle
+            if hasattr(bot, "_exit_flag_cache"):
+                bot._exit_flag_cache.pop(symbol, None)
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({
                 "action": "COVER", "symbol": symbol,

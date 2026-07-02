@@ -111,9 +111,15 @@ def test_vader():
     assert "compound" in score
 test("vaderSentiment", test_vader)
 
-def test_transformers():
-    import transformers
-test("transformers (FinBERT)", test_transformers)
+def test_onnx_finbert():
+    # FinBERT artık ONNX ile çalışıyor (transformers/PyTorch Railway OOM nedeniyle
+    # kaldırıldı — c9800c5). Lokalde onnxruntime olmayabilir → VADER fallback tasarımı.
+    try:
+        import onnxruntime  # noqa: F401
+        return True
+    except ImportError:
+        return "onnxruntime yok — FinBERT yerine VADER fallback (Docker'da ONNX aktif)"
+test("onnxruntime (FinBERT)", test_onnx_finbert)
 
 def test_ntscraper():
     try:
@@ -670,7 +676,8 @@ def test_requirements():
     assert os.path.exists(req)
     with open(req) as f:
         content = f.read()
-    required = ["alpaca-py", "pandas", "numpy", "ta", "python-dotenv", "pytz", "transformers"]
+    # transformers bilinçli yok (Railway OOM — c9800c5); FinBERT = onnxruntime yolu
+    required = ["alpaca-py", "pandas", "numpy", "ta", "python-dotenv", "pytz", "onnxruntime"]
     missing = [r for r in required if r not in content]
     assert len(missing) == 0, f"Eksik bağımlılıklar: {missing}"
 test("requirements.txt tam", test_requirements)

@@ -21,7 +21,14 @@ class PerformanceTracker:
 
     HISTORY_FILE = "trade_history.json"
 
-    def __init__(self):
+    def __init__(self, history_file: str = None):
+        if history_file is None:
+            try:
+                from config import state_path
+                history_file = state_path("trade_history.json")
+            except Exception:
+                history_file = self.HISTORY_FILE
+        self.HISTORY_FILE = history_file  # instance, live/paper izole
         self.trades: List[Dict] = self._load()
         self.peak_equity = 0.0
         self.max_drawdown = 0.0

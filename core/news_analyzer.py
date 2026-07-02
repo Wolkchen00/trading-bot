@@ -102,7 +102,10 @@ class StockNewsAnalyzer:
         if FINBERT_AVAILABLE:
             try:
                 self.finbert = FinBERTAnalyzer()
-                logger.info("StockNewsAnalyzer: FinBERT aktif")
+                # Gerçek kaynağı logla — FinBERTAnalyzer, onnxruntime yoksa sessizce
+                # iç VADER'a düşer; koşulsuz "FinBERT aktif" demek yanıltıcıydı.
+                _src = self.finbert.get_status().get("active_source", "?")
+                logger.info(f"StockNewsAnalyzer: sentiment kaynagi = {_src}")
             except Exception:
                 pass
 

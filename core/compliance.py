@@ -26,7 +26,13 @@ class WashSaleTracker:
     NOT: Kripto şu an Wash Sale'den muaf (ancak değişebilir).
     """
 
-    def __init__(self, wash_file: str = "wash_sale_tracker.json"):
+    def __init__(self, wash_file: str = None):
+        if wash_file is None:
+            try:
+                from config import state_path
+                wash_file = state_path("wash_sale_tracker.json")
+            except Exception:
+                wash_file = "wash_sale_tracker.json"
         self.wash_file = wash_file
         self.loss_sales: List[Dict] = self._load()
         self.WASH_SALE_WINDOW_DAYS = 30
@@ -51,6 +57,11 @@ class WashSaleTracker:
     def record_loss_sale(self, symbol: str, loss_amount: float, sell_date: str):
         """Zararına satış kaydeder."""
         if loss_amount < 0:  # Zarar
+            # Dedup: aynı symbol + sell_date için tekrar kaydetme
+            # (restart/retry'da aynı zararın mükerrer eklenmesini önler)
+            if any(s.get("symbol") == symbol and s.get("sell_date") == sell_date
+                   for s in self.loss_sales):
+                return
             self.loss_sales.append({
                 "symbol": symbol,
                 "loss": loss_amount,

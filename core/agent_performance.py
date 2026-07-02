@@ -11,6 +11,7 @@ ağırlığını otomatik günceller:
 JSON dosyaya kaydedilir (restart-safe).
 """
 import json
+import math
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -35,7 +36,14 @@ class AgentPerformanceTracker:
         "RiskAgent": 0.20,
     }
 
-    def __init__(self):
+    def __init__(self, history_file: str = None):
+        if history_file is None:
+            try:
+                from config import state_path
+                history_file = state_path("agent_performance.json")
+            except Exception:
+                history_file = self.HISTORY_FILE
+        self.HISTORY_FILE = history_file  # instance, live/paper izole
         self.predictions: Dict[str, List[Dict]] = self._load()
         total_preds = sum(len(v) for v in self.predictions.values())
         logger.info(
@@ -93,32 +101,44 @@ class AgentPerformanceTracker:
 
     def record_outcome(self, symbol: str, outcome: str, pnl: float = 0):
         """
-        İşlem sonucunu kaydet ve her ajanın doğruluğunu güncelle.
+        İşlem sonucunu kaydet ve her ajanın YÖN-FARKINDA doğruluğunu güncelle.
+
+        Kredi-atama (v2 — eski bug düzeltmesi):
+          - İşlemin YÖNÜ önemli: long girişi BUY oyuyla, short girişi SELL oyuyla
+            "onaylanmış" sayılır (coordinator_signal'dan okunur). Eski kod yönü
+            yok sayıyordu → kazanan bir SHORT'ta BUY diyen ajan "doğru" sayılıyordu.
+          - Onaylayan oy → işlem kazandıysa doğru, kaybettiyse yanlış.
+          - Karşı çıkan oy → tam tersi.
+          - HOLD ("fikrim yok") ve NEUTRAL sonuç → doğruluğa SAYILMAZ (correct=None).
+            Eski bug: HOLD her zararda "doğru" sayılıp Risk/temkinli ajanları şişiriyordu
+            (label leakage). Artık HOLD oyları accuracy'den tamamen düşer.
 
         Args:
             symbol: Hisse sembolü
-            outcome: İşlem sonucu: "WIN" (kar), "LOSS" (zarar), "NEUTRAL"
-            pnl: Gerçek kar/zarar ($)
+            outcome: "WIN" (kar), "LOSS" (zarar), "NEUTRAL"
+            pnl: Gerçek kar/zarar ($) — magnitude ağırlığı için saklanır
         """
-        # Bu sembol için en son kaydedilmiş tahminleri bul ve güncelle
+        trade_won = outcome == "WIN"
+        directional = outcome in ("WIN", "LOSS")  # NEUTRAL/scratch → sayma
+
         for agent_name, preds in self.predictions.items():
             for pred in reversed(preds):
                 if pred["symbol"] == symbol and pred["actual_outcome"] is None:
-                    # Sonucu eşleştir
-                    predicted = pred["predicted_signal"]
+                    predicted = pred.get("predicted_signal", "HOLD")
+                    # İşlemin yönü: long → BUY ile onaylanır, short/sell → SELL ile
+                    side = pred.get("coordinator_signal", "BUY")
+                    endorse = "BUY" if side in ("BUY", "LONG") else "SELL"
 
-                    if outcome == "WIN":
-                        # BUY tahmin + WIN = doğru
-                        pred["correct"] = predicted in ("BUY",)
-                    elif outcome == "LOSS":
-                        # SELL/HOLD tahmin + LOSS = doğru (çünkü alınmamalıydı)
-                        # Ama BUY demişse yanlış
-                        pred["correct"] = predicted in ("SELL", "HOLD")
+                    if not directional or predicted == "HOLD":
+                        pred["correct"] = None             # nötr — accuracy'den düşer
+                    elif predicted == endorse:
+                        pred["correct"] = trade_won         # yönü onayladı
                     else:
-                        pred["correct"] = predicted == "HOLD"
+                        pred["correct"] = not trade_won     # yöne karşı çıktı
 
                     pred["actual_outcome"] = outcome
                     pred["pnl"] = pnl
+                    pred["cred_v"] = 2                      # yeni şema işareti
                     break  # Bu ajan için sadece en son kaydı güncelle
 
         self._save()
@@ -149,13 +169,21 @@ class AgentPerformanceTracker:
             ]
 
             if len(recent) < self.MIN_TRADES_FOR_EVAL:
-                # Yeterli veri yok — varsayılan ağırlık
+                # Yeterli YÖN bilgisi yok (HOLD'lar sayılmaz) — varsayılan ağırlık
                 raw_weights[agent_name] = self.DEFAULT_WEIGHTS[agent_name]
                 continue
 
-            # Doğruluk oranı hesapla
-            correct_count = sum(1 for p in recent if p["correct"])
-            accuracy = correct_count / len(recent)
+            # PnL-magnitude ağırlıklı doğruluk: büyük hamlede haklı olmak daha değerli.
+            # Ağırlık = 1 + log1p(|pnl|) → sıfır/küçük pnl bile en az 1 sayılır (count'a
+            # düşer), tek dev işlem domine edemez (logaritmik bastırma).
+            num = 0.0
+            den = 0.0
+            for p in recent:
+                w = 1.0 + math.log1p(abs(float(p.get("pnl", 0) or 0)))
+                den += w
+                if p["correct"]:
+                    num += w
+            accuracy = (num / den) if den > 0 else 0.5
 
             # Ağırlığı doğruluk oranına göre ayarla
             # Accuracy 0.5 (yarı yarıya) = varsayılan ağırlık

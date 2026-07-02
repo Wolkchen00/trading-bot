@@ -14,19 +14,24 @@ load_dotenv()
 # ALPACA_KEY_PREFIX: Docker Compose'dan hangi key setinin
 # kullanilacagini belirler (LIVE / PAPER / bos=fallback)
 _key_prefix = os.getenv("ALPACA_KEY_PREFIX", "")
+TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" veya "live"
 
-if _key_prefix == "LIVE":
-    ALPACA_API_KEY = os.getenv("ALPACA_LIVE_API_KEY", "")
-    ALPACA_SECRET_KEY = os.getenv("ALPACA_LIVE_SECRET_KEY", "")
-elif _key_prefix == "PAPER":
-    ALPACA_API_KEY = os.getenv("ALPACA_PAPER_API_KEY", "")
-    ALPACA_SECRET_KEY = os.getenv("ALPACA_PAPER_SECRET_KEY", "")
+# Anahtar secimi: ALPACA_KEY_PREFIX (Docker Compose) > TRADING_MODE (lokal fallback).
+# Boylece prefix tanimsizken bile paper modda PAPER, live modda LIVE anahtari yuklenir
+# (mod/endpoint ile anahtar tutarli olur; yanlis anahtar -> 401 hatasi onlenir).
+_use_live = (_key_prefix == "LIVE") or (not _key_prefix and TRADING_MODE == "live")
+_use_paper = (_key_prefix == "PAPER") or (not _key_prefix and TRADING_MODE != "live")
+
+if _use_live:
+    ALPACA_API_KEY = os.getenv("ALPACA_LIVE_API_KEY", "") or os.getenv("ALPACA_API_KEY", "")
+    ALPACA_SECRET_KEY = os.getenv("ALPACA_LIVE_SECRET_KEY", "") or os.getenv("ALPACA_SECRET_KEY", "")
+elif _use_paper:
+    ALPACA_API_KEY = os.getenv("ALPACA_PAPER_API_KEY", "") or os.getenv("ALPACA_API_KEY", "")
+    ALPACA_SECRET_KEY = os.getenv("ALPACA_PAPER_SECRET_KEY", "") or os.getenv("ALPACA_SECRET_KEY", "")
 else:
     # Fallback: eski tekli key (lokal gelistirme icin)
     ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
     ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
-
-TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" veya "live"
 BOT_MODE = os.getenv("BOT_MODE", "both")  # "long_only", "short_only", "both"
 
 # Haber & Veri API'leri
@@ -39,6 +44,36 @@ ALPACA_LIVE_URL = "https://api.alpaca.markets"
 
 def get_base_url():
     return ALPACA_PAPER_URL if TRADING_MODE == "paper" else ALPACA_LIVE_URL
+
+# ============================================================
+# STATE DOSYALARI — LIVE / PAPER İZOLASYONU
+# ------------------------------------------------------------
+# Live ve paper bot aynı makinede aynı anda çalıştığında, state
+# dosyalarının (positions, kill_switch, pdt, wash_sale, agent_perf)
+# birbirine karışmasını önlemek için her mod kendi alt dizinine yazar.
+# Önceki davranış: tüm dosyalar tek klasörde paylaşılıyordu → live ve
+# paper birbirinin day-trade sayacını / kill durumunu / wash-sale
+# bloğunu kirletiyordu (mükerrer kayıt kanıtlandı).
+# ============================================================
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# KALICILIK: state'i kalıcı bir volume'a yaz, redeploy'da SİLİNMESİN. Coolify/VPS'te
+# docker-compose'da named volume `/app/state_paper`'a mount edilince zaten _BASE_DIR
+# altına denk gelir (env gerekmez). Alternatif: STATE_VOLUME_PATH env'i ile kök override
+# (örn tek volume /data'ya mount). Hiçbiri yoksa eski davranış — geriye birebir uyumlu.
+_STATE_ROOT = (
+    os.getenv("STATE_VOLUME_PATH")              # genel (Coolify/VPS: opsiyonel kök override)
+    or os.getenv("RAILWAY_VOLUME_MOUNT_PATH")   # Railway alias (kullanılırsa)
+    or _BASE_DIR                                 # volume yok → eski davranış
+)
+STATE_DIR = os.path.join(_STATE_ROOT, "state_live" if TRADING_MODE == "live" else "state_paper")
+try:
+    os.makedirs(STATE_DIR, exist_ok=True)
+except Exception:
+    STATE_DIR = _BASE_DIR  # Yazılamıyorsa eski davranışa düş (container fallback)
+
+def state_path(filename: str) -> str:
+    """Live/paper'a göre izole edilmiş state dosyası yolu döndürür."""
+    return os.path.join(STATE_DIR, filename)
 
 # ============================================================
 # HİSSE TANIMI — STOCK_IDS (tüm modüller buradan import eder)
@@ -280,12 +315,25 @@ STOCK_CONFIG = {
 
     # === RISK YÖNETİMİ ===
     "max_risk_per_trade_pct": 0.03,
-    "max_position_pct": 0.70,              # %70 equity per pozisyon (agresif)
+    "max_position_pct": 0.20,              # %20 equity per pozisyon (de-risk: edge kanıtlanana dek)
     "max_position_usd": 200,               # Paper default (PAPER_AGGRESSIVE override eder)
-    "live_max_position_usd": 450,          # LIVE: max $450/trade (önceki: $200)
-    "max_open_positions": 2,               # 2 büyük pozisyon (önceki: 3 küçük)
-    "cash_reserve_pct": 0.05,              # %5 nakit rezerv (önceki: %15)
-    "equity_floor_pct": 0.65,              # Hesap %65'ine düşerse dur (önceki: %85)
+    "live_max_position_usd": 300,          # LIVE: sert tavan $300/trade
+    # LIVE SABİT BOYUT MODU (İhsan kararı 2026-07-02): Kelly negatifken sizer %5
+    # tabana düşüp $25'lik işlemler üretiyordu; hesap büyüyemiyordu. >0 ise LIVE'da
+    # Kelly/damping BYPASS edilir, her alım bu boyutta olur (tavan: fixed_position_max_pct
+    # × equity + live_max_position_usd + eldeki nakit). 0 = eski adaptif davranış.
+    "live_fixed_position_usd": 250,        # LIVE: $250/alım (istenen bant $200-300)
+    "fixed_position_max_pct": 0.55,        # sabit boyut equity'nin %55'ini aşamaz (drawdown'da otomatik küçülür)
+    "max_open_positions": 3,               # 3 pozisyona çeşitlenme (konsantrasyon riski azalt)
+    "cash_reserve_pct": 0.10,              # %10 nakit rezerv (sabit boyut modunda sermaye deploy edilsin)
+    "equity_floor_pct": 0.85,              # Hesap %85'ine düşerse yeni giriş dur (~%15 DD koruması)
+
+    # === INDEX PARKING (boştaki nakit → SPY beta; paper-first, LIVE'da KAPALI) ===
+    "index_parking_enabled": False,        # LIVE varsayılan KAPALI (paper'da PAPER_AGGRESSIVE açar)
+    "index_parking_symbol": "SPY",
+    "index_parking_reserve_pct": 0.30,     # equity'nin %30'u likit kalsın (trade buying-power)
+    "index_parking_min_trade_usd": 50,     # bu altı rebalance yapma (gereksiz emir/PDT yok)
+    "index_parking_allow_live": False,     # LIVE'da çalışması için ekstra opt-in şart
 
     # === STOP/PROFIT HEDEFLERİ (backtest sonrası optimize) ===
     "stop_loss_pct": 0.04,                  # %4 stop-loss (3% çok dar)
@@ -296,7 +344,7 @@ STOCK_CONFIG = {
     "partial_profit_pct": 0.05,             # %5'de yarısını sat
 
     # === SINYAL EŞİKLERİ ===
-    "min_confidence_score": 30,             # Min sinyal güven puanı (%30 — LIVE agresif)
+    "min_confidence_score": 60,             # Seçicilik (backtest: 45→60 ile PF 0.81→1.90, Sharpe -0.92→1.29)
     "rsi_oversold": 30,
     "rsi_overbought": 70,
     "min_volume_ratio": 1.3,
@@ -345,9 +393,11 @@ STOCK_CONFIG = {
     "min_interval_low_conf": 30,            # %50-54 güven: 30dk
     "sell_cooldown_seconds": 300,            # 5 dakika satış cooldown (swing trade)
 
-    # === KILL SWITCH ===
-    "max_daily_loss_pct": 0.03,             # %3 günlük max kayıp
-    "max_consecutive_errors": 5,
+    # === KILL SWITCH (ana botun OKUDUĞU değerler — KillSwitch buradan beslenir) ===
+    # %5: sabit $250 boyutta 2 tam stop (~%4.1 equity) normal strateji akışıdır,
+    # %3'te kill bunu keserdi. %5 yine günü ~$24 kayıpla sert keser ($487 hesap).
+    "max_daily_loss_pct": 0.05,             # Sert kill: gün -%5 → TÜM pozisyonları kapat
+    "max_consecutive_errors": 3,            # 3 ardışık API hatası → kill (önceki 5; de-risk)
 
     # === ZAMANLAMA SABİTLERİ ===
     "error_retry_sleep": 30,
@@ -455,10 +505,14 @@ LOG_CONFIG = {
 
 # ============================================================
 # KILL SWITCH (ACİL DURUM) AYARLARI
+# ⚠️ Ana bot (stock_bot.py) bu bloğu OKUMAZ — kill eşiklerini STOCK_CONFIG'den
+# alır (max_daily_loss_pct / max_consecutive_errors, ~satır 370). Bu blok
+# yalnızca _legacy/main.py içindir. Yanıltıcı olmaması için değerler
+# STOCK_CONFIG ile AYNI tutuldu (3 hata / %3 günlük kayıp).
 # ============================================================
 KILL_SWITCH_CONFIG = {
     "max_consecutive_api_errors": 3,
-    "max_daily_loss_pct": 0.05,
+    "max_daily_loss_pct": 0.03,
     "auto_close_positions": True,
     "kill_state_file": "kill_switch.json",
 }
@@ -541,7 +595,7 @@ PAPER_AGGRESSIVE_CONFIG = {
     # === HİSSE AYARLARI (override) ===
     "max_position_usd": 5000,                # $200 → $5000
     "max_open_positions": 8,                  # 3 → 8
-    "min_confidence_score": 40,               # 50 → 40 (düşük eşik)
+    "min_confidence_score": 60,               # Edge-research: seçicilik (eski 40 = aşırı işlem→zarar)
     "scan_interval_seconds": 15,              # 30 → 15 (daha sık tara)
     "stop_loss_pct": 0.05,                    # %4 → %5 (biraz daha geniş)
     "take_profit_pct": 0.06,                  # %8 → %6 (daha hızlı kar al)
@@ -555,4 +609,7 @@ PAPER_AGGRESSIVE_CONFIG = {
     # === OPTIONS ===
     "enable_options": True,
     "prefer_options_over_stock": True,         # Güçlü sinyalde opsiyon tercih et
+
+    # === INDEX PARKING (paper'da AÇIK — nakit sürüklemesini azalt, beta yakala) ===
+    "index_parking_enabled": True,
 }

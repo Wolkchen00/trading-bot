@@ -16,5 +16,18 @@ pdt_tracker.json
 wash_sale_tracker.json
 tax_report*.csv
 wash_sales_report.csv
+# Live/paper izole state dizinleri (A1) + günlük baz + kilit
+state_live/
+state_paper/
+daily_baseline.json
+pdt_state.json
+agent_performance.json
+instance.lock
 .vscode/
 .agent/
+# Backtest/araştırma artefaktları
+.bt_cache/
+backtest_results.json
+walk_forward_results.json
+regime_experiment_results.json
+meta_model.json

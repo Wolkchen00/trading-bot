@@ -18,7 +18,7 @@ class PositionSizer:
     """Kelly-ATR adaptif pozisyon boyutlandırma motoru."""
 
     # Kelly fraction — tam Kelly çok agresif, %35'ini kullanıyoruz
-    KELLY_FRACTION = 0.35     # Önceki: 0.25 (çok muhafazakârdı)
+    KELLY_FRACTION = 0.20     # Edge kanıtsız → minimal Kelly (önceki: 0.35 agresif)
 
     # ATR bazlı volatilite ölçekleme
     ATR_BASE_PCT = 2.0       # %2 ATR = normal volatilite
@@ -30,7 +30,7 @@ class PositionSizer:
 
     # Pozisyon limitleri
     MIN_POSITION_PCT = 0.05   # Equity'nin min %5'i (önceki: %3)
-    MAX_POSITION_PCT = 0.50   # Equity'nin max %50'si (önceki: %15)
+    MAX_POSITION_PCT = 0.20   # Equity'nin max %20'si (de-risk: önceki %50 konsantrasyon riski)
 
     def __init__(self, performance_tracker=None):
         """
@@ -77,6 +77,31 @@ class PositionSizer:
         """
         if equity <= 0 or price <= 0:
             return self._empty_result("Geçersiz equity/price")
+
+        # === SABİT BOYUT MODU (fixed_position_usd > 0) ===
+        # Kelly negatifken adaptif yol %5 tabana düşüp küçük hesapta ~$25'lik işlem
+        # üretiyor. Kullanıcı sabit $ boyut seçtiyse Kelly/ATR/damping BYPASS edilir;
+        # koruma olarak equity-oranlı tavan kalır (drawdown'da pozisyon otomatik küçülür).
+        fixed_usd = float(config.get("fixed_position_usd", 0) or 0)
+        if side == "LONG" and fixed_usd > 0:
+            cap_pct = float(config.get("fixed_position_max_pct", 0.55))
+            max_pos_usd = config.get("max_position_usd", 500)
+            position_usd = min(fixed_usd, equity * cap_pct, max_pos_usd)
+            min_trade = config.get("min_trade_value", 10)
+            if position_usd < min_trade:
+                return self._empty_result(f"Sabit boyut ${position_usd:.2f} < min ${min_trade}")
+            qty = round(position_usd / price, 4)
+            reasoning = f"SABİT ${fixed_usd:.0f} | tavan {cap_pct:.0%}×equity=${equity * cap_pct:.0f}"
+            logger.info(f"  📐 PositionSizer [LONG-SABİT]: ${position_usd:.2f} | {reasoning}")
+            return {
+                "position_usd": round(position_usd, 2),
+                "qty": qty,
+                "kelly_pct": 0.0,
+                "vol_scale": 1.0,
+                "loss_damping": 1.0,
+                "regime_adj": 1.0,
+                "reasoning": reasoning,
+            }
 
         # === 1. KELLY ORANI ===
         kelly_pct = self._calculate_kelly()

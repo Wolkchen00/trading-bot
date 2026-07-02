@@ -159,8 +159,10 @@ class StockBot:
             self.max_pos_usd = config.get("max_position_usd", 200)
         else:
             # LIVE: sizer/executor'ın okuduğu ortak anahtarları live değerleriyle doldur.
-            # fixed_position_usd > 0 → PositionSizer sabit boyut modunda çalışır
-            # (Kelly tabanının ürettiği ~$25'lik işlemler yerine kullanıcı boyutu).
+            # conf_position_bands → güvene göre kademeli boyut ($100-300);
+            # fixed_position_usd > 0 → düz sabit boyut (eski mod, bantlar yoksa).
+            # İkisi de Kelly tabanının ürettiği ~$25'lik işlemleri devre dışı bırakır.
+            config["conf_position_bands"] = config.get("live_conf_position_bands") or []
             config["fixed_position_usd"] = config.get("live_fixed_position_usd", 0)
             config["max_position_usd"] = self.max_pos_usd
 
@@ -289,8 +291,14 @@ class StockBot:
         logger.info(f"  STOCK TRADING BOT BASLATILDI")
         logger.info(f"  Mod: {mode_str} | Bot: {bot_mode_str}")
         logger.info(f"  Equity: ${equity:,.2f}")
+        bands = config.get("conf_position_bands") or []
         fixed_usd = config.get("fixed_position_usd", 0)
-        size_mode = f"SABİT ${fixed_usd}/alım" if fixed_usd else "Kelly-ATR adaptif"
+        if bands:
+            size_mode = f"GÜVENE GÖRE ${bands[0][1]}-{bands[-1][1]}"
+        elif fixed_usd:
+            size_mode = f"SABİT ${fixed_usd}/alım"
+        else:
+            size_mode = "Kelly-ATR adaptif"
         logger.info(f"  Max pozisyon: ${self.max_pos_usd} | Boyut: {size_mode} | Floor: ${self.equity_floor:,.2f}")
         logger.info(f"  Hisse havuzu: {len(config['symbols'])} hisse")
         logger.info(f"  Acik pozisyon: {len(self.positions)} long | {len(self.short_positions)} short")

@@ -69,6 +69,7 @@ class OrderExecutor:
                     consecutive_losses=getattr(bot, '_consecutive_losses', 0),
                     market_regime=getattr(bot, '_market_regime', 'NORMAL'),
                     sector_weight=analysis.get("sector_weight", 1.0),
+                    confidence=analysis.get("confidence", 0),
                 )
                 max_invest = sizing["position_usd"]
                 tier_weight = sizing.get("weight", 0.20)  # FIX: NameError önlemi

@@ -317,12 +317,20 @@ STOCK_CONFIG = {
     "max_position_pct": 0.20,              # %20 equity per pozisyon (de-risk: edge kanıtlanana dek)
     "max_position_usd": 200,               # Paper default (PAPER_AGGRESSIVE override eder)
     "live_max_position_usd": 300,          # LIVE: sert tavan $300/trade
-    # LIVE SABİT BOYUT MODU (İhsan kararı 2026-07-02): Kelly negatifken sizer %5
-    # tabana düşüp $25'lik işlemler üretiyordu; hesap büyüyemiyordu. >0 ise LIVE'da
-    # Kelly/damping BYPASS edilir, her alım bu boyutta olur (tavan: fixed_position_max_pct
-    # × equity + live_max_position_usd + eldeki nakit). 0 = eski adaptif davranış.
-    "live_fixed_position_usd": 250,        # LIVE: $250/alım (istenen bant $200-300)
-    "fixed_position_max_pct": 0.55,        # sabit boyut equity'nin %55'ini aşamaz (drawdown'da otomatik küçülür)
+    # LIVE GÜVENE-GÖRE BOYUT (İhsan kararı 2026-07-02): Kelly negatifken sizer %5
+    # tabana düşüp $25'lik işlemler üretiyordu. Artık sinyal güven puanı boyutu
+    # belirler: normal sinyal $100-200, çok güvenilir $300. Kelly/damping BYPASS;
+    # tavanlar: fixed_position_max_pct × equity + live_max_position_usd + eldeki nakit.
+    # Format: [min_güven, $boyut] — güveni karşılayan EN YÜKSEK bant seçilir.
+    "live_conf_position_bands": [
+        [60, 100],                          # eşiği yeni geçen sinyal → $100
+        [70, 150],
+        [80, 200],
+        [90, 300],                          # çok güvenilir → $300
+    ],
+    "live_fixed_position_usd": 0,          # eski düz-sabit mod (0=kapalı; bantlar öncelikli)
+    "fixed_position_max_pct": 0.62,        # boyut equity'nin %62'sini aşamaz — $487 hesapta $300
+                                           # bandına izin verir; drawdown'da otomatik küçülür
     "max_open_positions": 3,               # 3 pozisyona çeşitlenme (konsantrasyon riski azalt)
     "cash_reserve_pct": 0.10,              # %10 nakit rezerv (sabit boyut modunda sermaye deploy edilsin)
     "equity_floor_pct": 0.85,              # Hesap %85'ine düşerse yeni giriş dur (~%15 DD koruması)

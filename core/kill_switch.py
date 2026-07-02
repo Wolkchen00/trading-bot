@@ -44,12 +44,34 @@ class KillSwitch:
                 with open(kill_file, "r") as f:
                     data = json.load(f)
                 if data.get("killed", False):
-                    self.is_killed = True
-                    self.kill_reason = data.get("reason", "Önceki oturumdan kill")
-                    logger.error(
-                        f"🚨 KILL SWITCH AKTİF (önceki oturum): {self.kill_reason}\n"
-                        f"   Tekrar başlatmak için kill_switch.json dosyasını silin."
-                    )
+                    # PAPER: "günlük" kayıp kill'i yeni ET gününde OTOMATİK sıfırlanır.
+                    # 6 May 2026: paper -%3.17 kill dosyası 2 ay botu sessizce kilitledi
+                    # (günlük limit kalıcı kilide dönüşüyordu). LIVE bilinçli olarak
+                    # manuel kalır (gerçek parada insan onayı şart).
+                    stale_daily = False
+                    try:
+                        from config import TRADING_MODE
+                        if TRADING_MODE != "live" and "Günlük" in str(data.get("reason", "")):
+                            ts = datetime.fromisoformat(data.get("timestamp", ""))
+                            stale_daily = ts.date() < datetime.now().date()
+                    except Exception:
+                        pass
+                    if stale_daily:
+                        try:
+                            os.remove(kill_file)
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "⚠️ PAPER: önceki güne ait GÜNLÜK-kayıp kill dosyası "
+                            "otomatik sıfırlandı (yeni işlem günü)."
+                        )
+                    else:
+                        self.is_killed = True
+                        self.kill_reason = data.get("reason", "Önceki oturumdan kill")
+                        logger.error(
+                            f"🚨 KILL SWITCH AKTİF (önceki oturum): {self.kill_reason}\n"
+                            f"   Tekrar başlatmak için kill_switch.json dosyasını silin."
+                        )
             except Exception:
                 pass
 

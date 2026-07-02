@@ -62,7 +62,6 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # (örn tek volume /data'ya mount). Hiçbiri yoksa eski davranış — geriye birebir uyumlu.
 _STATE_ROOT = (
     os.getenv("STATE_VOLUME_PATH")              # genel (Coolify/VPS: opsiyonel kök override)
-    or os.getenv("RAILWAY_VOLUME_MOUNT_PATH")   # Railway alias (kullanılırsa)
     or _BASE_DIR                                 # volume yok → eski davranış
 )
 STATE_DIR = os.path.join(_STATE_ROOT, "state_live" if TRADING_MODE == "live" else "state_paper")

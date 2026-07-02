@@ -1,20 +1,32 @@
 # Trading Bot — Geliştirme Planı (v4.6 sonrası)
-_Hazırlanma: 2026-07-02 · Durum tespiti Alpaca API + kod incelemesi ile yapıldı_
+_Hazırlanma: 2026-07-02 · Güncelleme: Railway TERK EDİLDİ → deploy evi Coolify VPS (91.99.9.121:8000)_
 
 ## Mevcut durum (özet)
-- **LIVE** ($487 gerçek): Railway'de **hâlâ v4.5 (5 Mayıs)** çalışıyor. 3 aylık sonuç **+%1.4** (yatay). İşlemler ~$26 çünkü Kelly negatifken sizer %5 tabana iniyor.
-- **PAPER** ($64k sanal): Railway'de **6 Mayıs'tan beri ölüydü** (2 ay veri kaybı). 2026-07-02'de lokalde v4.6 ile yeniden başlatıldı (watchdog'lu).
-- **v4.6 lokalde commit'li ama deploy BLOKE**: GitHub push token'ı yazma yetkisini kaybetmiş (401). `gh` hesabı Wolkchen00'ın Wolkchen0/trading-bot'a push izni yok.
+- **LIVE** ($487 gerçek): Bugün hâlâ **v4.5 (5 Mayıs)** kodu işlem yapıyor. 3 aylık sonuç **+%1.4** (yatay). İşlemler ~$26 çünkü Kelly negatifken sizer %5 tabana iniyor.
+- **PAPER** ($64k sanal): 6 Mayıs'tan beri ölüydü (2 ay veri kaybı). 2026-07-02'de **lokalde v4.6 ile yeniden başlatıldı** (watchdog'lu; durdurmak = `trading/` içine `STOP_BOT` dosyası).
+- **Repo taşındı:** `Wolkchen00/trading-bot` (yeni origin; eski Wolkchen0 reposunun push token'ı ölmüştü). v4.6 burada.
 
-## FAZ 0 — Kilidi aç (İhsan'ın yapması gerekenler)
-1. **GitHub token yenile**: Wolkchen0 hesabıyla github.com → Settings → Developer settings →
-   Personal access tokens → yeni token (repo **write**). Sonra terminale yapıştır:
-   `git remote set-url origin https://YENI_TOKEN@github.com/Wolkchen0/trading-bot.git && git push origin main`
-   - Alternatif: `! railway login` → sonra `railway up` ile git'siz doğrudan deploy.
-2. **Railway paper servisi**: dashboard'da neden durduğuna bak (muhtemelen crash/OOM, 6 Mayıs);
-   restart et VEYA kalıcı olarak lokal/VPS'e taşımaya karar ver.
-3. **Telegram**: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`'yi hem lokal `.env`'e hem Railway
-   Variables'a ekle → al/sat/kill-switch bildirimleri açılır (kod hazır, sadece env eksik).
+## FAZ 0 — Coolify'a bağla (İhsan'ın panel adımları, ~5 dk)
+Coolify: `http://91.99.9.121:8000`
+1. **Kaynağı değiştir/oluştur:** Mevcut trading uygulaması varsa → Source'u
+   `github.com/Wolkchen00/trading-bot` (branch `main`) yap. Yoksa → New Resource →
+   **Docker Compose** → repo `Wolkchen00/trading-bot`, compose dosyası `docker-compose.yml`
+   (iki servis birden gelir: `trading-live` + `trading-short`).
+2. **Environment Variables** (Coolify bunları `.env` olarak yazar, compose `env_file: .env`
+   ile okur — lokal `.env` git'e GİTMEZ, o yüzden panele girilmeli):
+   - `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_SECRET_KEY`
+   - `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_SECRET_KEY`
+   - `ALPHA_VANTAGE_KEY`, `MARKETAUX_TOKEN`
+   - (önerilen) `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` → al/sat/kill bildirimleri
+3. **Deploy** butonu. Loglarda şunu doğrula: live banner'da
+   `Boyut: SABİT $250/alım` + paper banner'da `PAPER AGGRESSIVE MODE`.
+4. **ÇİFT BOT KONTROLÜ (kritik):**
+   - Railway hesabında hâlâ çalışan servis varsa SİL (aynı live hesaba iki bot emir
+     basar + boşuna fatura). Kod/konfigden Railway izleri zaten temizlendi.
+   - VPS'te paper konteyneri ayağa kalkınca **lokaldeki paper botu durdur**
+     (`trading/STOP_BOT` dosyası oluştur) — çifte paper işlem olmasın.
+5. (İstersen) bana Coolify **API token** ver (panel → Keys & Tokens → API tokens):
+   sonraki deploy/rollback/log işlerini terminalden ben yönetirim.
 
 ## FAZ 1 — v4.6 canlıda (deploy sonrası ilk hafta)
 - İlk alımların **~$250** olduğunu doğrula (log: `PositionSizer [LONG-SABİT]`).
@@ -37,10 +49,11 @@ _Hazırlanma: 2026-07-02 · Durum tespiti Alpaca API + kod incelemesi ile yapıl
 - Kademeli boyut: hesap $600'ü geçerse `live_fixed_position_usd` 250→300.
 - Hesap $25k'ya kadar PDT/GFV-uyumlu swing duruşu korunur (pdt_tracker zaten yapıyor).
 
-## FAZ 4 — Altyapı (opsiyonel)
-- Railway yerine **VPS/Coolify'a taşı** (youtube sistemleriyle aynı yer): docker-compose.yml
-  hazır (dual container + kalıcı volume). Avantaj: log/state erişimi, Railway faturası yok.
-- Dashboard'ı (trading/dashboard) aynı VPS'te yayınla → günlük equity/işlem görünürlüğü.
+## FAZ 4 — Altyapı
+- Dashboard'ı (trading/dashboard) aynı VPS'te Coolify'dan yayınla → günlük equity/işlem görünürlüğü.
+- Coolify API token ile: otomatik günlük sağlık raporu (Alpaca equity + konteyner durumu → Telegram).
+- State kalıcılığı: named volume'lar (`state-live`, `state-paper`) compose'da hazır —
+  redeploy'da pdt/kill/agent_performance kaybolmaz.
 
 ## Bilinen riskler (kabul edilenler)
 - **Boyut ≠ edge**: $250 boyut kârı da zararı da ~10x büyütür; walk-forward hâlâ "SPY'ı

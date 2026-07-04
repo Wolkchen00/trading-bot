@@ -232,6 +232,22 @@ class ShortExecutor:
             except Exception:
                 pass
 
+            # Gercek P&L'i kapatmadan ONCE al (kapaninca pozisyona erisilemez).
+            # Eski kod bot.client.get_latest_trade kullaniyordu — TradingClient'ta
+            # boyle bir metot YOK (data client'ta) → her cover NEUTRAL/pnl=0
+            # kaydediliyor, ogrenme verisi bozuluyordu.
+            entry = pos.get("entry_price", 0)
+            qty = pos.get("qty", 0)
+            pnl_usd = 0.0
+            current_price = entry
+            try:
+                alpaca_pos = bot.client.get_open_position(symbol)
+                current_price = float(alpaca_pos.current_price)
+                pnl_usd = float(alpaca_pos.unrealized_pl)
+            except Exception:
+                if entry > 0 and qty > 0 and current_price > 0:
+                    pnl_usd = (entry - current_price) * qty
+
             # Pozisyonu kapat
             bot.client.close_position(symbol)
 
@@ -246,10 +262,7 @@ class ShortExecutor:
             cooldown_secs = 300
             bot.sell_cooldown[f"short_{symbol}"] = datetime.now() + timedelta(seconds=cooldown_secs)
 
-            entry = pos.get("entry_price", 0)
-            qty = pos.get("qty", 0)
-
-            logger.info(f"  🔺 COVER {symbol}: {qty:.4f} | Sebep: {reason}")
+            logger.info(f"  🔺 COVER {symbol}: {qty:.4f} | P&L: ${pnl_usd:+.2f} | Sebep: {reason}")
 
             bot.short_positions.pop(symbol, None)
             # A6: tam kapanışta yönetim bayrak önbelleğini temizle
@@ -257,25 +270,42 @@ class ShortExecutor:
                 bot._exit_flag_cache.pop(symbol, None)
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({
-                "action": "COVER", "symbol": symbol,
-                "reason": reason, "time": datetime.now().isoformat(),
+                "action": "COVER", "symbol": symbol, "price": current_price,
+                "pnl": pnl_usd, "reason": reason, "time": datetime.now().isoformat(),
             })
+
+            # Kayıp/kazanç serisi takibi (long taraflı execute_sell ile simetrik)
+            if "STOP_LOSS" in reason:
+                bot._consecutive_losses = getattr(bot, '_consecutive_losses', 0) + 1
+                sym_losses = getattr(bot, '_symbol_consecutive_losses', {})
+                sym_losses[symbol] = sym_losses.get(symbol, 0) + 1
+                bot._symbol_consecutive_losses = sym_losses
+            elif "TAKE_PROFIT" in reason or "TRAILING" in reason:
+                bot._consecutive_losses = 0
+                sym_losses = getattr(bot, '_symbol_consecutive_losses', {})
+                sym_losses[symbol] = 0
+                bot._symbol_consecutive_losses = sym_losses
+
+            # Performans kaydı — short'lar da Kelly istatistiğine girsin
+            if hasattr(bot, 'performance'):
+                try:
+                    from config import SECTOR_MAP
+                    bot.performance.record_trade(
+                        symbol=symbol, action="COVER", qty=float(qty),
+                        price=float(current_price), pnl=pnl_usd, reason=reason,
+                        sector=SECTOR_MAP.get(symbol, "Unknown"),
+                    )
+                except Exception:
+                    pass
 
             # Telegram bildirim
             if hasattr(bot, 'notifier'):
                 bot.notifier.send_message(
-                    f"🔺 COVER {symbol} | {reason}"
+                    f"🔺 COVER {symbol} | P&L: ${pnl_usd:+.2f} | {reason}"
                 )
 
-            # Ajan öz-değerlendirme feedback loop (SHORT)
+            # Ajan öz-değerlendirme feedback loop (SHORT) — gerçek P&L ile
             if hasattr(bot, 'agent_perf'):
-                # Short'ta kar = fiyat düştü = SELL tahmini doğru
-                # Not: Gerçek kapanış fiyatını bilmiyoruz, tahmini PnL
-                try:
-                    current_price = float(bot.client.get_latest_trade(symbol).price) if entry > 0 else entry
-                    pnl_usd = (entry - current_price) * qty if entry > 0 else 0
-                except Exception:
-                    pnl_usd = 0
                 outcome = "WIN" if pnl_usd > 0 else "LOSS" if pnl_usd < 0 else "NEUTRAL"
                 try:
                     bot.agent_perf.record_outcome(symbol, outcome, pnl_usd)

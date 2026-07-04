@@ -76,8 +76,12 @@ NEWS_CONFIG = {
     "breaking_cache_minutes": 1,  # Breaking news: 1 dk
 
     # API rate limit koruması
-    "alpha_vantage_cooldown": 15,
-    "marketaux_cooldown": 10,
+    # NOT: Bu sleep'ler ana trading döngüsünü BLOKLUYOR (bot tek thread'li;
+    # 10 sembol × 15sn = 150sn stop takibi durur). AV free tier artık dakikalık
+    # değil GÜNLÜK kota (25/gün) — uzun sleep kotayı korumuyor, sadece botu
+    # yavaşlatıyordu. Kısa tutulur.
+    "alpha_vantage_cooldown": 2,
+    "marketaux_cooldown": 2,
 }
 
 
@@ -386,6 +390,11 @@ class StockNewsAnalyzer:
         
         Ek: Bullish keywords pozitif skor verir (barış, anlaşma)
         """
+        # Breaking bayrağı her taramada YENİDEN hesaplanır. Önceki davranış:
+        # bir kez True olunca hiç sıfırlanmıyordu → tüm haber cache'i kalıcı
+        # olarak 1 dk'ya düşüyor, API trafiği 5x artıyordu.
+        self._breaking_detected = False
+
         all_text = " ".join(
             f"{a.get('title', '')} {a.get('summary', '')}" for a in articles
         ).lower()
@@ -511,11 +520,13 @@ class StockNewsAnalyzer:
             for dismiss in dismissed_risks[:3]:
                 logger.info(f"    {dismiss}")
 
-        # Breaking news dedektörü
+        # Breaking news dedektörü — SADECE somut jeopolitik olaylar.
+        # "breaking:"/"just in:"/"developing:" gibi jenerik başlık önekleri
+        # KALDIRILDI: sıradan bir "BREAKING: iPhone tanıtıldı" başlığı bile
+        # seviyeyi CRITICAL'a çekip TÜM yeni alımları kilitliyordu.
         breaking_terms = [
             "ceasefire violat", "ceasefire collapse", "broke ceasefire",
             "resumed attack", "resumed fighting", "broke truce",
-            "breaking:", "just in:", "developing:",
         ]
         for term in breaking_terms:
             if term in all_text:

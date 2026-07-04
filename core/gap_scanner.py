@@ -14,6 +14,29 @@ from typing import Dict, List, Optional
 from utils.logger import logger
 
 
+def fetch_latest_price(data_client, symbol: str) -> Optional[float]:
+    """Snapshot ile son işlem fiyatı (pre-market dahil).
+
+    alpaca-py get_stock_snapshot() sembol string'i DEĞİL StockSnapshotRequest
+    ister ve {symbol: Snapshot} dict döner — eski çağrı her seferinde sessizce
+    patlıyordu (gap koruması fiilen hiç çalışmamış). Ortak yardımcı: gap_scanner,
+    signal_queue ve notifier bunu kullanır.
+    """
+    try:
+        from alpaca.data.requests import StockSnapshotRequest
+        snaps = data_client.get_stock_snapshot(
+            StockSnapshotRequest(symbol_or_symbols=symbol)
+        )
+        snap = snaps.get(symbol) if isinstance(snaps, dict) else snaps
+        if snap is None or snap.latest_trade is None:
+            return None
+        price = float(snap.latest_trade.price)
+        return price if price > 0 else None
+    except Exception as e:
+        logger.debug(f"  {symbol} snapshot fiyatı alınamadı: {e}")
+        return None
+
+
 class GapScanner:
     """Pre-market gap analizi — acik pozisyonlar icin erken uyari sistemi."""
 
@@ -88,19 +111,8 @@ class GapScanner:
             return None
 
         # Snapshot ile en son fiyati al (pre-market dahil)
-        try:
-            snapshot = bot.data_client.get_stock_snapshot(symbol)
-            if snapshot is None:
-                return None
-
-            # En son islem fiyati
-            current_price = float(snapshot.latest_trade.price)
-
-        except Exception as e:
-            logger.debug(f"  {symbol} snapshot alinamadi: {e}")
-            return None
-
-        if current_price <= 0:
+        current_price = fetch_latest_price(bot.data_client, symbol)
+        if current_price is None:
             return None
 
         # Gap yuzdesini hesapla

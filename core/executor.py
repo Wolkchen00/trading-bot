@@ -125,11 +125,17 @@ class OrderExecutor:
             # Boylece SL basarisiz olursa korumasiz pozisyon kalmaz
             bracket_success = False
             try:
+                # Tam payda GTC: TP/SL bacakları gece de aktif kalır (DAY'de gün
+                # sonunda düşüp pozisyonu emirsiz bırakıyordu). Fractional'da
+                # Alpaca GTC kabul etmez → DAY zorunlu.
+                bracket_tif = (
+                    TimeInForce.GTC if float(qty) == int(qty) else TimeInForce.DAY
+                )
                 request = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=bracket_tif,
                     order_class="bracket",
                     take_profit={"limit_price": tp_price},
                     stop_loss={

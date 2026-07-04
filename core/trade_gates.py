@@ -31,8 +31,11 @@ class TradeGates:
         Tüm gate'leri kontrol eder.
         Returns: (passed: bool, block_reason: str)
         """
-        if analysis["signal"] != "BUY":
-            return True, ""
+        # NOT: Erken "signal != BUY → gates geç" çıkışı KALDIRILDI.
+        # Bu fonksiyon zaten yalnız koordinatör BUY kararında çağrılır; teknik
+        # sinyal HOLD/SHORT iken erken çıkış TÜM kapıları (earnings, EMA200,
+        # volatilite, kayıp serisi...) atlatıyordu — sentiment kaynaklı BUY'lar
+        # hiçbir filtreden geçmeden emir olabiliyordu.
 
         # 1. Market Hours Gate (YENİ)
         if hasattr(self.bot, 'market_hours'):

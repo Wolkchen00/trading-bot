@@ -29,7 +29,7 @@ import numpy as np
 # Alpaca
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
-from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.enums import QueryOrderStatus, OrderSide
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -284,6 +284,13 @@ class StockBot:
         self._sync_positions_from_alpaca()
         self._load_position_metadata()
 
+        # Sunucu-taraflı koruma emri garantisi: bracket DAY bacakları düşmüş,
+        # emirsiz kalmış pozisyonlara stop yerleştir (bot çökse bile korunsun)
+        try:
+            self.position_manager.ensure_protective_stops(config)
+        except Exception as e:
+            logger.warning(f"  Koruma emri garantisi başarısız: {e}")
+
         mode_str = "PAPER" if is_paper else "🔴 LIVE"
         bot_mode_str = {"long_only": "📈 LONG ONLY", "short_only": "📉 SHORT ONLY", "both": "📊 LONG + SHORT"}.get(BOT_MODE, BOT_MODE)
         options_str = "✅ CALL/PUT" if self._options_enabled else "❌"
@@ -335,6 +342,17 @@ class StockBot:
 
                 # Market durumu
                 market_status = self.market_hours.get_market_status()
+
+                # Piyasa AÇILIŞ geçişinde koruma emirlerini garantiye al:
+                # kapalıyken verilen fractional stop'lar reddedilmiş olabilir,
+                # dünkü DAY bracket bacakları da düşmüştür.
+                if (market_status["status"] == "OPEN"
+                        and getattr(self, "_last_market_status", "") != "OPEN"):
+                    try:
+                        self.position_manager.ensure_protective_stops(config)
+                    except Exception as e:
+                        logger.debug(f"  Açılış koruma emri kontrolü hatası: {e}")
+                self._last_market_status = market_status["status"]
 
                 # Piyasa kapalı → bekle
                 if market_status["status"] == "CLOSED":
@@ -1186,7 +1204,16 @@ class StockBot:
 
                 # Index parking pozisyonu — bot'un nakit-sleeve'i, normal pozisyon DEĞİL.
                 # Agent/stop-loss/max-pozisyon mantığından dışla (sleeve, trade değil).
+                # Daha önce yanlışlıkla positions'a girdiyse temizle (self-heal).
                 if self.index_parking.is_parking_symbol(symbol):
+                    self.positions.pop(symbol, None)
+                    continue
+
+                # Kripto/diğer asset sınıfları bu botun işi değil (XRPUSD dust vakası:
+                # kripto pozisyon LONG diye sync'lenip sayaç/heartbeat kirletiyordu)
+                if asset_class not in ('us_equity', 'us_option'):
+                    self.positions.pop(symbol, None)
+                    self.short_positions.pop(symbol, None)
                     continue
 
                 # OPTIONS pozisyon (us_option asset class)
@@ -1281,15 +1308,12 @@ class StockBot:
 
             for symbol in list(self.positions.keys()):
                 if symbol not in alpaca_long_symbols:
-                    logger.warning(f"  🗑️ LONG temizlendi (Alpaca'da yok): {symbol}")
-                    self._stash_exit_flags(symbol, self.positions[symbol])  # A6
-                    self.positions.pop(symbol)
+                    # Dış kapanış (bracket bacağı/manuel) — muhasebeyi işleyerek düşür
+                    self._reconcile_external_exit(symbol, side="LONG")
 
             for symbol in list(self.short_positions.keys()):
                 if symbol not in alpaca_short_symbols:
-                    logger.warning(f"  🗑️ SHORT temizlendi (Alpaca'da yok): {symbol}")
-                    self._stash_exit_flags(symbol, self.short_positions[symbol])  # A6
-                    self.short_positions.pop(symbol)
+                    self._reconcile_external_exit(symbol, side="SHORT")
 
             for symbol in list(self.options_positions.keys()):
                 if symbol not in alpaca_option_symbols:
@@ -1302,6 +1326,125 @@ class StockBot:
 
         except Exception as e:
             logger.error(f"  Pozisyon sync hatası: {e}")
+
+    def _reconcile_external_exit(self, symbol: str, side: str = "LONG"):
+        """Bot dışında kapanan pozisyonun (bracket TP/SL bacağı, manuel satış)
+        muhasebesini işleyip pozisyonu düşürür.
+
+        Önceki davranış: pozisyon sync'te sessizce siliniyordu → P&L kaydı,
+        kayıp serisi, wash-sale ve PDT sayacı atlanıyor, Kelly/öğrenme verisi
+        sistematik eksik kalıyordu. Şimdi son dolan çıkış emrinden gerçek fill
+        fiyatı bulunur ve normal satış muhasebesi uygulanır.
+        """
+        book = self.positions if side == "LONG" else self.short_positions
+        pos = book.get(symbol)
+        if not pos:
+            return
+
+        # Taze girişleri kapanmış sayma: yeni verilen BUY henüz dolmamışken
+        # pozisyon Alpaca'da görünmez (özellikle kapalı piyasada) — 10dk bekle
+        try:
+            entry_dt = datetime.fromisoformat(str(pos.get("entry_time", "")))
+            if (datetime.now() - entry_dt).total_seconds() < 600:
+                return
+        except (ValueError, TypeError):
+            pass
+
+        entry = float(pos.get("entry_price", 0) or 0)
+        qty = float(pos.get("qty", 0) or 0)
+        entry_time = pos.get("entry_time", "")
+
+        self._stash_exit_flags(symbol, pos)  # A6: bayrakları koru
+        book.pop(symbol, None)
+
+        # Son dolan çıkış emrini bul (CLOSED emirler en yeniden eskiye gelir)
+        fill_price, order_type = 0.0, ""
+        try:
+            exit_side = OrderSide.SELL if side == "LONG" else OrderSide.BUY
+            req = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=20
+            )
+            for o in self.client.get_orders(req):
+                if o.side != exit_side:
+                    continue
+                if float(o.filled_qty or 0) <= 0 or o.filled_avg_price is None:
+                    continue
+                fill_price = float(o.filled_avg_price)
+                order_type = str(getattr(o, "order_type", "") or getattr(o, "type", ""))
+                break
+        except Exception as e:
+            logger.debug(f"  {symbol} dış kapanış emri sorgulanamadı: {e}")
+
+        if fill_price <= 0 or entry <= 0 or qty <= 0:
+            logger.warning(f"  🗑️ {side} temizlendi (Alpaca'da yok, fill bulunamadı): {symbol}")
+            return
+
+        if side == "LONG":
+            pnl_usd = (fill_price - entry) * qty
+        else:
+            pnl_usd = (entry - fill_price) * qty
+
+        ot = order_type.lower()
+        if "stop" in ot:
+            reason = "STOP_LOSS(BRACKET/EXT)"
+        elif "limit" in ot:
+            reason = "TAKE_PROFIT(BRACKET/EXT)"
+        else:
+            reason = "EXTERNAL_CLOSE"
+
+        pnl_pct = (pnl_usd / (entry * qty) * 100) if entry * qty > 0 else 0
+        logger.info(
+            f"  ✅ DIŞ KAPANIŞ {side} {symbol}: {qty:.4f} @ ${fill_price:,.2f} | "
+            f"P&L: ${pnl_usd:+.2f} ({pnl_pct:+.1f}%) | {reason}"
+        )
+
+        self.trades_today.append({
+            "action": "SELL" if side == "LONG" else "COVER",
+            "symbol": symbol, "price": fill_price, "pnl": pnl_usd,
+            "reason": reason, "time": datetime.now().isoformat(),
+        })
+
+        # Kayıp/kazanç serisi (execute_sell ile aynı semantik)
+        is_loss_exit = "STOP_LOSS" in reason or (reason == "EXTERNAL_CLOSE" and pnl_usd < 0)
+        if is_loss_exit:
+            self._consecutive_losses += 1
+            self._symbol_consecutive_losses[symbol] = (
+                self._symbol_consecutive_losses.get(symbol, 0) + 1
+            )
+            if side == "LONG" and pnl_usd < 0:
+                try:
+                    self.wash_sale_tracker.record_loss_sale(
+                        symbol, pnl_usd, datetime.now().isoformat()[:10]
+                    )
+                except Exception:
+                    pass
+        elif pnl_usd > 0:
+            self._consecutive_losses = 0
+            self._symbol_consecutive_losses[symbol] = 0
+
+        # PDT: aynı gün açılıp kapandıysa day-trade say
+        try:
+            if entry_time and self.pdt_tracker.is_same_day_position(symbol, entry_time):
+                self.pdt_tracker.record_day_trade(
+                    symbol, entry_time, datetime.now().isoformat()
+                )
+        except Exception:
+            pass
+
+        # Performans + ajan öğrenme kaydı
+        try:
+            self.performance.record_trade(
+                symbol=symbol, action="SELL" if side == "LONG" else "COVER",
+                qty=qty, price=fill_price, pnl=pnl_usd, reason=reason,
+                sector=SECTOR_MAP.get(symbol, "Unknown"),
+            )
+        except Exception:
+            pass
+        try:
+            outcome = "WIN" if pnl_usd > 0 else "LOSS" if pnl_usd < 0 else "NEUTRAL"
+            self.agent_perf.record_outcome(symbol, outcome, pnl_usd)
+        except Exception:
+            pass
 
     def _stash_exit_flags(self, symbol: str, pos_data: Dict):
         """Pozisyon geçici olarak sync'ten düşerse yönetim bayraklarını sakla (A6).
@@ -1352,22 +1495,26 @@ class StockBot:
                         self.positions[sym].update({
                             "entry_time": meta.get("entry_time", self.positions[sym].get("entry_time")),
                             "highest_price": meta.get("highest_price", self.positions[sym].get("highest_price", 0)),
-                            "stop_loss_pct": meta.get("stop_loss_pct"),
                             "breakeven_set": meta.get("breakeven_set", False),
                             "partial_sold": meta.get("partial_sold", False),
                             "synced_from_alpaca": False,
                         })
+                        # stop_loss_pct=null enjekte etme — None değer position_manager'da
+                        # "-None" TypeError'a yol açıp TÜM pozisyon yönetimini durduruyordu
+                        if meta.get("stop_loss_pct") is not None:
+                            self.positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
                 # Short pozisyon metadata'sını yükle
                 for sym, meta in data.get("short_positions", {}).items():
                     if sym in self.short_positions:
                         self.short_positions[sym].update({
                             "entry_time": meta.get("entry_time", self.short_positions[sym].get("entry_time")),
                             "lowest_price": meta.get("lowest_price", self.short_positions[sym].get("lowest_price", 0)),
-                            "stop_loss_pct": meta.get("stop_loss_pct"),
                             "breakeven_set": meta.get("breakeven_set", False),
                             "partial_covered": meta.get("partial_covered", False),
                             "synced_from_alpaca": False,
                         })
+                        if meta.get("stop_loss_pct") is not None:  # None enjekte etme
+                            self.short_positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
                 # Options pozisyon metadata'sını yükle
                 saved_options = data.get("options_positions", {})
                 if saved_options:
@@ -1456,6 +1603,13 @@ class StockBot:
             self.initial_equity = self.equity
         self._save_daily_baseline(today.isoformat(), self.initial_equity)
         logger.info(f"  📆 Günlük reset (ET): {today} | Başlangıç equity: ${self.initial_equity:,.2f}")
+
+        # Yeni gün: dünkü DAY çıkış emirleri (bracket bacakları) düştü —
+        # emirsiz kalan pozisyonlara koruyucu stop yeniden yerleştirilir
+        try:
+            self.position_manager.ensure_protective_stops(STOCK_CONFIG)
+        except Exception as e:
+            logger.debug(f"  Günlük koruma emri kontrolü hatası: {e}")
 
     def _emergency_close_all(self, reason: str):
         """KillSwitch tarafından çağrılır — tüm pozisyonları kapat."""

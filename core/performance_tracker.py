@@ -92,7 +92,8 @@ class PerformanceTracker:
             cutoff = (date.today() - timedelta(days=days)).isoformat()
             trades = [t for t in trades if t.get("date", "") >= cutoff]
 
-        sells = [t for t in trades if t.get("action") == "SELL" and "pnl" in t]
+        # COVER = short kapanışı; P&L'li her çıkış istatistiğe girer (Kelly girdisi)
+        sells = [t for t in trades if t.get("action") in ("SELL", "COVER") and "pnl" in t]
 
         if not sells:
             return {

@@ -172,24 +172,17 @@ class TelegramNotifier:
 
             # Acik pozisyonlar
             pos_lines = []
+            from core.gap_scanner import fetch_latest_price
             for sym, p in bot.positions.items():
                 entry = p.get("entry_price", 0)
-                try:
-                    snap = bot.data_client.get_stock_snapshot(sym)
-                    curr = float(snap.latest_trade.price) if snap else entry
-                except Exception:
-                    curr = entry
+                curr = fetch_latest_price(bot.data_client, sym) or entry
                 chg = ((curr - entry) / entry * 100) if entry > 0 else 0
                 emoji = "+" if chg > 0 else ""
                 pos_lines.append(f"  {sym}: {emoji}{chg:.1f}%")
 
             for sym, p in bot.short_positions.items():
                 entry = p.get("entry_price", 0)
-                try:
-                    snap = bot.data_client.get_stock_snapshot(sym)
-                    curr = float(snap.latest_trade.price) if snap else entry
-                except Exception:
-                    curr = entry
+                curr = fetch_latest_price(bot.data_client, sym) or entry
                 chg = ((entry - curr) / entry * 100) if entry > 0 else 0
                 emoji = "+" if chg > 0 else ""
                 pos_lines.append(f"  S:{sym}: {emoji}{chg:.1f}%")

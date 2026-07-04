@@ -99,12 +99,11 @@ class SignalQueue:
 
         for symbol, sig in list(self.pending.items()):
             try:
-                # Guncel fiyati al
-                snapshot = bot.data_client.get_stock_snapshot(symbol)
-                if snapshot is None:
+                # Guncel fiyati al (dogru snapshot API kullanimi)
+                from core.gap_scanner import fetch_latest_price
+                current_price = fetch_latest_price(bot.data_client, symbol)
+                if current_price is None:
                     continue
-
-                current_price = float(snapshot.latest_trade.price)
 
                 triggered = False
 

@@ -37,6 +37,18 @@ class PositionManager:
         for pos in positions:
             symbol = pos.symbol  # Hisse senedi: doğrudan sembol
 
+            # Sadece us_equity yönet: opsiyonlar options_manager'ın, kripto/diğerleri
+            # bu botun işi değil (aksi halde opsiyon premium'una %4 stop uygulanıyordu)
+            asset_class = getattr(pos, "asset_class", "us_equity")
+            if asset_class != "us_equity":
+                continue
+
+            # Parking sleeve (SPY) trade DEĞİL — stop/TP/partial uygulanmaz.
+            # Yanlışlıkla bot.positions'a girmişse temizle (self-heal).
+            if bot.index_parking.is_parking_symbol(symbol):
+                bot.positions.pop(symbol, None)
+                continue
+
             # Cooldown kontrolü
             cooldown_until = bot.sell_cooldown.get(symbol)
             if cooldown_until and datetime.now() < cooldown_until:
@@ -107,7 +119,15 @@ class PositionManager:
             # === SATIŞ KARARLARI (ÖNCELİK SIRASINA GÖRE) ===
 
             # 1. KESİN STOP-LOSS
-            pos_sl_pct = pos_sl_pct_override if pos_sl_pct_override is not None else pos_data.get("stop_loss_pct", config["stop_loss_pct"])
+            # None-güvenli okuma: eski metadata stop_loss_pct=null taşıyabiliyor;
+            # .get(key, default) key VARSA None döner → "-None" TypeError ile tüm
+            # pozisyon yönetimi çöküyordu (canlıda 2 Tem 2026'da yaşandı).
+            if pos_sl_pct_override is not None:
+                pos_sl_pct = pos_sl_pct_override
+            else:
+                pos_sl_pct = pos_data.get("stop_loss_pct")
+                if pos_sl_pct is None:
+                    pos_sl_pct = config["stop_loss_pct"]
             if pnl_pct <= -pos_sl_pct:
                 logger.info(
                     f"  🛑 STOP LOSS {symbol}: {pnl_pct:.1%} (limit: -{pos_sl_pct:.1%}) (${pnl_usd:+.2f})"
@@ -191,6 +211,23 @@ class PositionManager:
                     f"Peak: ${highest:,.2f} | Trail: -{trailing_drop:.2%}"
                 )
 
+        # === DIŞ KAPANIŞ MUTABAKATI (LONG) ===
+        # Bracket TP/SL bacağı sunucuda dolunca pozisyon Alpaca'dan düşer ama
+        # execute_sell hiç çalışmaz → P&L, kayıp serisi, wash-sale ve PDT kaydı
+        # atlanıyordu; slot da bir sonraki büyük sync'e dek (~2 saat) dolu kalıyordu.
+        try:
+            alpaca_longs = {
+                p.symbol for p in positions
+                if float(p.qty) > 0 and getattr(p, "asset_class", "us_equity") == "us_equity"
+            }
+            for sym in list(bot.positions.keys()):
+                if sym in alpaca_longs or bot.index_parking.is_parking_symbol(sym):
+                    continue
+                if hasattr(bot, "_reconcile_external_exit"):
+                    bot._reconcile_external_exit(sym, side="LONG")
+        except Exception as e:
+            logger.debug(f"  Dış kapanış mutabakat hatası (LONG): {e}")
+
     def manage_short_positions(self, config: Dict, short_config: Dict):
         """Short pozisyon yonetimi — ters mantik: fiyat duserse KAR."""
         bot = self.bot
@@ -203,6 +240,10 @@ class PositionManager:
         for pos in positions:
             symbol = pos.symbol
             qty = float(pos.qty)
+
+            # Sadece us_equity (opsiyon/kripto bu yöneticinin işi değil)
+            if getattr(pos, "asset_class", "us_equity") != "us_equity":
+                continue
 
             # Sadece short pozisyonlar (Alpaca: negatif qty = short)
             if qty >= 0:
@@ -264,8 +305,10 @@ class PositionManager:
 
             # === SATIS KARARLARI ===
 
-            # 1. STOP-LOSS (fiyat YUKARI gitti = zarar)
-            pos_sl = pos_data.get("stop_loss_pct", short_config["short_stop_loss_pct"])
+            # 1. STOP-LOSS (fiyat YUKARI gitti = zarar) — None-güvenli okuma
+            pos_sl = pos_data.get("stop_loss_pct")
+            if pos_sl is None:
+                pos_sl = short_config["short_stop_loss_pct"]
             if pnl_pct <= -pos_sl:
                 logger.info(
                     f"  🛑 SHORT STOP {symbol}: {pnl_pct:.1%} (limit: -{pos_sl:.1%}) (${pnl_usd:+.2f})"
@@ -331,6 +374,80 @@ class PositionManager:
                     f"  SHORT {symbol}: {pnl_pct:+.2%} (${pnl_usd:+.2f}) | "
                     f"Low: ${lowest:,.2f} | Rise: +{trailing_rise:.2%}"
                 )
+
+        # === DIŞ KAPANIŞ MUTABAKATI (SHORT) ===
+        try:
+            alpaca_shorts = {
+                p.symbol for p in positions
+                if float(p.qty) < 0 and getattr(p, "asset_class", "us_equity") == "us_equity"
+            }
+            for sym in list(bot.short_positions.keys()):
+                if sym in alpaca_shorts:
+                    continue
+                if hasattr(bot, "_reconcile_external_exit"):
+                    bot._reconcile_external_exit(sym, side="SHORT")
+        except Exception as e:
+            logger.debug(f"  Dış kapanış mutabakat hatası (SHORT): {e}")
+
+    # ================================================================
+    # KORUMA EMRİ GARANTİSİ (startup + günlük)
+    # ================================================================
+
+    def ensure_protective_stops(self, config: Dict):
+        """Açık LONG pozisyonlarda sunucu-taraflı koruma emri yoksa stop yerleştirir.
+
+        Bracket emirler DAY olduğundan TP/SL bacakları gün sonunda düşer; ertesi
+        günden itibaren pozisyon yalnız bot-loop stop'una kalıyordu (bot çöker ya
+        da takılırsa tamamen korumasız — 2 Tem 2026'da canlıda AMZN+META böyle
+        kaldı). Startup ve günlük reset'te çağrılır.
+
+        Güvenlik: sembolde AÇIK herhangi bir SELL emri varsa (bracket TP bacağı
+        dahil) DOKUNMAZ — aynı adet için ikinci satış emri over-commit yaratırdı.
+        """
+        bot = self.bot
+        try:
+            positions = bot.client.get_all_positions()
+            orders = bot.client.get_orders(
+                GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            )
+        except Exception as e:
+            logger.debug(f"  Koruma emri kontrolü yapılamadı: {e}")
+            return
+
+        open_sell_syms = {o.symbol for o in orders if o.side == OrderSide.SELL}
+        placed = 0
+        for pos in positions:
+            symbol = pos.symbol
+            try:
+                if getattr(pos, "asset_class", "us_equity") != "us_equity":
+                    continue
+                qty = float(pos.qty)
+                if qty <= 0:
+                    continue  # short'ların GTC stop'u girişte konuyor
+                if bot.index_parking.is_parking_symbol(symbol):
+                    continue
+                if symbol in open_sell_syms:
+                    continue  # zaten bir çıkış emri var (bracket/stop) — karışma
+                entry = float(pos.avg_entry_price)
+                if entry <= 0:
+                    continue
+                pos_data = bot.positions.get(symbol, {})
+                sl_pct = pos_data.get("stop_loss_pct")
+                if sl_pct is None:
+                    sl_pct = config["stop_loss_pct"]
+                if pos_data.get("breakeven_set"):
+                    prot_price = entry * (1 + config.get("breakeven_offset_pct", 0.001))
+                else:
+                    prot_price = entry * (1 - sl_pct)
+                logger.info(
+                    f"  🛡️ Koruma emri eksikti: {symbol} → stop ${prot_price:.2f} yerleştiriliyor"
+                )
+                self._update_server_stop_loss(symbol, round(prot_price, 2), qty, side="LONG")
+                placed += 1
+            except Exception as e:
+                logger.debug(f"  Koruma emri hatası {symbol}: {e}")
+        if placed:
+            logger.info(f"  🛡️ {placed} pozisyona koruyucu stop yerleştirildi")
 
     # ================================================================
     # SUNUCU TARAFLI STOP-LOSS GUNCELLEME

@@ -340,12 +340,19 @@ STOCK_CONFIG = {
     "cash_reserve_pct": 0.10,              # %10 nakit rezerv (sabit boyut modunda sermaye deploy edilsin)
     "equity_floor_pct": 0.85,              # Hesap %85'ine düşerse yeni giriş dur (~%15 DD koruması)
 
-    # === INDEX PARKING (boştaki nakit → SPY beta; paper-first, LIVE'da KAPALI) ===
-    "index_parking_enabled": False,        # LIVE varsayılan KAPALI (paper'da PAPER_AGGRESSIVE açar)
+    # === INDEX PARKING (boştaki nakit → SPY beta) ===
+    # v4.8.2 — LIVE'DA AÇIK (İhsan kararı 2026-07-05 "hemen aç"): regime deneyi
+    # SPY açığının ~9 puanının nakit sürüklemesi olduğunu gösterdi (−11.5→−2.8).
+    # Katkı eklenmeyecek (tek sermaye) → boş nakdin çalışması tek yapısal düzeltme.
+    # Rezerv etkileşimi: %30 rezerv (~$146 @ $487) likit kalır; executor'ın %10
+    # nakit rezerviyle birlikte ilk alım ~$97-100'e kırpılabilir — bilinçli kabul;
+    # alım rezervi eritirse parking ertesi gün SPY satıp rezervi tamamlar (günde 1
+    # rebalance → aynı-gün AL-SAT yok → PDT güvenli; floor ihlalinde park yapılmaz).
+    "index_parking_enabled": True,
     "index_parking_symbol": "SPY",
     "index_parking_reserve_pct": 0.30,     # equity'nin %30'u likit kalsın (trade buying-power)
     "index_parking_min_trade_usd": 50,     # bu altı rebalance yapma (gereksiz emir/PDT yok)
-    "index_parking_allow_live": False,     # LIVE'da çalışması için ekstra opt-in şart
+    "index_parking_allow_live": True,      # LIVE opt-in (İhsan onayı 2026-07-05)
 
     # === STOP/PROFIT HEDEFLERİ (backtest sonrası optimize) ===
     "stop_loss_pct": 0.04,                  # %4 stop-loss (3% çok dar)

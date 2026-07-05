@@ -22,9 +22,10 @@ from alpaca.trading.enums import QueryOrderStatus
 
 def check_health(alert_hours: float = 12.0):
     """Bot saglik kontrolu yapar."""
-    api_key = os.getenv("ALPACA_API_KEY", "")
-    secret_key = os.getenv("ALPACA_SECRET_KEY", "")
-    mode = os.getenv("TRADING_MODE", "paper")
+    # v4.8.2: anahtarlari config'den al — konteynerlerde anahtarlar prefix'li
+    # (ALPACA_LIVE_API_KEY / ALPACA_PAPER_API_KEY + ALPACA_KEY_PREFIX); ciplak
+    # ALPACA_API_KEY genelde BOS olur ve kontrol sahte "HATA" uretirdi.
+    from config import ALPACA_API_KEY as api_key, ALPACA_SECRET_KEY as secret_key, TRADING_MODE as mode
 
     is_paper = (mode != "live")
     client = TradingClient(api_key, secret_key, paper=is_paper)

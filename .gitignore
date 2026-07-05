@@ -31,3 +31,9 @@ backtest_results.json
 walk_forward_results.json
 regime_experiment_results.json
 meta_model.json
+# Üretilen durum raporları (v4.8.1 temizliği — repo'ya bir daha girmesin)
+report.json
+report.txt
+status_report.txt
+pattern_test.txt
+earnings_calendar.json

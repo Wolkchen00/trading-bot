@@ -7,3 +7,14 @@ kill_switch_state.json
 *.log
 .git/
 _legacy/
+# v4.8.1: araştırma artefaktları ve cache imaja girmesin
+.bt_cache/
+backtest_results.json
+walk_forward_results.json
+regime_experiment_results.json
+report.json
+report.txt
+status_report.txt
+.agent/
+.vscode/
+*.bat

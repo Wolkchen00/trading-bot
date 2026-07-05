@@ -1,163 +1,218 @@
 """
-Earnings Calendar — Kazanç Takvimi Takibi
+Earnings Calendar — Kazanç Takvimi Takibi (v4.8 yeniden yazım)
 
-Earnings (kazanç raporu) çevresinde hisse fiyatları çok volatil olur.
-Bu modül:
-  1. Yaklaşan earnings raporlarını takip eder
-  2. Earnings öncesi 2 gün → yeni pozisyon açmayı engeller
-  3. Earnings sonrası gap analizi yapar
-  4. Alpha Vantage veya Yahoo Finance'den veri çeker
+Earnings (kazanç raporu) çevresinde hisse fiyatları çok volatil olur; gate
+earnings'e ≤2 gün kala yeni pozisyonu engeller.
+
+v4.8 ÖNCESİ SORUNLAR (İhsan'a raporlanan "earnings gate güvenilmez" maddesi):
+  - Hisse başına ayrı AV "EARNINGS" çağrısı → 25 sembol × günde 2 (12 sa cache)
+    = free-tier 25 istek/gün kotasını aşıyordu; yarısı hep boş dönüyordu.
+  - Tarih GERÇEK takvim değildi: son rapor tarihi + 90 gün TAHMİNİ (haftalarca
+    şaşabilir → gate ya erken kapanır ya da asıl earnings gününü kaçırır).
+  - Yahoo fallback endpoint'i ölü (crumb/consent duvarı) — hiç veri dönmüyordu.
+
+v4.8 TASARIM:
+  - AV EARNINGS_CALENDAR endpoint'i TEK çağrıda TÜM sembollerin önümüzdeki
+    3 aylık GERÇEK beklenen rapor tarihlerini CSV döner → günde 1 çağrı, kota derdi yok.
+  - Takvim state dizinine yazılır (restart'ta yeniden fetch yok), 24 saatte bir tazelenir.
+  - Fetch başarısızsa: 7 güne kadar bayat cache ile devam (earnings tarihleri
+    haftalar önceden bellidir); o da yoksa FAIL-OPEN (gate serbest bırakır, loglar).
 """
+import csv
+import io
+import json
 import os
 import requests
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
+
 from utils.logger import logger
 
 
 class EarningsCalendar:
     """Earnings takvimi takibi ve earnings-aware trading."""
 
+    CACHE_TTL_HOURS = 24      # takvim bu sıklıkta tazelenir (1 AV çağrısı/gün)
+    STALE_OK_DAYS = 7         # fetch başarısızken bayat cache'e tolerans
+    RETRY_MINUTES = 30        # başarısız fetch'i bu aralıkla yeniden dene
+
     def __init__(self):
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_KEY", "")
-        self.cache = {}
-        self.cache_time = {}
-        self.cache_duration = 3600 * 12  # 12 saat cache (earnings nadiren değişir)
-        
+        self._calendar: Dict[str, List[str]] = {}   # {SEMBOL: ["2026-07-28", ...]}
+        self._fetched_at: Optional[datetime] = None
+        self._last_attempt = datetime.min
+        self._warned_no_data = False
+
+        # Kalıcı cache (state dizini) — restart/redeploy fetch tetiklemez
+        try:
+            from config import state_path
+            self._cache_file = state_path("earnings_calendar.json")
+        except Exception:
+            self._cache_file = "earnings_calendar.json"
+        self._load_disk_cache()
+
         if self.alpha_vantage_key:
-            logger.info("EarningsCalendar baslatildi — Alpha Vantage API aktif")
+            logger.info(
+                "EarningsCalendar baslatildi — AV toplu takvim modu"
+                + (f" (cache: {len(self._calendar)} sembol)" if self._calendar else "")
+            )
         else:
-            logger.info("EarningsCalendar baslatildi — API key yok, temel mod")
+            logger.info("EarningsCalendar baslatildi — API key yok, gate fail-open")
+
+    # ------------------------------------------------------------
+    # Takvim yenileme
+    # ------------------------------------------------------------
+
+    def _load_disk_cache(self):
+        try:
+            if os.path.exists(self._cache_file):
+                with open(self._cache_file, "r") as f:
+                    data = json.load(f)
+                self._calendar = data.get("calendar", {})
+                ts = data.get("fetched_at")
+                if ts:
+                    self._fetched_at = datetime.fromisoformat(ts)
+        except Exception as e:
+            logger.debug(f"Earnings cache okunamadı: {e}")
+
+    def _save_disk_cache(self):
+        try:
+            with open(self._cache_file, "w") as f:
+                json.dump({
+                    "fetched_at": self._fetched_at.isoformat() if self._fetched_at else None,
+                    "calendar": self._calendar,
+                }, f)
+        except Exception as e:
+            logger.debug(f"Earnings cache yazılamadı: {e}")
+
+    def _cache_age_hours(self) -> float:
+        if not self._fetched_at:
+            return float("inf")
+        return (datetime.now() - self._fetched_at).total_seconds() / 3600
+
+    def _refresh_if_needed(self):
+        """Takvim bayatsa tek toplu AV çağrısıyla yenile (günde ~1)."""
+        if not self.alpha_vantage_key:
+            return
+        if self._cache_age_hours() < self.CACHE_TTL_HOURS:
+            return
+        if (datetime.now() - self._last_attempt).total_seconds() < self.RETRY_MINUTES * 60:
+            return
+        self._last_attempt = datetime.now()
+
+        try:
+            resp = requests.get(
+                "https://www.alphavantage.co/query",
+                params={
+                    "function": "EARNINGS_CALENDAR",
+                    "horizon": "3month",
+                    "apikey": self.alpha_vantage_key,
+                },
+                timeout=20,
+            )
+            if resp.status_code != 200 or not resp.text or resp.text.lstrip().startswith("{"):
+                # JSON dönmesi = hata/limit mesajı (normal yanıt CSV'dir)
+                logger.warning(
+                    f"Earnings takvimi alınamadı (HTTP {resp.status_code}) — "
+                    f"{'bayat cache ile devam' if self._calendar else 'gate fail-open'}"
+                )
+                return
+
+            # Evrenimizdeki sembollerle sınırla (dosya ~binlerce satır gelir)
+            try:
+                from config import STOCK_IDS
+                universe = set(STOCK_IDS.keys())
+            except Exception:
+                universe = set()
+
+            new_cal: Dict[str, List[str]] = {}
+            reader = csv.DictReader(io.StringIO(resp.text))
+            for row in reader:
+                sym = (row.get("symbol") or "").strip().upper()
+                report_date = (row.get("reportDate") or "").strip()
+                if not sym or not report_date:
+                    continue
+                if universe and sym not in universe:
+                    continue
+                new_cal.setdefault(sym, []).append(report_date)
+
+            for sym in new_cal:
+                new_cal[sym].sort()
+
+            self._calendar = new_cal
+            self._fetched_at = datetime.now()
+            self._warned_no_data = False
+            self._save_disk_cache()
+            logger.info(
+                f"  📅 Earnings takvimi yenilendi: {len(new_cal)} sembol, "
+                f"{sum(len(v) for v in new_cal.values())} rapor tarihi (3 ay)"
+            )
+        except Exception as e:
+            logger.warning(f"Earnings takvim fetch hatası: {e} — mevcut cache ile devam")
+
+    # ------------------------------------------------------------
+    # Sorgular
+    # ------------------------------------------------------------
 
     def get_upcoming_earnings(self, symbol: str) -> Optional[Dict]:
         """
-        Hissenin yaklaşan earnings raporunu kontrol et.
-        
+        Hissenin bir SONRAKİ beklenen earnings raporunu döndür.
+
         Returns:
-            {
-                'date': str,  # earnings tarihi
-                'days_until': int,
-                'estimate_eps': float,  # beklenen EPS
-                'is_near': bool,  # 2 gün içinde mi
-            }
-            veya None (veri yok)
+            {'date': str, 'days_until': int, 'is_near': bool, 'source': str}
+            veya None (takvimde yok / veri erişilemez → çağıran fail-open uygular)
         """
-        cache_key = f"earnings_{symbol}"
-        if self._is_cached(cache_key):
-            return self.cache[cache_key]
+        self._refresh_if_needed()
 
-        result = None
+        # Cache kullanılamayacak kadar bayatsa güvenilir veri yok → None (fail-open)
+        if self._cache_age_hours() > self.STALE_OK_DAYS * 24:
+            if self._calendar and not self._warned_no_data:
+                logger.warning(
+                    f"  Earnings takvimi {self._cache_age_hours()/24:.0f} gündür "
+                    f"yenilenemedi — gate fail-open çalışıyor"
+                )
+                self._warned_no_data = True
+            return None
 
-        # Alpha Vantage ile dene
-        if self.alpha_vantage_key:
-            result = self._fetch_alpha_vantage(symbol)
+        dates = self._calendar.get(symbol.upper())
+        if not dates:
+            return None
 
-        # Fallback: Yahoo Finance
-        if result is None:
-            result = self._fetch_yahoo_fallback(symbol)
-
-        if result:
-            self.cache[cache_key] = result
-            self.cache_time[cache_key] = datetime.now()
-
-        return result
-
-    def _fetch_alpha_vantage(self, symbol: str) -> Optional[Dict]:
-        """Alpha Vantage Earnings Calendar endpoint."""
-        try:
-            url = "https://www.alphavantage.co/query"
-            params = {
-                "function": "EARNINGS",
-                "symbol": symbol,
-                "apikey": self.alpha_vantage_key,
-            }
-            response = requests.get(url, params=params, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Quarterly earnings
-                quarterly = data.get("quarterlyEarnings", [])
-                if not quarterly:
-                    return None
-
-                # Bir sonraki beklenen tarihi tahmin et
-                # (Alpha Vantage geçmiş veriyor, bir sonraki çeyrek ~90 gün sonra)
-                last_date = quarterly[0].get("reportedDate", "")
-                if last_date:
-                    last_dt = datetime.strptime(last_date, "%Y-%m-%d").date()
-                    next_dt = last_dt + timedelta(days=90)  # tahmini
-                    days_until = (next_dt - date.today()).days
-
-                    return {
-                        "date": next_dt.isoformat(),
-                        "days_until": max(days_until, 0),
-                        "estimate_eps": float(quarterly[0].get("estimatedEPS", 0) or 0),
-                        "actual_eps": float(quarterly[0].get("reportedEPS", 0) or 0),
-                        "surprise_pct": float(quarterly[0].get("surprisePercentage", 0) or 0),
-                        "is_near": 0 <= days_until <= 2,
-                        "source": "alpha_vantage",
-                    }
-
-        except Exception as e:
-            logger.debug(f"Alpha Vantage earnings hatası {symbol}: {e}")
-        return None
-
-    def _fetch_yahoo_fallback(self, symbol: str) -> Optional[Dict]:
-        """Yahoo Finance earnings fallback (sayfa scraping)."""
-        try:
-            url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-            params = {"modules": "calendarEvents"}
-            headers = {"User-Agent": "Mozilla/5.0"}
-            response = requests.get(url, params=params, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                events = data.get("quoteSummary", {}).get("result", [{}])[0]
-                calendar = events.get("calendarEvents", {}).get("earnings", {})
-                
-                earnings_date_raw = calendar.get("earningsDate", [{}])
-                if earnings_date_raw:
-                    ts = earnings_date_raw[0].get("raw", 0)
-                    if ts > 0:
-                        earnings_dt = datetime.fromtimestamp(ts).date()
-                        days_until = (earnings_dt - date.today()).days
-                        
-                        return {
-                            "date": earnings_dt.isoformat(),
-                            "days_until": max(days_until, 0),
-                            "estimate_eps": calendar.get("earningsAverage", {}).get("raw", 0),
-                            "is_near": 0 <= days_until <= 2,
-                            "source": "yahoo",
-                        }
-        except Exception as e:
-            logger.debug(f"Yahoo earnings hatası {symbol}: {e}")
-        return None
+        today = date.today()
+        for d_str in dates:
+            try:
+                d = datetime.strptime(d_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if d >= today:
+                days_until = (d - today).days
+                return {
+                    "date": d.isoformat(),
+                    "days_until": days_until,
+                    "is_near": days_until <= 2,
+                    "source": "av_calendar",
+                }
+        return None  # takvim penceresinde (3 ay) rapor yok
 
     def should_avoid_trading(self, symbol: str) -> tuple:
         """
         Earnings yakınsa trading'den kaçınılmalı mı?
-        
+
         Returns:
             (should_avoid: bool, reason: str)
         """
         earnings = self.get_upcoming_earnings(symbol)
-        
-        if earnings is None:
-            return False, "Earnings verisi bulunamadı, trading serbest"
-        
-        days = earnings.get("days_until", 999)
-        
-        if days <= 0:
-            return True, f"EARNINGS BUGÜN! {symbol} — çok volatil, trading durduruldu"
-        elif days <= 1:
-            return True, f"Earnings YARIN! {symbol} — yeni pozisyon açma"
-        elif days <= 2:
-            return True, f"Earnings {days} gün içinde! {symbol} — dikkatli ol"
-        
-        return False, f"Earnings {days} gün sonra, trading serbest"
 
-    def _is_cached(self, key: str) -> bool:
-        if key not in self.cache or key not in self.cache_time:
-            return False
-        elapsed = (datetime.now() - self.cache_time[key]).total_seconds()
-        return elapsed < self.cache_duration
+        if earnings is None:
+            return False, "Earnings verisi yok (3 ay içinde rapor yok/veri yok), trading serbest"
+
+        days = earnings.get("days_until", 999)
+
+        if days <= 0:
+            return True, f"EARNINGS BUGÜN ({earnings['date']})! {symbol} — çok volatil, alım yok"
+        elif days <= 1:
+            return True, f"Earnings YARIN ({earnings['date']})! {symbol} — yeni pozisyon açma"
+        elif days <= 2:
+            return True, f"Earnings {days} gün içinde ({earnings['date']})! {symbol} — bekle"
+
+        return False, f"Earnings {days} gün sonra ({earnings['date']}), trading serbest"

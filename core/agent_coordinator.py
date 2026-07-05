@@ -329,14 +329,17 @@ class RiskAgent:
             risk_score -= 50
             reasons.append("🛑 EQUITY FLOOR! Bot durmalı!")
         
-        # Sinyal belirle
+        # Sinyal belirle — v4.8: RiskAgent FRENDİR, GAZ DEĞİL.
+        # Eski davranış: risk normalken BUY oyu veriyordu → her taramada bedava
+        # +1 BUY oyu (çoğunluk 3/5'i fiilen 2/4'e indiriyordu) + güven şişmesi.
+        # Artık risk-normal = HOLD (nötr); SELL vetosu aynen korunur.
         if risk_score <= -30:
             signal = "SELL"  # VETO!
         elif risk_score <= -15:
             signal = "HOLD"
         else:
-            signal = "BUY"  # Risk uygun, işlem yapılabilir
-        
+            signal = "HOLD"  # Risk uygun → nötr; alım gerekçesi diğer ajanların işi
+
         confidence = min(abs(risk_score) + 30, 100)
         
         vote = AgentVote(
@@ -414,13 +417,11 @@ class AgentCoordinator:
         
         # 3. Ağırlıklı skor hesapla
         weighted_score = 0
-        total_confidence = 0
-        
+
         for vote in votes:
             weight = self.WEIGHTS.get(vote.agent_name, 0.15)
             signal_value = {"BUY": 1, "SELL": -1, "HOLD": 0}[vote.signal]
             weighted_score += signal_value * weight * vote.confidence
-            total_confidence += vote.confidence * weight
         
         # 4. Risk vetosu kontrolü
         risk_vote = votes[4]  # RiskAgent her zaman son
@@ -454,8 +455,14 @@ class AgentCoordinator:
                 f"({risk_vote.reasoning})"
             )
         
-        # 7. Güven hesapla
-        confidence = total_confidence
+        # 7. Güven hesapla — v4.8: YÖN-FARKINDA güven.
+        # Eski formül TÜM ajanların güvenini yön fark etmeksizin topluyordu:
+        # karşı yönde oy veren ajanın güveni bile nihai BUY güvenine EKLENIYORDU
+        # (pozisyon boyutu bantları bu sayıya bağlı → çelişkili sinyalde büyük
+        # pozisyon riski). |weighted_score| tam istenen ölçü: aynı yön güven katar,
+        # karşı yön düşer, HOLD sulandırır (katkı 0). Tam mutabakat sinyallerinde
+        # eski ve yeni değer hemen hemen aynıdır — 60/70/80/90 bantları anlamını korur.
+        confidence = abs(weighted_score)
         if majority:
             confidence *= 1.2  # Çoğunluk = daha güvenli
         if risk_veto:

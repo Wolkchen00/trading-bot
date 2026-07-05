@@ -13,6 +13,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
+from core.trade_gates import plan_exit_pcts
 from utils.logger import logger
 
 
@@ -108,18 +109,13 @@ class OrderExecutor:
 
             logger.info(f"  Pozisyon: ${max_invest:.2f} | {qty:.4f} adet @ ${price:,.2f} (tier: {tier_weight:.0%})")
 
-            # ADAPTIF STOP-LOSS hesapla
+            # ADAPTIF STOP-LOSS + DİNAMİK TP (v4.8) — R:R gate ile AYNI plan
+            # (plan_exit_pcts tek doğruluk kaynağı; TP = SL × min_rr, tavanlı)
             atr_value = analysis.get("atr", 0)
-            if atr_value > 0 and price > 0:
-                atr_pct = atr_value / price
-                adaptive_sl = atr_pct * config['atr_stop_multiplier']
-                adaptive_sl = max(adaptive_sl, config['stop_loss_pct'])
-                adaptive_sl = min(adaptive_sl, config['stop_loss_max_pct'])
-            else:
-                adaptive_sl = config['stop_loss_pct']
+            adaptive_sl, adaptive_tp = plan_exit_pcts(atr_value, price, config)
 
             stop_price = round(price * (1 - adaptive_sl), 2)
-            tp_price = round(price * (1 + config.get('take_profit_pct', 0.08)), 2)
+            tp_price = round(price * (1 + adaptive_tp), 2)
 
             # BRACKET ORDER — BUY + TP + SL tek atomik emirle
             # Boylece SL basarisiz olursa korumasiz pozisyon kalmaz
@@ -182,11 +178,13 @@ class OrderExecutor:
                     logger.warning(f"  Stop-loss emri gonderilemedi: {sl_err}")
 
             logger.info(
-                f"  STOP-LOSS: {symbol} @ ${stop_price:,.2f} "
-                f"({adaptive_sl:.1%} | ATR={atr_value:.4f})"
+                f"  STOP-LOSS: {symbol} @ ${stop_price:,.2f} ({adaptive_sl:.1%}) | "
+                f"TP: ${tp_price:,.2f} ({adaptive_tp:.1%}, R:R {adaptive_tp/adaptive_sl:.1f}:1) "
+                f"| ATR={atr_value:.4f}"
             )
 
-            # Pozisyon kaydet
+            # Pozisyon kaydet — take_profit_pct de pozisyon-başına saklanır ki
+            # position_manager dinamik hedefi bilsin (sabit config TP'si değil)
             bot.positions[symbol] = {
                 "entry_price": price,
                 "qty": qty,
@@ -194,6 +192,7 @@ class OrderExecutor:
                 "order_id": str(order.id),
                 "stop_loss_price": stop_price,
                 "stop_loss_pct": adaptive_sl,
+                "take_profit_pct": adaptive_tp,
             }
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({

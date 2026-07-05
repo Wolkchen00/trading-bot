@@ -322,11 +322,16 @@ STOCK_CONFIG = {
     # belirler: normal sinyal $100-200, çok güvenilir $300. Kelly/damping BYPASS;
     # tavanlar: fixed_position_max_pct × equity + live_max_position_usd + eldeki nakit.
     # Format: [min_güven, $boyut] — güveni karşılayan EN YÜKSEK bant seçilir.
+    # v4.8 YENİDEN HARİTALAMA: koordinatör güveni artık YÖN-FARKINDA (karşı oy
+    # düşürür, HOLD dolgusu kalktı) → temiz-mutabakat sinyalinde yeni değer eskinin
+    # ~0.83'ü (Monte Carlo: eski-60 ≈ yeni-50, eski-90 ≈ yeni-75). Bantlar aynı
+    # seçiciliği korumak için kaydırıldı; çelişkili sinyaller (eski formülde 77
+    # "güven" alabiliyordu!) yeni ölçekte 10-30'a düşer ve hiçbir banda giremez.
     "live_conf_position_bands": [
-        [60, 100],                          # eşiği yeni geçen sinyal → $100
-        [70, 150],
-        [80, 200],
-        [90, 300],                          # çok güvenilir → $300
+        [50, 100],                          # eşiği yeni geçen sinyal → $100
+        [60, 150],
+        [70, 200],
+        [80, 300],                          # çok güvenilir (≈eski 90+) → $300
     ],
     "live_fixed_position_usd": 0,          # eski düz-sabit mod (0=kapalı; bantlar öncelikli)
     "fixed_position_max_pct": 0.62,        # boyut equity'nin %62'sini aşamaz — $487 hesapta $300
@@ -346,12 +351,21 @@ STOCK_CONFIG = {
     "stop_loss_pct": 0.04,                  # %4 stop-loss (3% çok dar)
     "stop_loss_max_pct": 0.06,              # %6 max stop
     "atr_stop_multiplier": 1.8,             # ATR çarpanı (1.5 çok sıkı)
-    "take_profit_pct": 0.08,                # %8 take-profit (2:1 R:R)
+    # v4.8 DİNAMİK TP: gerçek TP = clamp(planlanan_SL × min_rr_ratio,
+    # take_profit_pct, take_profit_max_pct). Eski sabit TP %8 + ATR bazlı SL
+    # kombinasyonu R:R'yi yapısal olarak 2.0'a sabitliyordu → R:R gate fiilen
+    # "ATR ≤ %2.22" filtresine dönüşmüştü (yüksek-ATR hisselerde hiç alım yok).
+    # Şimdi SL genişledikçe TP de orantılı uzar; oran her işlemde korunur.
+    "take_profit_pct": 0.08,                # TABAN TP — dinamik TP bunun altına inmez
+    "take_profit_max_pct": 0.12,            # dinamik TP tavanı (SL %6 × 2.0 = %12'ye izin)
     "trailing_stop_pct": 0.04,              # %4 trailing stop
     "partial_profit_pct": 0.05,             # %5'de yarısını sat
 
     # === SINYAL EŞİKLERİ ===
-    "min_confidence_score": 60,             # Seçicilik (backtest: 45→60 ile PF 0.81→1.90, Sharpe -0.92→1.29)
+    # v4.8: 60 → 50. Sayı KÜÇÜLDÜ ama bar DÜŞMEDİ: yön-farkında güven ölçeğinde
+    # temiz-mutabakat sinyali için yeni-50 ≈ eski-60 (Monte Carlo kalibrasyonu).
+    # Eski formülde 60'ı geçebilen çelişkili sinyaller yeni ölçekte 10-30 alır → ölür.
+    "min_confidence_score": 50,
     "rsi_oversold": 30,
     "rsi_overbought": 70,
     "min_volume_ratio": 1.3,
@@ -378,11 +392,21 @@ STOCK_CONFIG = {
     "coin_max_consecutive_losses": 3,
 
     # === R:R GATE ===
+    # v4.8: gate artık executor'ın GERÇEK planladığı SL/TP ile oranı ölçer
+    # (dinamik TP sayesinde oran normalde sağlanır; gate yalnız take_profit_max_pct
+    # tavanı orana izin vermediğinde bloklar). Volatilite koruması bu gate'in işi
+    # DEĞİL — onu max_atr_pct (VOL GATE) yapar.
     "rr_gate_enabled": True,
     "min_rr_ratio": 2.0,
 
     # === MULTI-TIMEFRAME ===
     "multi_tf_enabled": True,
+
+    # === SIGNAL QUEUE (pullback girişi) — v4.8 ===
+    # Uzamış girişlerde (RSI yüksek / BB üstü / VWAP primli) hemen almak yerine
+    # %1.5 pullback bekler (2 saat, gelmezse iptal). Paper-first: canlıda kapalı,
+    # paper'da PAPER_AGGRESSIVE açar. Kanıt birikirse live'a alınır.
+    "pullback_queue_enabled": False,
 
     # === BREAK-EVEN STOP ===
     "breakeven_enabled": True,
@@ -602,10 +626,19 @@ PAPER_AGGRESSIVE_CONFIG = {
     # === HİSSE AYARLARI (override) ===
     "max_position_usd": 5000,                # $200 → $5000
     "max_open_positions": 8,                  # 3 → 8
-    "min_confidence_score": 60,               # Edge-research: seçicilik (eski 40 = aşırı işlem→zarar)
+    # v4.8: 60 → 45 (yön-farkında yeni güven ölçeğinde). Paper'ın işi ÖĞRENME
+    # VERİSİ üretmek (meta_labeler WIRE kapısı 30-50 kapalı işlem bekliyor; eski
+    # ayarla 2 Tem'de 0 işlem çıktı). Canlı eşiği 50'de (≈eski-60 seçiciliği).
+    "min_confidence_score": 45,
     "scan_interval_seconds": 15,              # 30 → 15 (daha sık tara)
     "stop_loss_pct": 0.05,                    # %4 → %5 (biraz daha geniş)
     "take_profit_pct": 0.06,                  # %8 → %6 (daha hızlı kar al)
+    # v4.8: paper R:R hedefi 1.5 (dinamik TP = SL×1.5, tavan %10) → TP %7.5-9
+    # bandında kalır, işlemler daha hızlı kapanır = öğrenme döngüsü hızlanır.
+    # ESKİ BUG: TP %6 / SL taban %5 sabitken R:R gate (min 2.0) paper'da HER
+    # alımı blokluyordu (maks oran 1.2) — paper hisse işlemleri aylardır ölüydü.
+    "min_rr_ratio": 1.5,
+    "take_profit_max_pct": 0.10,
     "sell_cooldown_seconds": 120,             # 5dk → 2dk (daha hızlı geri gir)
 
     # === SHORT AYARLARI (override) ===
@@ -619,4 +652,7 @@ PAPER_AGGRESSIVE_CONFIG = {
 
     # === INDEX PARKING (paper'da AÇIK — nakit sürüklemesini azalt, beta yakala) ===
     "index_parking_enabled": True,
+
+    # === SIGNAL QUEUE (paper'da AÇIK — pullback girişi paper-first denenir) ===
+    "pullback_queue_enabled": True,
 }

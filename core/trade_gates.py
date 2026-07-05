@@ -20,6 +20,32 @@ from ta.trend import EMAIndicator
 from utils.logger import logger
 
 
+def plan_exit_pcts(atr: float, price: float, config: Dict) -> Tuple[float, float]:
+    """Bir alımın planlanan (stop_loss_pct, take_profit_pct) çiftini hesaplar.
+
+    TEK DOĞRULUK KAYNAĞI — executor.execute_buy ve R:R gate aynı planı buradan
+    okur; ikisi ayrışırsa gate gerçekte verilmeyecek bir emri değerlendirmiş olur.
+
+    SL: ATR × atr_stop_multiplier, [stop_loss_pct, stop_loss_max_pct] aralığına
+        kırpılır (ATR yoksa taban).
+    TP (v4.8 dinamik): max(take_profit_pct, SL × min_rr_ratio), take_profit_max_pct
+        tavanlı — SL genişledikçe hedef orantılı uzar, R:R her işlemde korunur.
+    """
+    if atr and atr > 0 and price and price > 0:
+        atr_pct = atr / price
+        sl = atr_pct * config.get("atr_stop_multiplier", 1.8)
+        sl = max(sl, config.get("stop_loss_pct", 0.04))
+        sl = min(sl, config.get("stop_loss_max_pct", 0.06))
+    else:
+        sl = config.get("stop_loss_pct", 0.04)
+
+    tp_floor = config.get("take_profit_pct", 0.08)
+    tp_cap = config.get("take_profit_max_pct", 0.12)
+    min_rr = config.get("min_rr_ratio", 2.0)
+    tp = min(max(tp_floor, sl * min_rr), max(tp_cap, tp_floor))
+    return sl, tp
+
+
 class TradeGates:
     """Alım öncesi tüm güvenlik filtrelerini kontrol eder."""
 
@@ -139,20 +165,23 @@ class TradeGates:
         return False, ""
 
     def _check_rr_gate(self, symbol: str, analysis: Dict, config: Dict) -> Tuple[bool, str]:
-        """Risk/Ödül oranı kontrolü."""
-        sl_pct = analysis.get("atr", 0)
-        price = analysis.get("price", 0)
-        tp_pct = config.get("take_profit_pct", 0.06)
+        """Risk/Ödül oranı kontrolü — executor'ın GERÇEK planladığı SL/TP ile.
 
-        if sl_pct > 0 and price > 0:
-            atr_pct = sl_pct / price
-            actual_sl = atr_pct * config.get("atr_stop_multiplier", 1.5)
-            actual_sl = max(actual_sl, config.get("stop_loss_pct", 0.03))
-            actual_sl = min(actual_sl, config.get("stop_loss_max_pct", 0.05))
-            rr_ratio = tp_pct / actual_sl if actual_sl > 0 else 0
-            min_rr = config.get("min_rr_ratio", 2.0)
-            if rr_ratio < min_rr:
-                logger.debug(f"  {symbol} R:R GATE: {rr_ratio:.1f}:1 < {min_rr}:1")
+        v4.8 öncesi bug: TP sabit %8, SL tabanı %4 iken oran yapısal olarak en çok
+        2.0'dı → gate fiilen "ATR ≤ %2.22" filtresiydi; paper'da (TP %6 / SL taban
+        %5, maks oran 1.2) HER alımı blokluyordu. Artık executor dinamik TP kullanır
+        (SL × min_rr, take_profit_max_pct tavanlı) ve bu gate aynı planı hesaplayıp
+        yalnız tavanın orana izin vermediği uç durumda bloklar. Volatilite koruması
+        bu gate'in işi değil — VOL GATE (max_atr_pct) yapar.
+        """
+        planned_sl, planned_tp = plan_exit_pcts(
+            analysis.get("atr", 0), analysis.get("price", 0), config
+        )
+        min_rr = config.get("min_rr_ratio", 2.0)
+        if planned_sl > 0:
+            rr_ratio = planned_tp / planned_sl
+            if rr_ratio + 1e-9 < min_rr:
+                logger.debug(f"  {symbol} R:R GATE: {rr_ratio:.2f}:1 < {min_rr}:1")
                 return True, "RR_GATE"
 
         return False, ""

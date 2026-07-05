@@ -30,6 +30,7 @@ from config import (
     OPTIONS_CONFIG, PAPER_AGGRESSIVE_CONFIG, STOCK_IDS, SECTOR_MAP,
     MARKET_REGIME_CONFIG, COMMISSION_CONFIG,
 )
+from core.trade_gates import plan_exit_pcts
 
 
 # ============================================================
@@ -93,6 +94,14 @@ class BacktestEngine:
         self.bull_size_mult = float(os.getenv("BT_BULL_SIZE_MULT", "1.0"))
         # Deney hızlandırma: bar verisini diske cache'le (yalnız BT_CACHE=1)
         self.use_cache = os.getenv("BT_CACHE", "") == "1"
+        # v4.8 dinamik TP deney hook'u: BT_TP_MAX=0.08 gibi override ile ESKİ
+        # sabit-TP davranışı (tavan=taban) geri çağrılabilir → old-vs-new kıyas
+        _tpm = os.getenv("BT_TP_MAX")
+        if _tpm:
+            self.config["take_profit_max_pct"] = float(_tpm)
+        _rr = os.getenv("BT_MIN_RR")
+        if _rr:
+            self.config["min_rr_ratio"] = float(_rr)
 
         # Pozisyonlar
         self.positions = {}       # symbol -> {entry_price, qty, entry_date, stop_loss_pct, highest}
@@ -502,15 +511,9 @@ class BacktestEngine:
         cost = qty * price
         entry_fee = self._trade_cost(qty, price, "buy")
 
-        # ATR bazlı stop-loss
-        atr = analysis.get("atr", 0)
-        if atr > 0 and price > 0:
-            atr_pct = atr / price
-            sl_pct = atr_pct * self.config.get("atr_stop_multiplier", 2.0)
-            sl_pct = max(sl_pct, self.config.get("stop_loss_pct", 0.05))
-            sl_pct = min(sl_pct, self.config.get("stop_loss_max_pct", 0.12))
-        else:
-            sl_pct = self.config.get("stop_loss_pct", 0.05)
+        # ATR bazlı stop-loss + dinamik TP — CANLI executor ile AYNI plan
+        # (plan_exit_pcts tek doğruluk kaynağı; v4.8)
+        sl_pct, tp_pct = plan_exit_pcts(analysis.get("atr", 0), price, self.config)
 
         self.positions[symbol] = {
             "entry_price": price,
@@ -518,6 +521,7 @@ class BacktestEngine:
             "cost": cost,
             "entry_date": day,
             "stop_loss_pct": sl_pct,
+            "take_profit_pct": tp_pct,
             "highest_price": price,
             "confidence": confidence,
             "reasons": analysis.get("reasons", []),
@@ -582,8 +586,10 @@ class BacktestEngine:
                 self._close_long(sym, current_price, day, f"STOP_LOSS ({pnl_pct:.1%})")
                 continue
 
-            # Take profit
-            tp_pct = self.config.get("take_profit_pct", 0.06)
+            # Take profit — v4.8: pozisyon-başına dinamik TP (canlıyla aynı)
+            tp_pct = pos.get("take_profit_pct")
+            if tp_pct is None:
+                tp_pct = self.config.get("take_profit_pct", 0.06)
             if pnl_pct >= tp_pct:
                 self._close_long(sym, current_price, day, f"TAKE_PROFIT (+{pnl_pct:.1%})")
                 continue

@@ -86,6 +86,8 @@ class PositionManager:
                 }
                 if cached.get("stop_loss_pct") is not None:
                     bot.positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
+                if cached.get("take_profit_pct") is not None:
+                    bot.positions[symbol]["take_profit_pct"] = cached["take_profit_pct"]
 
             # Trailing stop güncelleme
             pos_data = bot.positions.get(symbol, {})
@@ -128,6 +130,13 @@ class PositionManager:
                 pos_sl_pct = pos_data.get("stop_loss_pct")
                 if pos_sl_pct is None:
                     pos_sl_pct = config["stop_loss_pct"]
+
+            # v4.8: pozisyon-başına dinamik TP (girişte SL×min_rr planlandı);
+            # yoksa config tabanı. None-güvenli okuma (null-metadata dersi).
+            pos_tp_pct = pos_data.get("take_profit_pct")
+            if pos_tp_pct is None:
+                pos_tp_pct = config["take_profit_pct"]
+
             if pnl_pct <= -pos_sl_pct:
                 logger.info(
                     f"  🛑 STOP LOSS {symbol}: {pnl_pct:.1%} (limit: -{pos_sl_pct:.1%}) (${pnl_usd:+.2f})"
@@ -135,9 +144,10 @@ class PositionManager:
                 bot.executor.execute_sell(symbol, f"STOP_LOSS ({pnl_pct:.1%} / limit -{pos_sl_pct:.1%})")
 
             # 2. TAKE PROFIT
-            elif pnl_pct >= config["take_profit_pct"]:
+            elif pnl_pct >= pos_tp_pct:
                 logger.info(
-                    f"  💰 TAKE PROFIT {symbol}: +{pnl_pct:.1%} (${pnl_usd:+.2f})"
+                    f"  💰 TAKE PROFIT {symbol}: +{pnl_pct:.1%} "
+                    f"(hedef {pos_tp_pct:.1%}) (${pnl_usd:+.2f})"
                 )
                 bot.executor.execute_sell(symbol, f"TAKE_PROFIT (+{pnl_pct:.1%})")
 

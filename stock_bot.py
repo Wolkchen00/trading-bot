@@ -187,7 +187,9 @@ class StockBot:
         self._daily_reset_date = None
 
         # Core modüller
-        self.market_hours = MarketHours()
+        # v4.8: trading_client verilir → yarım günlerde (Alpaca takvimi) gerçek
+        # kapanış saati kullanılır (27 Kas / 24 Ara 13:00 ET erken kapanış)
+        self.market_hours = MarketHours(trading_client=self.client)
         self.pdt_tracker = PDTTracker(equity=equity)
         self.screener = StockScreener(
             api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY
@@ -242,6 +244,9 @@ class StockBot:
         self._spy_cache_time = datetime.min
         self._gap_scan_done_today = False
         self._gap_scan_date = date.min
+        # v4.8: EMA200 trend kapısı için GÜNLÜK bar cache'i {sembol: (tarih, bool|None)}
+        # — günde 1 kez hisse başına günlük veri çekilir (10 sembol ≈ 10 çağrı/gün)
+        self._daily_ema200_cache = {}
 
         # Options modülleri (v4.0 — CALL/PUT)
         self.options_positions = {}  # Açık opsiyon pozisyonları
@@ -460,6 +465,21 @@ class StockBot:
                     for sig in ready_signals:
                         sym = sig["symbol"]
                         sig_analysis = sig.get("analysis", {})
+                        # v4.8 güvenlik: kuyruğa girildiğinden beri (≤2 saat) durum
+                        # değişmiş olabilir — pozisyon/limit/wash-sale YENİDEN kontrol
+                        # edilir (execute_buy bunları kendisi kontrol etmez).
+                        total_open_now = (len(self.positions) + len(self.short_positions)
+                                          + len(self.options_positions))
+                        if total_open_now >= config.get("max_open_positions", 3):
+                            logger.debug(f"  Kuyruk {sym}: max pozisyon dolu, atlandı")
+                            continue
+                        if sym in self.positions or sym in self.short_positions:
+                            continue
+                        if self._sector_limit_reached(sym, config):
+                            continue
+                        is_wash, _wash_reason = self.wash_sale_tracker.check_wash_sale(sym)
+                        if is_wash:
+                            continue
                         if sig["signal"] == "BUY" and BOT_MODE in ("long_only", "both"):
                             self.executor.execute_buy(sym, sig_analysis, config)
                             # Signal queue'dan gelen güçlü BUY sinyalinde opsiyon da ekle
@@ -655,18 +675,28 @@ class StockBot:
         benchmark = MARKET_REGIME_CONFIG.get("benchmark_symbol", "SPY")
 
         try:
-            df = self.get_stock_bars(benchmark, days=250)
+            # v4.8: rejim GÜNLÜK barda hesaplanır. Önceden saatlik bar kullanılıyordu:
+            # EMA200 × saatlik ≈ 8 işlem günü → "200 günlük trend" değil 2 haftalık
+            # gürültü ölçülüyordu (BEAR/BULL etiketi her düzeltmede savruluyordu).
+            # 400 takvim günü ≈ ~270 işlem günü → EMA200 tam pencereyle hesaplanır.
+            df = self.get_stock_bars(benchmark, days=400, timeframe="day")
             if df.empty or len(df) < 50:
                 return
 
-            # SPY verisini cache'le (relative strength icin)
-            self._spy_df_cache = df
-            self._spy_cache_time = now
+            # SPY SAATLİK cache'i ayrıca güncelle (RelativeStrength gün-içi
+            # karşılaştırma yapar; sembol df'leri saatlik → SPY de saatlik kalmalı)
+            try:
+                spy_hourly = self.get_stock_bars(benchmark, days=30)
+                if not spy_hourly.empty:
+                    self._spy_df_cache = spy_hourly
+                    self._spy_cache_time = now
+            except Exception:
+                pass
 
             close = df["close"]
             price = float(close.iloc[-1])
 
-            # Eski EMA200 rejimi (backward compat)
+            # EMA200 rejimi (günlük)
             ema_period = MARKET_REGIME_CONFIG.get("ema_period", 200)
             ema_period = min(ema_period, len(close) - 1)
             ema200 = EMAIndicator(close, window=ema_period).ema_indicator().iloc[-1]
@@ -799,6 +829,20 @@ class StockBot:
                     analysis["sector_weight"] = self.sector_rotator.get_weight_multiplier(symbol)
                     if _is_inverse_etf:
                         analysis["reasons"].append("🐻 BEAR_MODE_INVERSE_ETF")
+
+                    # v4.8: UZAMIŞ girişte hemen alma → SignalQueue'ya koy, %1.5
+                    # pullback bekle (2 saat; gelmezse iptal). Kuyruk bugüne dek
+                    # hiç BESLENMİYORDU (tüketici döngüde vardı, üretici yoktu).
+                    # Paper-first: pullback_queue_enabled paper'da açık, canlıda kapalı.
+                    if (config.get("pullback_queue_enabled", False)
+                            and self._is_extended_entry(analysis)):
+                        if self.signal_queue.add_signal(symbol, "BUY", analysis, decision):
+                            logger.info(
+                                f"  ⏳ {symbol} girişi uzamış (RSI/BB/VWAP) — "
+                                f"pullback kuyruğuna alındı"
+                            )
+                            return
+
                     self.executor.execute_buy(symbol, analysis, config)
 
                     # Opsiyon da ekle (güçlü sinyalde hisse + opsiyon birlikte)
@@ -896,6 +940,15 @@ class StockBot:
                 elif vol_signal == "DISTRIBUTION" and result["signal"] in ("SHORT", "SELL", "HOLD"):
                     result["confidence"] = min(result.get("sell_score", 0) + boost, 100)
                     result["reasons"].append(f"SmartMoney:+{boost}({vol_signal})")
+
+            # v4.8: EMA200 trend kapısını GÜNLÜK bara dayandır. Analyzer'ın df'i
+            # saatlik (30 gün ≈ 210 bar) → "EMA200" aslında ~8 işlem günlük kısa
+            # filtreydi: sağlıklı uptrend'in sıradan düşüş haftasında dip alımlarını
+            # blokluyor, gerçek uzun-vade düşüşü ise göremiyordu. Günlük veri
+            # alınamazsa analyzer'ın saatlik değeri (fail-open) korunur.
+            daily_above = self._daily_above_ema200(symbol)
+            if daily_above is not None:
+                result["above_ema200"] = daily_above
 
             # Relative Strength (SPY'a gore guc siralamasi)
             try:
@@ -1040,12 +1093,18 @@ class StockBot:
     # VERİ ÇEKME
     # ============================================================
 
-    def get_stock_bars(self, symbol: str, days: int = 30) -> pd.DataFrame:
-        """Alpaca'dan hisse bar verisi çek."""
+    def get_stock_bars(self, symbol: str, days: int = 30,
+                       timeframe: str = "hour") -> pd.DataFrame:
+        """Alpaca'dan hisse bar verisi çek.
+
+        timeframe: "hour" (varsayılan, gün-içi analiz) | "day" (rejim/EMA200 gibi
+        uzun-vade hesaplar — v4.8: saatlik EMA200 ~8 işlem gününe denk geliyordu,
+        gerçek 200-GÜN trendi için günlük bar şart).
+        """
         try:
             request = StockBarsRequest(
                 symbol_or_symbols=symbol,
-                timeframe=TimeFrame.Hour,
+                timeframe=TimeFrame.Day if timeframe == "day" else TimeFrame.Hour,
                 start=datetime.now() - timedelta(days=days),
             )
             bars = self.data_client.get_stock_bars(request)
@@ -1067,19 +1126,73 @@ class StockBot:
     # YARDIMCI
     # ============================================================
 
+    def _daily_above_ema200(self, symbol: str) -> Optional[bool]:
+        """Fiyat GÜNLÜK EMA200'ün üstünde mi? (ET-günde 1 hesap, cache'li)
+
+        Returns: True/False, veri yetersizse None (çağıran fail-open uygular).
+        """
+        today = self._et_today()
+        cached = self._daily_ema200_cache.get(symbol)
+        if cached and cached[0] == today:
+            return cached[1]
+
+        result = None
+        try:
+            df = self.get_stock_bars(symbol, days=400, timeframe="day")
+            if not df.empty and len(df) >= 100:
+                close = df["close"]
+                window = min(200, len(close) - 1)
+                ema200 = EMAIndicator(close, window=window).ema_indicator().iloc[-1]
+                result = bool(float(close.iloc[-1]) > float(ema200))
+        except Exception as e:
+            logger.debug(f"  {symbol} günlük EMA200 hatası: {e}")
+
+        self._daily_ema200_cache[symbol] = (today, result)
+        return result
+
+    @staticmethod
+    def _is_extended_entry(analysis: Dict) -> bool:
+        """Giriş 'uzamış' mı? (fiyat kısa vadede kovalanmış — pullback beklemeye değer)
+
+        Ölçütler: RSI ≥ 65 (momentum tepesi) | fiyat BB üst bandının üstünde |
+        VWAP'a göre ≥ %2 primli. Temiz/dip girişlerde False → hemen alınır.
+        """
+        try:
+            if float(analysis.get("rsi", 50) or 50) >= 65:
+                return True
+            if analysis.get("bb_position") == "ABOVE":
+                return True
+            if analysis.get("vwap_signal") == "BEARISH":  # fiyat VWAP'ın ≥%2 üstü
+                return True
+        except (TypeError, ValueError):
+            pass
+        return False
+
     def _get_symbols_to_analyze(self) -> List[str]:
         """Analiz edilecek hisseleri döndür — tarama sonucuna göre sırala."""
         # Tarama sonuçları varsa öncelikli
         if self.screener.scan_cache:
-            sorted_symbols = sorted(
+            symbols = sorted(
                 self.screener.scan_cache.keys(),
                 key=lambda s: self.screener.scan_cache[s].get("score", 0),
                 reverse=True,
-            )
-            return sorted_symbols[:10]
+            )[:10]
+        else:
+            # Yoksa varsayılan havuz
+            symbols = STOCK_CONFIG.get("symbols", list(STOCK_IDS.keys()))[:10]
 
-        # Yoksa varsayılan havuz
-        return STOCK_CONFIG.get("symbols", list(STOCK_IDS.keys()))[:10]
+        # v4.8: BEAR rejimde ters-ETF'ler analiz listesinin BAŞINA eklenir.
+        # _analyze_and_trade'deki bear-only alım mantığı zaten vardı ama ne screener
+        # evreni ne de ilk-10 fallback bu sembolleri içeriyordu → özellik ölüydü.
+        # Long-only canlı hesabın ayı piyasasında tek katılım aracı budur.
+        if self._market_regime == "BEAR":
+            inverse = [
+                s for s in MARKET_REGIME_CONFIG.get("inverse_etf_symbols", [])
+                if s not in symbols
+            ]
+            symbols = inverse + symbols
+
+        return symbols
 
     def _sector_limit_reached(self, symbol: str, config: Dict) -> bool:
         """Aynı sektörde max pozisyon kontrolü."""
@@ -1262,6 +1375,8 @@ class StockBot:
                         }
                         if cached.get("stop_loss_pct") is not None:
                             self.positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
+                        if cached.get("take_profit_pct") is not None:
+                            self.positions[symbol]["take_profit_pct"] = cached["take_profit_pct"]
                         synced_long += 1
                         logger.info(
                             f"  🔄 LONG sync: {symbol} | "
@@ -1453,7 +1568,8 @@ class StockBot:
             return
         keep = {}
         for k in ("highest_price", "lowest_price", "breakeven_set",
-                  "partial_sold", "partial_covered", "stop_loss_pct", "entry_time"):
+                  "partial_sold", "partial_covered", "stop_loss_pct",
+                  "take_profit_pct", "entry_time"):
             v = pos_data.get(k)
             if v is not None:
                 keep[k] = v
@@ -1503,6 +1619,8 @@ class StockBot:
                         # "-None" TypeError'a yol açıp TÜM pozisyon yönetimini durduruyordu
                         if meta.get("stop_loss_pct") is not None:
                             self.positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
+                        if meta.get("take_profit_pct") is not None:  # None enjekte etme
+                            self.positions[sym]["take_profit_pct"] = meta["take_profit_pct"]
                 # Short pozisyon metadata'sını yükle
                 for sym, meta in data.get("short_positions", {}).items():
                     if sym in self.short_positions:

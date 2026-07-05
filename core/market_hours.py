@@ -7,7 +7,7 @@ US Eastern Time bazlı piyasa durumu:
   - After-hours: 16:00 - 20:00 ET
   - Kapalı:      20:00 - 04:00 ET + Hafta sonu + Tatiller
 """
-from datetime import datetime, time, date
+from datetime import datetime, time, date, timedelta
 from typing import Dict, Tuple
 import pytz
 
@@ -41,11 +41,27 @@ NYSE_HOLIDAYS_2027 = [
 
 ALL_HOLIDAYS = set(NYSE_HOLIDAYS_2026 + NYSE_HOLIDAYS_2027)
 
+# v4.8: NYSE YARIM GÜNLERİ (erken kapanış 13:00 ET) — statik fallback.
+# Kural: Şükran Günü ertesi Cuma + Noel arifesi (hafta içiyse).
+# (2026'da 3 Temmuz tam tatil — gözetlenen Bağımsızlık Günü; yarım gün değil.
+#  2027'de Noel Cts→24 Ara gözetlenen tatil, dolayısıyla arife yarım günü yok.)
+NYSE_EARLY_CLOSE = {
+    date(2026, 11, 27): time(13, 0),  # Thanksgiving ertesi
+    date(2026, 12, 24): time(13, 0),  # Noel arifesi (Perşembe)
+    date(2027, 11, 26): time(13, 0),  # Thanksgiving ertesi
+}
+
 ET = pytz.timezone("US/Eastern")
 
 
 class MarketHours:
-    """NYSE/NASDAQ piyasa saatleri kontrolü."""
+    """NYSE/NASDAQ piyasa saatleri kontrolü.
+
+    v4.8: Alpaca takvimi (varsa) günün GERÇEK açılış/kapanış saatini verir —
+    yarım günlerde (13:00 kapanış) bot eskiden 16:00'ya kadar "açık" sanıyordu:
+    ölü seansta emir/stop yönetimi yapmaya çalışıyordu. Takvim erişilemezse
+    statik tatil + yarım-gün listeleriyle çalışır (fail-safe).
+    """
 
     # Saat aralıkları (Eastern Time)
     PRE_MARKET_OPEN = time(4, 0)
@@ -57,12 +73,76 @@ class MarketHours:
     SAFE_TRADING_START = time(10, 0)
     SAFE_TRADING_END = time(15, 45)
 
-    def __init__(self):
-        logger.info("MarketHours baslatildi — NYSE/NASDAQ saatleri aktif")
+    # Kapanışa bu kadar kala yeni işlem durur (güvenli bölge sonu)
+    SAFE_END_BUFFER_MIN = 15
+
+    def __init__(self, trading_client=None):
+        # Alpaca TradingClient (opsiyonel) — günün gerçek seans saatleri için
+        self._trading_client = trading_client
+        self._session_cache = None      # (et_date, open_t, close_t, is_trading_day)
+        self._last_calendar_attempt = datetime.min
+        logger.info(
+            "MarketHours baslatildi — NYSE/NASDAQ saatleri aktif"
+            + (" + Alpaca takvim" if trading_client else " (statik takvim)")
+        )
 
     def now_et(self) -> datetime:
         """Şu anki zamanı ET olarak döndür."""
         return datetime.now(ET)
+
+    # ------------------------------------------------------------
+    # v4.8: Günün gerçek seansı (Alpaca takvimi → statik fallback)
+    # ------------------------------------------------------------
+
+    def _today_session(self) -> Tuple[bool, time, time]:
+        """Bugünün (ET) seansı: (işlem günü mü, açılış, kapanış).
+
+        Önce Alpaca takviminden (günde 1 fetch; hata olursa 30 dk'da bir yeniden
+        dener), yoksa statik tatil/yarım-gün listelerinden.
+        """
+        today = self.now_et().date()
+
+        # Cache güncel mi?
+        if self._session_cache and self._session_cache[0] == today:
+            _, open_t, close_t, is_day = self._session_cache
+            return is_day, open_t, close_t
+
+        # Alpaca takviminden dene (başarısızsa 30 dk'da bir yeniden dener,
+        # aradaki çağrılar statik fallback'e düşer — API'yi dövmeyiz)
+        if self._trading_client is not None:
+            since_last = (datetime.now() - self._last_calendar_attempt).total_seconds()
+            if since_last >= 1800:
+                self._last_calendar_attempt = datetime.now()
+                try:
+                    from alpaca.trading.requests import GetCalendarRequest
+                    sessions = self._trading_client.get_calendar(
+                        GetCalendarRequest(start=today, end=today)
+                    )
+                    if sessions:
+                        s = sessions[0]
+                        open_t = s.open.time() if hasattr(s.open, "time") else self.MARKET_OPEN
+                        close_t = s.close.time() if hasattr(s.close, "time") else self.MARKET_CLOSE
+                        self._session_cache = (today, open_t, close_t, True)
+                        if close_t != self.MARKET_CLOSE:
+                            logger.info(
+                                f"  📅 NYSE ERKEN KAPANIŞ (Alpaca takvim): bugün "
+                                f"{close_t.strftime('%H:%M')} ET'de kapanıyor"
+                            )
+                        return True, open_t, close_t
+                    else:
+                        # Takvimde bugün yok = işlem günü değil (tatil/hafta sonu)
+                        self._session_cache = (today, self.MARKET_OPEN, self.MARKET_CLOSE, False)
+                        return False, self.MARKET_OPEN, self.MARKET_CLOSE
+                except Exception as e:
+                    logger.debug(f"  Alpaca takvim hatası (statik fallback): {e}")
+
+        # Statik fallback
+        is_day = today.weekday() < 5 and today not in ALL_HOLIDAYS
+        close_t = NYSE_EARLY_CLOSE.get(today, self.MARKET_CLOSE)
+        # Statik sonucu da cache'le ki her döngüde hesaplanmasın (takvim yoksa)
+        if self._trading_client is None:
+            self._session_cache = (today, self.MARKET_OPEN, close_t, is_day)
+        return is_day, self.MARKET_OPEN, close_t
 
     def get_market_status(self) -> Dict:
         """
@@ -92,8 +172,11 @@ class MarketHours:
                 "time_et": now.strftime("%H:%M ET"),
             }
 
-        # Tatil kontrolü
-        if current_date in ALL_HOLIDAYS:
+        # v4.8: günün gerçek seansı (Alpaca takvim → statik; yarım günleri bilir)
+        is_trading_day, session_open, session_close = self._today_session()
+
+        # Tatil kontrolü (takvim "bugün seans yok" dediyse veya statik listede)
+        if not is_trading_day or current_date in ALL_HOLIDAYS:
             return {
                 "status": "CLOSED",
                 "is_trading_allowed": False,
@@ -103,31 +186,39 @@ class MarketHours:
                 "time_et": now.strftime("%H:%M ET"),
             }
 
+        # Güvenli bölge sonu: kapanıştan SAFE_END_BUFFER_MIN dk önce
+        # (yarım günde 12:45, normal günde 15:45)
+        safe_end = (
+            datetime.combine(current_date, session_close)
+            - timedelta(minutes=self.SAFE_END_BUFFER_MIN)
+        ).time()
+
         # Pre-market
-        if self.PRE_MARKET_OPEN <= current_time < self.MARKET_OPEN:
+        if self.PRE_MARKET_OPEN <= current_time < session_open:
             return {
                 "status": "PRE_MARKET",
                 "is_trading_allowed": False,  # Normal modda pre-market'te işlem yok
                 "is_safe_zone": False,
                 "reason": "Pre-market (sadece olağanüstü fırsatlarda)",
-                "next_event": f"Açılış {self.MARKET_OPEN.strftime('%H:%M')} ET",
+                "next_event": f"Açılış {session_open.strftime('%H:%M')} ET",
                 "time_et": now.strftime("%H:%M ET"),
             }
 
         # Regular market
-        if self.MARKET_OPEN <= current_time < self.MARKET_CLOSE:
-            is_safe = self.SAFE_TRADING_START <= current_time < self.SAFE_TRADING_END
+        if session_open <= current_time < session_close:
+            is_safe = self.SAFE_TRADING_START <= current_time < safe_end
+            early_note = "" if session_close == self.MARKET_CLOSE else " — YARIM GÜN"
             return {
                 "status": "OPEN",
                 "is_trading_allowed": True,
                 "is_safe_zone": is_safe,
-                "reason": "Piyasa açık" + (" (güvenli bölge)" if is_safe else " (volatil bölge)"),
-                "next_event": f"Kapanış {self.MARKET_CLOSE.strftime('%H:%M')} ET",
+                "reason": "Piyasa açık" + (" (güvenli bölge)" if is_safe else " (volatil bölge)") + early_note,
+                "next_event": f"Kapanış {session_close.strftime('%H:%M')} ET",
                 "time_et": now.strftime("%H:%M ET"),
             }
 
-        # After-hours
-        if self.MARKET_CLOSE <= current_time < self.AFTER_HOURS_CLOSE:
+        # After-hours (yarım günde erken kapanıştan itibaren)
+        if session_close <= current_time < self.AFTER_HOURS_CLOSE:
             return {
                 "status": "AFTER_HOURS",
                 "is_trading_allowed": False,  # Normal modda after-hours'da işlem yok
@@ -190,7 +281,7 @@ class MarketHours:
         # Yarın veya sonraki iş günü
         days_ahead = 1
         while True:
-            next_day = now + __import__('datetime').timedelta(days=days_ahead)
+            next_day = now + timedelta(days=days_ahead)
             if next_day.weekday() < 5 and next_day.date() not in ALL_HOLIDAYS:
                 next_open = next_day.replace(
                     hour=self.MARKET_OPEN.hour,

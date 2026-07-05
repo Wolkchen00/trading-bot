@@ -684,6 +684,163 @@ test("requirements.txt tam", test_requirements)
 
 
 # ============================================================
+# 13. v4.8 DAVRANIŞLARI (dinamik TP, yön-farkında güven, yarım gün, earnings)
+# ============================================================
+section("13. v4.8 DAVRANIŞLARI")
+
+def test_plan_exit_pcts():
+    from core.trade_gates import plan_exit_pcts
+    live_cfg = {
+        "atr_stop_multiplier": 1.8, "stop_loss_pct": 0.04, "stop_loss_max_pct": 0.06,
+        "take_profit_pct": 0.08, "take_profit_max_pct": 0.12, "min_rr_ratio": 2.0,
+    }
+    # Düşük ATR (%1): SL tabana kırpılır %4 → TP taban %8 → R:R 2.0
+    sl, tp = plan_exit_pcts(atr=1.0, price=100.0, config=live_cfg)
+    assert abs(sl - 0.04) < 1e-9, f"SL {sl} != 0.04"
+    assert abs(tp - 0.08) < 1e-9, f"TP {tp} != 0.08"
+    # Yüksek ATR (%4): SL tavana kırpılır %6 → dinamik TP %12 → R:R 2.0 KORUNUR
+    sl, tp = plan_exit_pcts(atr=4.0, price=100.0, config=live_cfg)
+    assert abs(sl - 0.06) < 1e-9, f"SL {sl} != 0.06"
+    assert abs(tp - 0.12) < 1e-9, f"TP {tp} != 0.12 (dinamik TP çalışmıyor!)"
+    # ATR yok → SL taban
+    sl, tp = plan_exit_pcts(atr=0, price=100.0, config=live_cfg)
+    assert abs(sl - 0.04) < 1e-9
+    print(f"     Dinamik TP: ATR%4 → SL %6 / TP %12 (R:R {tp/sl:.1f}:1) ✓")
+test("plan_exit_pcts dinamik TP", test_plan_exit_pcts)
+
+def test_rr_gate_not_atr_filter():
+    """v4.8 öncesi bug: R:R gate paper'da HER alımı blokluyordu (TP6/SL5→1.2<2.0).
+    Artık dinamik TP ile tutarlı plan oranı sağlar → normal configlerde bloklamaz."""
+    from core.trade_gates import TradeGates
+    class _FakeBot: pass
+    gates = TradeGates(_FakeBot())
+    paper_cfg = {
+        "atr_stop_multiplier": 1.8, "stop_loss_pct": 0.05, "stop_loss_max_pct": 0.06,
+        "take_profit_pct": 0.06, "take_profit_max_pct": 0.10, "min_rr_ratio": 1.5,
+    }
+    # Eski matematikle bloklanan senaryo: ATR %3 → SL %5.4 → eski TP %6 → 1.1:1 BLOK
+    blocked, reason = gates._check_rr_gate("TEST", {"atr": 3.0, "price": 100.0}, paper_cfg)
+    assert not blocked, f"Paper R:R gate hâlâ blokluyor: {reason}"
+    # Tavan orana izin vermiyorsa BLOKLAMALI (tek meşru blok durumu)
+    tight_cfg = dict(paper_cfg, take_profit_max_pct=0.06, min_rr_ratio=2.0)
+    blocked, reason = gates._check_rr_gate("TEST", {"atr": 3.0, "price": 100.0}, tight_cfg)
+    assert blocked, "Tavan kısıtlı config'de gate bloklamalıydı"
+    print("     R:R gate: normal config geçer, tavan-kısıtlı config bloklar ✓")
+test("R:R gate ATR-filtresi değil artık", test_rr_gate_not_atr_filter)
+
+def test_risk_agent_neutral_baseline():
+    """v4.8: RiskAgent risk-normalken BUY değil HOLD döner (fren, gaz değil)."""
+    from core.agent_coordinator import RiskAgent
+    vote = RiskAgent().analyze({
+        "daily_pnl_pct": 0.5, "open_positions": 0, "max_positions": 3,
+        "atr_pct": 2.0, "vix": 15,
+    })
+    assert vote.signal == "HOLD", f"Risk-normal baseline {vote.signal} olmamalı (HOLD beklenir)"
+    # Stres altında SELL vetosu korunur
+    vote = RiskAgent().analyze({
+        "daily_pnl_pct": -4.0, "open_positions": 3, "max_positions": 3,
+        "atr_pct": 6.0, "vix": 40, "equity_floor_hit": True,
+    })
+    assert vote.signal == "SELL", "Stres altında SELL vetosu kayboldu!"
+    print("     RiskAgent: normal→HOLD, stres→SELL veto ✓")
+test("RiskAgent nötr baseline", test_risk_agent_neutral_baseline)
+
+def test_direction_aware_confidence():
+    """v4.8: çelişkili sinyalin güveni temiz mutabakattan DÜŞÜK olmalı.
+    Eski formül tüm güvenleri yön bağımsız topluyordu → 2 BUY + 2 SELL bile
+    yüksek 'güven' alıp pozisyon bandı şişiriyordu."""
+    from core.agent_coordinator import AgentCoordinator
+    coord = AgentCoordinator()
+    # Temiz mutabakat (4 ajan BUY yönlü güçlü veri)
+    clean = coord.decide(
+        "CLEAN",
+        {"tech_score": 60, "rsi": 26, "macd_signal": "BULLISH", "ichimoku_signal": "BULLISH",
+         "adx": 30, "ema_trend": "BULLISH", "bb_position": "BELOW"},
+        {"fundamental_score": 20, "metrics": {"pe_ratio": 12, "eps": 3.0, "profit_margin": 0.2}},
+        {"news_score": 25, "sentiment_label": "BUY", "fear_greed_value": 40, "fear_greed_signal": "BUY"},
+        {"social_score": 15, "reddit_posts": 20},
+        {"daily_pnl_pct": 0.5, "open_positions": 0, "max_positions": 3, "atr_pct": 2.0, "vix": 15},
+    )
+    # Çelişkili: teknik güçlü BUY ama sentiment/sosyal güçlü SELL
+    conflicted = coord.decide(
+        "CONFLICT",
+        {"tech_score": 60, "rsi": 26, "macd_signal": "BULLISH", "ichimoku_signal": "BULLISH",
+         "adx": 30, "ema_trend": "BULLISH", "bb_position": "BELOW"},
+        {"fundamental_score": -20, "metrics": {"pe_ratio": 60, "eps": -1.0}},
+        {"news_score": -30, "sentiment_label": "SELL", "fear_greed_value": 80, "fear_greed_signal": "SELL"},
+        {"social_score": -15, "reddit_posts": 20},
+        {"daily_pnl_pct": 0.5, "open_positions": 0, "max_positions": 3, "atr_pct": 2.0, "vix": 15},
+    )
+    assert clean["signal"] == "BUY", f"Temiz mutabakat BUY vermedi: {clean['signal']}"
+    assert clean["confidence"] > conflicted["confidence"] + 15, (
+        f"Yön-farkında güven çalışmıyor: temiz={clean['confidence']} "
+        f"çelişkili={conflicted['confidence']}"
+    )
+    print(f"     Güven: temiz-mutabakat={clean['confidence']:.0f} > çelişkili={conflicted['confidence']:.0f} ✓")
+test("Yön-farkında güven (çelişkili sinyal cezası)", test_direction_aware_confidence)
+
+def test_early_close_calendar():
+    from core.market_hours import MarketHours, NYSE_EARLY_CLOSE
+    from datetime import time as _time
+    assert NYSE_EARLY_CLOSE.get(date(2026, 11, 27)) == _time(13, 0), "Thanksgiving ertesi 2026 eksik!"
+    assert NYSE_EARLY_CLOSE.get(date(2026, 12, 24)) == _time(13, 0), "Noel arifesi 2026 eksik!"
+    # Statik yol: client'sız kurulum bugün için tutarlı seans döndürmeli
+    mh = MarketHours(trading_client=None)
+    is_day, open_t, close_t = mh._today_session()
+    assert open_t <= close_t
+    print(f"     Yarım günler tanımlı | bugün: işlem_günü={is_day} kapanış={close_t.strftime('%H:%M')} ET")
+test("NYSE yarım-gün takvimi", test_early_close_calendar)
+
+def test_earnings_calendar_v48():
+    from core.earnings_calendar import EarningsCalendar
+    ec = EarningsCalendar()
+    # Sahte takvim enjekte et (ağa çıkmadan mantığı doğrula)
+    ec._fetched_at = datetime.now()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    far = (date.today() + timedelta(days=30)).isoformat()
+    ec._calendar = {"AAPL": [tomorrow], "MSFT": [far]}
+    avoid, reason = ec.should_avoid_trading("AAPL")
+    assert avoid, f"Yarınki earnings bloklamadı: {reason}"
+    avoid, reason = ec.should_avoid_trading("MSFT")
+    assert not avoid, f"30 gün sonraki earnings bloklamamalı: {reason}"
+    # Takvimde olmayan sembol → fail-open
+    avoid, _ = ec.should_avoid_trading("NVDA")
+    assert not avoid, "Takvim-dışı sembol fail-open olmalı"
+    print("     Earnings: yarın→BLOK, 30 gün→serbest, veri yok→fail-open ✓")
+test("EarningsCalendar v4.8 (toplu takvim + fail-open)", test_earnings_calendar_v48)
+
+def test_paper_learning_config():
+    # DİKKAT: StockBot.__init__ paper modda PAPER_AGGRESSIVE'i STOCK_CONFIG dict'ine
+    # YERİNDE yazar (test_bot_init yukarıda çalıştı) → paylaşılan modül kirli.
+    # Bozulmamış değerleri görmek için config'i izole taze import ederiz.
+    import importlib, sys as _sys
+    saved = _sys.modules.pop("config", None)
+    try:
+        fresh = importlib.import_module("config")
+        assert fresh.PAPER_AGGRESSIVE_CONFIG["min_confidence_score"] == 45, "Paper min_conf 45 değil!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG["min_rr_ratio"] == 1.5, "Paper min_rr 1.5 değil!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG.get("pullback_queue_enabled") is True, "Paper pullback queue kapalı!"
+        assert fresh.STOCK_CONFIG.get("pullback_queue_enabled") is False, "Canlıda pullback queue AÇIK kalmış!"
+        assert fresh.STOCK_CONFIG["min_confidence_score"] == 50, "Canlı min_conf 50 değil!"
+        bands = fresh.STOCK_CONFIG["live_conf_position_bands"]
+        assert bands[0][0] == 50 and bands[-1][0] == 80, f"Bantlar yeniden haritalanmamış: {bands}"
+    finally:
+        _sys.modules.pop("config", None)
+        if saved is not None:
+            _sys.modules["config"] = saved  # diğer testler kirli-ama-tutarlı objeyi görsün
+    print("     Paper: conf 45 + R:R 1.5 + kuyruk açık | Canlı: conf 50, bant 50-80 ✓")
+test("Paper öğrenme + canlı eşik konfigürasyonu", test_paper_learning_config)
+
+def test_extended_entry_heuristic():
+    from stock_bot import StockBot
+    assert StockBot._is_extended_entry({"rsi": 72, "bb_position": "MIDDLE", "vwap_signal": "NEUTRAL"})
+    assert StockBot._is_extended_entry({"rsi": 50, "bb_position": "ABOVE", "vwap_signal": "NEUTRAL"})
+    assert not StockBot._is_extended_entry({"rsi": 45, "bb_position": "MIDDLE", "vwap_signal": "NEUTRAL"})
+    print("     Uzamış giriş: RSI72→kuyruk, BB üstü→kuyruk, temiz→hemen al ✓")
+test("Pullback kuyruğu uzamış-giriş sezgisi", test_extended_entry_heuristic)
+
+
+# ============================================================
 # SONUÇ RAPORU
 # ============================================================
 print("\n" + "=" * 60)

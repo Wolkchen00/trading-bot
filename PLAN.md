@@ -96,10 +96,14 @@ için sistematik engellerin kaldırılması. Testler 82/84 (2 bilinen lokal uyar
 - Haftada 1: `py -X utf8 walk_forward.py` → "SPY'ı geçti mi?" ölçümü. Graduation kapısı bu.
 
 ## FAZ 3 — Edge büyütme
-- **Index parking LIVE kararı**: regime deneyi gösterdi ki SPY açığının çoğu nakit sürüklemesi
-  (alpha −11.5% → −2.8%). Paper'da 2-4 hafta sorunsuz çalışırsa live'da aç
-  (`index_parking_enabled=True` + `index_parking_allow_live=True`). $250×3 pozisyon sonrası
-  boş nakit azalacağı için etkisi sınırlı ama pozisyonsuz günlerde beta yakalar.
+- ✅ **Index parking LIVE AÇILDI (v4.8.2, 2026-07-05)** — İhsan kararı "hemen aç"
+  (sermaye kuralı: katkı eklenmeyecek → boş nakdin betası tek yapısal düzeltme;
+  regime deneyi: alpha −11.5% → −2.8%). %30 rezerv likit, günde 1 rebalance,
+  floor ihlalinde park yok. İlk park beklentisi: Pzt açılışta ~$288 SPY BUY.
+  Not: %30 parking rezervi + executor %10 nakit rezervi → ilk alım ~$97-100'e
+  kırpılabilir (bilinçli kabul; rezerv eriyince parking ertesi gün SPY satarak tamamlar).
+- **Günlük sağlık cron'u (VPS)**: hafta içi 21:30 UTC `trading_health_report.sh` →
+  `/var/log/trading_health.log` (health_check.py konteyner içinde; --alert 30h).
 - Bant güncelleme: hesap büyüdükçe `live_conf_position_bands` değerlerini yükselt (örn. $1k hesapta 200/300/400/600).
 - Hesap $25k'ya kadar PDT/GFV-uyumlu swing duruşu korunur (pdt_tracker zaten yapıyor).
 

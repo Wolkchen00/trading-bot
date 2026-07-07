@@ -481,9 +481,9 @@ class StockBot:
                         if is_wash:
                             continue
                         if sig["signal"] == "BUY" and BOT_MODE in ("long_only", "both"):
-                            self.executor.execute_buy(sym, sig_analysis, config)
-                            # Signal queue'dan gelen güçlü BUY sinyalinde opsiyon da ekle
-                            if self._options_enabled and sig.get("confidence", 0) >= 60:
+                            q_bought = self.executor.execute_buy(sym, sig_analysis, config)
+                            # Kuyruk BUY'ında opsiyon — v4.9: yalnız hisse alımı gerçekleştiyse
+                            if q_bought and self._options_enabled and sig.get("confidence", 0) >= 60:
                                 try:
                                     opt = self.options_engine.evaluate_option_trade(
                                         sym, sig_analysis,
@@ -495,9 +495,9 @@ class StockBot:
                                 except Exception:
                                     pass
                         elif sig["signal"] == "SHORT" and BOT_MODE in ("short_only", "both"):
-                            self.short_executor.execute_short(sym, sig_analysis, config, SHORT_CONFIG)
-                            # Signal queue'dan gelen güçlü SHORT sinyalinde PUT da ekle
-                            if self._options_enabled and sig.get("confidence", 0) >= 60:
+                            q_shorted = self.short_executor.execute_short(sym, sig_analysis, config, SHORT_CONFIG)
+                            # Kuyruk SHORT'unda PUT — v4.9: yalnız short gerçekten açıldıysa
+                            if q_shorted and self._options_enabled and sig.get("confidence", 0) >= 60:
                                 try:
                                     opt = self.options_engine.evaluate_option_trade(
                                         sym, sig_analysis,
@@ -755,10 +755,11 @@ class StockBot:
             #    - Eğer pozisyonumuz yoksa → SHORT (yeni kısa pozisyon aç)
             if decision["signal"] == "SELL" and symbol not in self.positions:
                 decision["signal"] = "SHORT"
-            # Teknik analizden gelen native SHORT sinyalini de coordinator'dan geçir
-            if analysis.get("signal") == "SHORT" and decision["signal"] == "HOLD":
-                decision["signal"] = "SHORT"
-                decision["confidence"] = max(decision.get("confidence", 0), analysis.get("confidence", 0))
+            # v4.9: analyzer-SHORT ARKA KAPISI KALDIRILDI. Eski kod, koordinatör
+            # 5/5 HOLD (ws=0) derken bile analyzer'ın tek başına ürettiği SHORT'u
+            # eski-ölçek güveniyle (50-70) decision'a yazıyordu — 06 Tem CRWD/SMCI
+            # PUT churn'ünün fitili buydu (konsensüssüz sinyal → short engel →
+            # PUT bypass). SHORT artık YALNIZ koordinatör mutabakatından doğar.
 
             # Ters ETF & Endeks filtresi
             _inverse_etfs = MARKET_REGIME_CONFIG.get("inverse_etf_symbols", [])
@@ -843,10 +844,12 @@ class StockBot:
                             )
                             return
 
-                    self.executor.execute_buy(symbol, analysis, config)
+                    bought = self.executor.execute_buy(symbol, analysis, config)
 
                     # Opsiyon da ekle (güçlü sinyalde hisse + opsiyon birlikte)
-                    if self._options_enabled and decision["confidence"] >= 65:
+                    # v4.9: yalnız hisse alımı GERÇEKLEŞTİYSE — executor'ın kendi
+                    # blokları (floor/PDT/nakit) opsiyonla atlatılamaz.
+                    if bought and self._options_enabled and decision["confidence"] >= 65:
                         try:
                             opt = self.options_engine.evaluate_option_trade(
                                 symbol, analysis, decision, OPTIONS_CONFIG
@@ -859,19 +862,10 @@ class StockBot:
                             pass
                 else:
                     logger.debug(f"  {symbol} GATE BLOK: {block_reason}")
-
-                    # Gate'den geçemese bile opsiyon dene (daha az risk)
-                    if self._options_enabled and decision["confidence"] >= 55:
-                        try:
-                            opt = self.options_engine.evaluate_option_trade(
-                                symbol, analysis, decision, OPTIONS_CONFIG
-                            )
-                            if opt and opt["type"] == "CALL":
-                                self.options_executor.execute_call(
-                                    opt, analysis, OPTIONS_CONFIG
-                                )
-                        except Exception:
-                            pass
+                    # v4.9: "gate'den geçemese bile opsiyon dene" KALDIRILDI.
+                    # R:R/earnings/rejim kapısının blokladığı işlemi kaldıraçlı
+                    # enstrümanla yine de açmak kapının amacını boşa çıkarır
+                    # (PUT bypass'ının CALL ikiziydi).
 
             # === SHORT — BOT_MODE: 'short_only' veya 'both' ===
             elif (decision["signal"] == "SHORT"
@@ -892,10 +886,14 @@ class StockBot:
                 analysis["reasons"] = [decision.get("reasoning", "SHORT")]
                 if self._market_regime == "BEAR":
                     analysis["reasons"].append("🐻 BEAR_MODE")
-                self.short_executor.execute_short(symbol, analysis, config, SHORT_CONFIG)
+                shorted = self.short_executor.execute_short(symbol, analysis, config, SHORT_CONFIG)
 
-                # SHORT sinyalinde PUT opsiyon da ekle
-                if self._options_enabled and decision["confidence"] >= 55:
+                # SHORT sinyalinde PUT opsiyon da ekle — v4.9: yalnız short
+                # GERÇEKTEN açıldıysa. Eski kod execute_short'un rejim/kara-liste/
+                # squeeze bloklarını görmezden gelip PUT'u yine de alıyordu:
+                # 06 Tem'de "BULL modda short yapılmaz" engeli her turda PUT'a
+                # dönüştü (churn'ün ikinci halkası).
+                if shorted and self._options_enabled and decision["confidence"] >= 55:
                     try:
                         opt = self.options_engine.evaluate_option_trade(
                             symbol, analysis, decision, OPTIONS_CONFIG

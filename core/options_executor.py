@@ -9,7 +9,8 @@ Görevler:
   5. PDT kontrolü + Telegram bildirim
 """
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
@@ -89,6 +90,18 @@ class OptionsExecutor:
             except Exception as e:
                 logger.debug(f"  {underlying} OPT: Açık emir kontrolü başarısız: {e}")
 
+            # 0.5 v4.9: COOLDOWN — kapanış (özellikle stop-out) sonrası aynı
+            # underlying'e hemen geri girme. 06 Tem: stop → 60-90sn sonra aynı
+            # PUT tekrar alındı, 8 turda -$2,170 spread yandı.
+            cooldowns = getattr(self.bot, "_opt_cooldowns", {})
+            cd_until = cooldowns.get(underlying)
+            if cd_until and datetime.now() < cd_until:
+                logger.debug(
+                    f"  {underlying} OPT: cooldown aktif "
+                    f"({cd_until.strftime('%H:%M')} kadar), atlanıyor"
+                )
+                return False
+
             # 1. Max pozisyon kontrolü
             max_positions = config.get("options_max_positions", 5)
             current_options = len(self.bot.options_positions)
@@ -129,61 +142,92 @@ class OptionsExecutor:
                 remaining_budget,
             )
 
-            # Kontrat fiyatı tahmini (close_price veya snapshot)
-            contract_price = self._get_contract_price(option_info)
-            if contract_price is None or contract_price <= 0:
-                logger.debug(f"  {underlying} OPT: Fiyat alınamadı")
+            # === v4.9: CANLI QUOTE + SPREAD/LİKİDİTE KAPISI ===
+            # 06 Tem dersi: bayat close_price ($0.71) ile emir atıp $0.42'ye
+            # dolmak, sonra bid $0.20'ye karşı "-%72 stop" yemek = spread yakma
+            # makinesi. Artık canlı bid/ask şart; genişse (illikit) İŞLEM YOK.
+            snap = None
+            if hasattr(self.bot, "options_analyzer"):
+                snap = self.bot.options_analyzer.get_contract_snapshot(contract_symbol)
+            bid = (snap or {}).get("bid") or 0
+            ask = (snap or {}).get("ask") or 0
+            if bid <= 0 or ask <= 0 or ask < bid:
+                logger.info(
+                    f"  {underlying} OPT: canlı quote yok/bozuk "
+                    f"(bid={bid}, ask={ask}) — işlem YAPILMIYOR"
+                )
                 return False
-
-            # Kaç kontrat alabiliriz? (1 kontrat = 100 hisse)
-            cost_per_contract = contract_price * 100
-            qty = max(1, int(max_usd / cost_per_contract))
-
-            # Bütçe kontrolü
-            total_cost = qty * cost_per_contract
-            if total_cost > max_usd:
-                qty = max(1, int(max_usd / cost_per_contract))
-                total_cost = qty * cost_per_contract
-
-            if total_cost > max_usd * 1.1:  # %10 tolerans
-                logger.debug(
-                    f"  {underlying} OPT: Çok pahalı (${total_cost:.0f} > ${max_usd:.0f})"
+            mid = (bid + ask) / 2.0
+            max_spread = config.get("options_max_spread_pct", 0.10)
+            spread_pct = (ask - bid) / mid if mid > 0 else 1.0
+            if spread_pct > max_spread:
+                logger.info(
+                    f"  {underlying} OPT: spread %{spread_pct*100:.0f} > "
+                    f"limit %{max_spread*100:.0f} (illikit) — işlem YAPILMIYOR"
                 )
                 return False
 
-            # === EMİR GÖNDER ===
+            # Emir fiyatı: en fazla ask öde (marketable limit)
+            limit_price = round(ask, 2)
+            cost_per_contract = limit_price * 100
+            qty = int(max_usd / cost_per_contract)
+            if qty < 1:
+                logger.debug(
+                    f"  {underlying} OPT: bütçe yetmiyor "
+                    f"(${max_usd:.0f} < kontrat ${cost_per_contract:.0f})"
+                )
+                return False
+
+            # === EMİR GÖNDER + FILL BEKLE (v4.9: dolum onayı olmadan kayıt YOK) ===
             try:
                 order_data = LimitOrderRequest(
                     symbol=contract_symbol,
                     qty=qty,
                     side=OrderSide.BUY,
                     time_in_force=TimeInForce.DAY,
-                    limit_price=round(contract_price * 1.02, 2),  # %2 tolerans
+                    limit_price=limit_price,
                 )
-
                 order = self.bot.client.submit_order(order_data=order_data)
 
-                # Pozisyon kaydet
+                filled_qty, fill_price = self._wait_for_fill(order.id)
+
+                if filled_qty <= 0 or not fill_price:
+                    # Dolmadı → emri iptal et, HİÇBİR ŞEY kaydetme.
+                    # (Eski kod dolmamış limit emrini "ALINDI" diye loglayıp
+                    # pozisyon defterine yazıyordu — 07 Tem SMCI vakası.)
+                    try:
+                        self.bot.client.cancel_order_by_id(order.id)
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"  {underlying} {direction} emri DOLMADI "
+                        f"(limit ${limit_price:.2f} × {qty}) — iptal edildi"
+                    )
+                    return False
+
+                total_cost = fill_price * 100 * filled_qty
+
+                # Pozisyon kaydet — GERÇEK dolum fiyatı ve adediyle
                 self.bot.options_positions[contract_symbol] = {
                     "underlying": underlying,
                     "type": direction,
                     "strike": strike,
                     "expiry": expiry,
-                    "qty": qty,
-                    "entry_price": contract_price,
+                    "qty": filled_qty,
+                    "entry_price": fill_price,
                     "cost_basis": total_cost,
                     "entry_time": datetime.now().isoformat(),
                     "order_id": str(order.id) if order else None,
                     "confidence": analysis.get("confidence", 0),
-                    "highest_price": contract_price,
-                    "lowest_price": contract_price,
+                    "highest_price": fill_price,
+                    "lowest_price": fill_price,
                 }
 
                 emoji = "📞" if direction == "CALL" else "📉"
                 logger.info(
-                    f"  {emoji} {underlying} {direction} ALINDI | "
+                    f"  {emoji} {underlying} {direction} ALINDI (dolum onaylı) | "
                     f"Strike: ${strike} | Vade: {expiry} | "
-                    f"Fiyat: ${contract_price:.2f} | Adet: {qty} | "
+                    f"Dolum: ${fill_price:.2f} | Adet: {filled_qty} | "
                     f"Maliyet: ${total_cost:.0f} | "
                     f"Güven: {analysis.get('confidence', 0):.0f}"
                 )
@@ -195,7 +239,7 @@ class OptionsExecutor:
                         f"Hisse: {underlying}\n"
                         f"Kontrat: {contract_symbol}\n"
                         f"Strike: ${strike} | Vade: {expiry}\n"
-                        f"Fiyat: ${contract_price:.2f} × {qty}\n"
+                        f"Dolum: ${fill_price:.2f} × {filled_qty}\n"
                         f"Toplam: ${total_cost:.0f}"
                     )
                 except Exception:
@@ -217,6 +261,47 @@ class OptionsExecutor:
             logger.error(f"  Opsiyon execute hatası: {e}")
             return False
 
+    def _wait_for_fill(self, order_id, tries: int = 6, delay: float = 2.0):
+        """Emrin dolmasını kısa süre bekle (v4.9).
+
+        Returns:
+            (filled_qty, filled_avg_price) — dolmadıysa (0, None)
+        """
+        for _ in range(tries):
+            try:
+                o = self.bot.client.get_order_by_id(order_id)
+                status = getattr(o.status, "value", str(o.status))
+                filled_qty = int(float(o.filled_qty or 0))
+                if status == "filled" and filled_qty > 0:
+                    return filled_qty, float(o.filled_avg_price)
+                if status in ("canceled", "expired", "rejected"):
+                    return filled_qty, (
+                        float(o.filled_avg_price) if filled_qty > 0 else None
+                    )
+            except Exception:
+                pass
+            time.sleep(delay)
+        # Süre doldu — kısmi dolum varsa onu raporla
+        try:
+            o = self.bot.client.get_order_by_id(order_id)
+            filled_qty = int(float(o.filled_qty or 0))
+            if filled_qty > 0:
+                return filled_qty, float(o.filled_avg_price)
+        except Exception:
+            pass
+        return 0, None
+
+    def _set_cooldown(self, underlying: str):
+        """Kapanış sonrası aynı underlying'e yeniden giriş yasağı (v4.9)."""
+        try:
+            from config import OPTIONS_CONFIG
+            hours = OPTIONS_CONFIG.get("options_reentry_cooldown_hours", 4)
+            if not hasattr(self.bot, "_opt_cooldowns"):
+                self.bot._opt_cooldowns = {}
+            self.bot._opt_cooldowns[underlying] = datetime.now() + timedelta(hours=hours)
+        except Exception:
+            pass
+
     def close_option(
         self, contract_symbol: str, reason: str = "MANUAL"
     ) -> bool:
@@ -231,10 +316,11 @@ class OptionsExecutor:
             direction = pos.get("type", "???")
             entry_price = pos.get("entry_price", 0)
 
-            # Alpaca close_position
+            # Alpaca close_position (dönen emri fill-takip için tut)
+            close_order = None
             try:
-                self.bot.client.close_position(contract_symbol)
-            except Exception as e:
+                close_order = self.bot.client.close_position(contract_symbol)
+            except Exception:
                 # Fallback: market sell
                 try:
                     order_data = MarketOrderRequest(
@@ -243,28 +329,43 @@ class OptionsExecutor:
                         side=OrderSide.SELL,
                         time_in_force=TimeInForce.DAY,
                     )
-                    self.bot.client.submit_order(order_data=order_data)
+                    close_order = self.bot.client.submit_order(order_data=order_data)
                 except Exception as e2:
                     logger.error(
                         f"  {underlying} OPT kapatma hatası: {e2}"
                     )
                     return False
 
-            # PnL hesapla (tahmini)
-            current_price = self._get_current_price(contract_symbol)
-            pnl = 0
-            if current_price and entry_price:
-                pnl = (current_price - entry_price) * 100 * qty
+            # v4.9: PnL GERÇEK kapanış dolumundan. Eski kod bozuk snapshot'a
+            # düşüp hep "PnL: $+0.00" yazıyor ve ajan istatistiğine LOSS
+            # kaydediyordu (06 Tem'de 8 sahte kayıt).
+            exit_price = None
+            if close_order is not None:
+                _fq, exit_price = self._wait_for_fill(
+                    close_order.id, tries=4, delay=1.5
+                )
+            if not exit_price:
+                snap_price = self._get_current_price(contract_symbol)
+                exit_price = snap_price if snap_price else None
 
-            emoji = "✅" if pnl >= 0 else "❌"
+            pnl = None
+            if exit_price and entry_price:
+                pnl = (exit_price - entry_price) * 100 * qty
+
+            emoji = "✅" if (pnl or 0) >= 0 else "❌"
+            pnl_str = f"${pnl:+.2f}" if pnl is not None else "bilinmiyor"
+            exit_str = f"${exit_price:.2f}" if exit_price else "?"
             logger.info(
                 f"  {emoji} {underlying} {direction} KAPATILDI | "
-                f"Sebep: {reason} | PnL: ${pnl:+.2f}"
+                f"Sebep: {reason} | Çıkış: {exit_str} | PnL: {pnl_str}"
             )
 
             # Pozisyondan çıkar
             if contract_symbol in self.bot.options_positions:
                 del self.bot.options_positions[contract_symbol]
+
+            # v4.9: churn kilidi — kapanan underlying'e cooldown
+            self._set_cooldown(underlying)
 
             # Telegram bildirim
             try:
@@ -272,17 +373,19 @@ class OptionsExecutor:
                     f"{emoji} {direction} KAPATILDI\n"
                     f"Hisse: {underlying}\n"
                     f"Sebep: {reason}\n"
-                    f"PnL: ${pnl:+.2f}"
+                    f"PnL: {pnl_str}"
                 )
             except Exception:
                 pass
 
-            # Ajan performance feedback
+            # Ajan performance feedback — yalnız PnL GERÇEKTEN biliniyorsa
+            # (None → kayıt yok; 0'ı LOSS saymak istatistiği zehirliyordu)
             try:
-                outcome = "WIN" if pnl > 0 else "LOSS"
-                self.bot.agent_perf.record_outcome(
-                    symbol=underlying, outcome=outcome
-                )
+                if pnl is not None and pnl != 0:
+                    outcome = "WIN" if pnl > 0 else "LOSS"
+                    self.bot.agent_perf.record_outcome(
+                        symbol=underlying, outcome=outcome
+                    )
             except Exception:
                 pass
 
@@ -336,35 +439,43 @@ class OptionsExecutor:
             return False
 
     def _get_contract_price(self, option_info: Dict) -> Optional[float]:
-        """Kontrat fiyatını al."""
-        try:
-            # Önce close_price dene
-            contract = option_info.get("contract")
-            if contract and contract.close_price:
-                return float(contract.close_price)
+        """Kontrat fiyatını al.
 
-            # Snapshot dene
+        v4.9: sıralama düzeltildi — CANLI mid/trade önce, bayat close_price
+        EN SON çare (eski sıralama 06 Tem churn'ünün fiyat halkasıydı).
+        """
+        try:
             if hasattr(self.bot, "options_analyzer"):
                 snap = self.bot.options_analyzer.get_contract_snapshot(
                     option_info["symbol"]
                 )
-                if snap and snap.get("latest_trade_price"):
-                    return snap["latest_trade_price"]
-                if snap and snap.get("ask"):
-                    return snap["ask"]
+                if snap:
+                    bid, ask = snap.get("bid"), snap.get("ask")
+                    if bid and ask and ask >= bid > 0:
+                        return (bid + ask) / 2.0
+                    if snap.get("latest_trade_price"):
+                        return snap["latest_trade_price"]
+
+            contract = option_info.get("contract")
+            if contract and contract.close_price:
+                return float(contract.close_price)
 
             return None
         except Exception:
             return None
 
     def _get_current_price(self, contract_symbol: str) -> Optional[float]:
-        """Kontratın güncel fiyatını al."""
+        """Kontratın güncel fiyatını al (v4.9: mid tercih — tek taraflı bid
+        okumak geniş spread'de sahte '-%70 zarar' üretiyordu)."""
         try:
             if hasattr(self.bot, "options_analyzer"):
                 snap = self.bot.options_analyzer.get_contract_snapshot(
                     contract_symbol
                 )
                 if snap:
+                    bid, ask = snap.get("bid"), snap.get("ask")
+                    if bid and ask and ask >= bid > 0:
+                        return (bid + ask) / 2.0
                     return snap.get("latest_trade_price") or snap.get("bid")
             return None
         except Exception:

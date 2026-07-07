@@ -817,7 +817,8 @@ def test_paper_learning_config():
     saved = _sys.modules.pop("config", None)
     try:
         fresh = importlib.import_module("config")
-        assert fresh.PAPER_AGGRESSIVE_CONFIG["min_confidence_score"] == 45, "Paper min_conf 45 değil!"
+        # v4.9: 45 → 30 (remap'li ölçekte ws≥15; 45 gerçek dağılımda ulaşılamıyordu)
+        assert fresh.PAPER_AGGRESSIVE_CONFIG["min_confidence_score"] == 30, "Paper min_conf 30 değil!"
         assert fresh.PAPER_AGGRESSIVE_CONFIG["min_rr_ratio"] == 1.5, "Paper min_rr 1.5 değil!"
         assert fresh.PAPER_AGGRESSIVE_CONFIG.get("pullback_queue_enabled") is True, "Paper pullback queue kapalı!"
         assert fresh.STOCK_CONFIG.get("pullback_queue_enabled") is False, "Canlıda pullback queue AÇIK kalmış!"
@@ -828,7 +829,7 @@ def test_paper_learning_config():
         _sys.modules.pop("config", None)
         if saved is not None:
             _sys.modules["config"] = saved  # diğer testler kirli-ama-tutarlı objeyi görsün
-    print("     Paper: conf 45 + R:R 1.5 + kuyruk açık | Canlı: conf 50, bant 50-80 ✓")
+    print("     Paper: conf 30 + R:R 1.5 + kuyruk açık | Canlı: conf 50, bant 50-80 ✓")
 test("Paper öğrenme + canlı eşik konfigürasyonu", test_paper_learning_config)
 
 def test_extended_entry_heuristic():
@@ -838,6 +839,275 @@ def test_extended_entry_heuristic():
     assert not StockBot._is_extended_entry({"rsi": 45, "bb_position": "MIDDLE", "vwap_signal": "NEUTRAL"})
     print("     Uzamış giriş: RSI72→kuyruk, BB üstü→kuyruk, temiz→hemen al ✓")
 test("Pullback kuyruğu uzamış-giriş sezgisi", test_extended_entry_heuristic)
+
+
+# ============================================================
+# 15. v4.9 DÜZELTMELERİ (07 Tem denetimi)
+# ============================================================
+section("15. v4.9 DÜZELTMELERİ")
+
+def test_v49_confidence_remap():
+    """v4.9: kaynak-remap ×2.0 — güçlü mutabakat canlı eşiğe (50) ulaşabilmeli,
+    nötr piyasa 0'a yakın kalmalı. 06-07 Tem: remap'siz |ws| max 15'te kaldı,
+    hisse motoru live+paper fiilen kapalıydı."""
+    from core.agent_coordinator import AgentCoordinator
+    coord = AgentCoordinator()
+    # Ezici mutabakat girdileri: Sent/Fund/Social tek başına ws≥40 garantiler
+    # (ajan iç eşiklerinden bağımsız olarak remap-sonrası ≥50 kesinleşir)
+    strong = coord.decide(
+        "STRONG",
+        {"tech_score": 60, "rsi": 26, "macd_signal": "BULLISH", "ichimoku_signal": "BULLISH",
+         "adx": 30, "ema_trend": "BULLISH", "bb_position": "BELOW"},
+        {"fundamental_score": 40, "metrics": {"pe_ratio": 12, "eps": 3.0, "profit_margin": 0.2}},
+        {"news_score": 80, "sentiment_label": "BUY", "fear_greed_value": 25, "fear_greed_signal": "BUY"},
+        {"social_score": 30, "reddit_posts": 40, "x_tweets": 30, "x_sentiment": 0.7},
+        {"daily_pnl_pct": 0.5, "open_positions": 0, "max_positions": 3, "atr_pct": 2.0, "vix": 15},
+    )
+    assert strong["signal"] == "BUY", f"Güçlü mutabakat BUY vermedi: {strong['signal']}"
+    # Remap aritmetiği: conf = |ws| × 2.0 (× 1.2 çoğunlukta), tavan 100
+    expected = abs(strong["weighted_score"]) * 2.0
+    if strong["majority"]:
+        expected *= 1.2
+    expected = min(expected, 100)
+    assert abs(strong["confidence"] - expected) < 0.75, (
+        f"Remap aritmetiği tutmuyor: conf={strong['confidence']} beklenen≈{expected:.1f}"
+    )
+    assert strong["confidence"] >= 50, (
+        f"Güçlü mutabakat canlı eşiğe ulaşamıyor: {strong['confidence']} < 50 "
+        f"(remap çalışmıyor mu?)"
+    )
+    # Nötr piyasa: hepsi HOLD → güven ~0 (remap gürültüyü şişirmemeli)
+    neutral = coord.decide(
+        "NEUTRAL",
+        {"tech_score": 0, "rsi": 50, "macd_signal": "NEUTRAL", "ichimoku_signal": "NEUTRAL", "adx": 12},
+        {"fundamental_score": 0, "metrics": {}},
+        {"news_score": 0, "sentiment_label": "NEUTRAL", "fear_greed_value": 50, "fear_greed_signal": "NEUTRAL"},
+        {"social_score": 0},
+        {"daily_pnl_pct": 0.0, "open_positions": 0, "max_positions": 3, "atr_pct": 2.0, "vix": 15},
+    )
+    assert neutral["confidence"] < 30, (
+        f"Nötr piyasa paper eşiğini (30) geçiyor: {neutral['confidence']}"
+    )
+    print(f"     Remap: güçlü={strong['confidence']:.0f} (ws {strong['weighted_score']:+.1f}) ≥50 | "
+          f"nötr={neutral['confidence']:.0f} <30 ✓")
+test("v4.9 güven remap (×2.0 kaynak ölçeği)", test_v49_confidence_remap)
+
+def test_v49_options_disabled():
+    """v4.9: opsiyon modülü kapalı (churn); cooldown anahtarı tanımlı."""
+    import importlib, sys as _sys
+    saved = _sys.modules.pop("config", None)
+    try:
+        fresh = importlib.import_module("config")
+        assert fresh.OPTIONS_CONFIG["options_enabled"] is False, "Opsiyonlar hâlâ AÇIK!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG.get("prefer_options_over_stock") is False, \
+            "prefer_options_over_stock hâlâ açık!"
+        assert fresh.OPTIONS_CONFIG.get("options_reentry_cooldown_hours", 0) >= 1, \
+            "Opsiyon cooldown anahtarı yok!"
+    finally:
+        _sys.modules.pop("config", None)
+        if saved is not None:
+            _sys.modules["config"] = saved
+    print("     Opsiyonlar kapalı + reentry cooldown tanımlı ✓")
+test("v4.9 opsiyon modülü kapalı", test_v49_options_disabled)
+
+def test_v49_short_backdoor_removed():
+    """v4.9: analyzer-SHORT arka kapısı kalktı; opsiyon dalları executor
+    sonucuna bağlı; gate-bloklu CALL fallback'i yok."""
+    src_path = os.path.join(PROJECT_ROOT, "stock_bot.py")
+    with open(src_path, encoding="utf-8") as f:
+        src = f.read()
+    assert 'analysis.get("signal") == "SHORT" and decision["signal"] == "HOLD"' not in src, \
+        "Analyzer-SHORT arka kapısı hâlâ kodda!"
+    assert "shorted = self.short_executor.execute_short(" in src, \
+        "SHORT sonucu yakalanmıyor (PUT gating için gerekli)"
+    assert "if shorted and self._options_enabled" in src, \
+        "PUT dalı short sonucuna bağlı değil!"
+    assert "bought = self.executor.execute_buy(" in src, \
+        "BUY sonucu yakalanmıyor (CALL gating için gerekli)"
+    assert "if bought and self._options_enabled" in src, \
+        "CALL dalı buy sonucuna bağlı değil!"
+    assert "Gate'den geçemese bile opsiyon dene" not in src, \
+        "Gate-bloklu CALL fallback hâlâ kodda!"
+    print("     Arka kapı yok + PUT/CALL executor-sonucuna kilitli ✓")
+test("v4.9 SHORT arka kapısı + opsiyon bypass'ları kalktı", test_v49_short_backdoor_removed)
+
+def test_v49_parking_sell_safe():
+    """v4.9: parking satışı close_position ile (short imkânsız) + negatif
+    pozisyon self-heal. 07 Tem: notional SELL hayalet veriyle 5.3 SPY short açtı."""
+    from core.index_parking import IndexParkingManager
+
+    calls = {"close": [], "orders": []}
+
+    class _Pos:
+        pass
+
+    class FakeClient:
+        def __init__(self):
+            self.pos_qty = 10.0
+        def get_open_position(self, sym):
+            if self.pos_qty is None:
+                raise RuntimeError("position does not exist")
+            p = _Pos()
+            p.qty = self.pos_qty
+            p.current_price = 100.0
+            p.market_value = self.pos_qty * 100.0
+            return p
+        def close_position(self, sym, close_options=None):
+            calls["close"].append((sym, getattr(close_options, "qty", None)))
+        def submit_order(self, req=None, order_data=None):
+            calls["orders"].append(req or order_data)
+        def get_orders(self, req=None):
+            return []
+
+    class FakeBot:
+        pass
+
+    bot = FakeBot()
+    bot.client = FakeClient()
+    mgr = IndexParkingManager(bot, {"index_parking_enabled": True})
+    assert mgr.enabled, "Test ortamında parking aktif olmalı (TRADING_MODE=paper)"
+
+    # Kısmi satış → qty-sınırlı close_position ($500 / $100 = 5 pay)
+    mgr._sell(500.0)
+    assert calls["close"], "close_position çağrılmadı"
+    assert calls["close"][-1][1] == "5.0", f"qty-sınırlı değil: {calls['close'][-1]}"
+    assert not calls["orders"], "Parking sell submit_order kullanmamalı (short riski)!"
+
+    # Tam satış (notional ≥ pozisyon) → qty'siz tam kapama
+    mgr._sell(1500.0)
+    assert calls["close"][-1][1] is None, "Tam kapama qty'siz olmalı"
+
+    # Pozisyon yokken satış → HİÇBİR emir yok
+    n = len(calls["close"])
+    bot.client.pos_qty = None
+    mgr._sell(500.0)
+    assert len(calls["close"]) == n and not calls["orders"], "Pozisyonsuz satış emir üretti!"
+
+    # Self-heal: negatif pozisyon → derhal buy-to-close
+    bot.client.pos_qty = -5.0
+    mgr.maybe_rebalance()
+    assert len(calls["close"]) == n + 1, "Negatif pozisyon self-heal çalışmadı!"
+    print("     Kısmi=qty-sınırlı, tam=tümü, pozisyonsuz=emir yok, negatif=self-heal ✓")
+test("v4.9 parking short-imkânsız satış + self-heal", test_v49_parking_sell_safe)
+
+def test_v49_health_weekend_hours():
+    """v4.9: sağlık alarmı hafta sonu saatlerini saymaz (Pzt yalancı 🔴 fix)."""
+    from health_check import trading_hours_between
+    from datetime import datetime as _dt
+    # Cuma 20:00 → Pazartesi 13:30 (duvar 65.5h) = Cum 4h + Pzt 13.5h = 17.5h
+    got = trading_hours_between(_dt(2026, 6, 26, 20, 0), _dt(2026, 6, 29, 13, 30))
+    assert abs(got - 17.5) < 0.01, f"Hafta sonu düşümü yanlış: {got}"
+    # Aynı gün (hafta içi) → birebir
+    got2 = trading_hours_between(_dt(2026, 6, 29, 9, 0), _dt(2026, 6, 29, 15, 0))
+    assert abs(got2 - 6.0) < 0.01, f"Hafta içi hesap bozuk: {got2}"
+    # Ters aralık → 0
+    assert trading_hours_between(_dt(2026, 6, 29), _dt(2026, 6, 26)) == 0.0
+    print(f"     Cum 20:00→Pzt 13:30 = {got:.1f}h (65.5h duvar) ✓")
+test("v4.9 health hafta-sonu saati düşümü", test_v49_health_weekend_hours)
+
+def test_v49_option_fill_accounting():
+    """v4.9: opsiyon girişi yalnız DOLUM onayıyla ve gerçek fiyatla kaydedilir;
+    dolmayan emir iptal edilir, deftere yazılmaz (07 Tem 'ALINDI' yalanı fix)."""
+    import core.options_executor as oe
+
+    _orig_sleep = oe.time.sleep
+    oe.time.sleep = lambda s: None  # testte bekleme yok
+    try:
+        class FakeStatus:
+            def __init__(self, v):
+                self.value = v
+
+        class FakeClient:
+            def __init__(self, fills):
+                self.fills = fills
+                self.canceled = []
+            def get_orders(self, req=None):
+                return []
+            def submit_order(self, order_data=None):
+                o = _O()
+                o.id = "oid-1"
+                return o
+            def get_order_by_id(self, oid):
+                o = _O()
+                if self.fills:
+                    o.status = FakeStatus("filled")
+                    o.filled_qty = "3"
+                    o.filled_avg_price = "0.42"
+                else:
+                    o.status = FakeStatus("new")
+                    o.filled_qty = "0"
+                    o.filled_avg_price = None
+                return o
+            def cancel_order_by_id(self, oid):
+                self.canceled.append(oid)
+
+        class _O:
+            pass
+
+        class FakeAnalyzer:
+            def get_contract_snapshot(self, sym):
+                return {"bid": 0.40, "ask": 0.44, "latest_trade_price": 0.42}
+
+        def make_bot(fills):
+            b = _O()
+            b.client = FakeClient(fills)
+            b.options_analyzer = FakeAnalyzer()
+            b.options_positions = {}
+            b.equity = 10000.0
+            b.notifier = _O()
+            b.notifier.send_message = lambda *a, **k: None
+            b.agent_perf = _O()
+            b.agent_perf.record_outcome = lambda **k: None
+            b._save_position_metadata = lambda: None
+            return b
+
+        cfg = {"options_max_position_usd": 500, "options_max_spread_pct": 0.10,
+               "options_max_positions": 5, "options_max_per_symbol": 2,
+               "options_max_exposure_pct": 0.20}
+        info = {"symbol": "TSTX260717P00100000", "underlying": "TSTX",
+                "strike": 100.0, "expiry": "2026-07-17"}
+
+        # DOLAN emir → gerçek dolum fiyatı/adediyle kayıt
+        bot = make_bot(fills=True)
+        ex = oe.OptionsExecutor(bot)
+        ok = ex._execute_option("PUT", info, {"confidence": 60}, cfg)
+        assert ok, "Dolan emir False döndü"
+        pos = bot.options_positions[info["symbol"]]
+        assert abs(pos["entry_price"] - 0.42) < 1e-9, f"Entry gerçek dolum değil: {pos['entry_price']}"
+        assert pos["qty"] == 3, f"Adet gerçek dolum değil: {pos['qty']}"
+
+        # DOLMAYAN emir → kayıt yok + iptal edildi
+        bot2 = make_bot(fills=False)
+        ex2 = oe.OptionsExecutor(bot2)
+        ok2 = ex2._execute_option("PUT", info, {"confidence": 60}, cfg)
+        assert not ok2, "Dolmayan emir True döndü!"
+        assert bot2.options_positions == {}, "Dolmayan emir deftere yazıldı ('ALINDI' yalanı)!"
+        assert bot2.client.canceled, "Dolmayan emir iptal edilmedi!"
+
+        # İllikit kontrat (spread %50) → işlem YOK
+        bot3 = make_bot(fills=True)
+        bot3.options_analyzer.get_contract_snapshot = (
+            lambda sym: {"bid": 0.20, "ask": 0.60, "latest_trade_price": 0.40}
+        )
+        ex3 = oe.OptionsExecutor(bot3)
+        ok3 = ex3._execute_option("PUT", info, {"confidence": 60}, cfg)
+        assert not ok3 and bot3.options_positions == {}, "Geniş spread kapısı çalışmıyor!"
+        print("     Dolum=gerçek fiyat, dolmayan=iptal+kayıtsız, illikit=red ✓")
+    finally:
+        oe.time.sleep = _orig_sleep
+test("v4.9 opsiyon fill-onaylı muhasebe + spread kapısı", test_v49_option_fill_accounting)
+
+def test_v49_snapshot_request_object():
+    """v4.9: opsiyon snapshot çağrısı Request objesiyle (str-bug fix)."""
+    src_path = os.path.join(PROJECT_ROOT, "core", "options_analyzer.py")
+    with open(src_path, encoding="utf-8") as f:
+        src = f.read()
+    assert "OptionSnapshotRequest(symbol_or_symbols=" in src, \
+        "Snapshot Request objesi kullanılmıyor!"
+    assert "get_option_snapshot(contract_symbol)" not in src, \
+        "Düz-str snapshot çağrısı hâlâ kodda ('to_request_fields' bug'ı)!"
+    print("     OptionSnapshotRequest objesiyle çağrı ✓")
+test("v4.9 opsiyon snapshot str-bug fix", test_v49_snapshot_request_object)
 
 
 # ============================================================

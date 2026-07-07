@@ -322,11 +322,14 @@ STOCK_CONFIG = {
     # belirler: normal sinyal $100-200, çok güvenilir $300. Kelly/damping BYPASS;
     # tavanlar: fixed_position_max_pct × equity + live_max_position_usd + eldeki nakit.
     # Format: [min_güven, $boyut] — güveni karşılayan EN YÜKSEK bant seçilir.
-    # v4.8 YENİDEN HARİTALAMA: koordinatör güveni artık YÖN-FARKINDA (karşı oy
-    # düşürür, HOLD dolgusu kalktı) → temiz-mutabakat sinyalinde yeni değer eskinin
-    # ~0.83'ü (Monte Carlo: eski-60 ≈ yeni-50, eski-90 ≈ yeni-75). Bantlar aynı
-    # seçiciliği korumak için kaydırıldı; çelişkili sinyaller (eski formülde 77
-    # "güven" alabiliyordu!) yeni ölçekte 10-30'a düşer ve hiçbir banda giremez.
+    # v4.8 yön-farkında güven + v4.9 KAYNAK-REMAP: v4.8'in Monte Carlo tahmini
+    # (yeni≈eski×0.83) gerçek oy dağılımında TUTMADI — 06-07 Tem canlı veride
+    # ham |ws| max 15'e sıkıştı (NVDA 3'lü BUY ~32), 50 eşiği hiç ulaşılamadı =
+    # canlı hisse motoru fiilen kapalıydı. v4.9: koordinatör güveni kaynağında
+    # ×2.0 ölçeklenir (agent_coordinator.decide) → bu bantlar yeniden anlamlı:
+    # NVDA-tipi güçlü mutabakat (ws~33 + çoğunluk) ≈ 79 → $150-200; zayıf 2'li
+    # oylar (ws 10-15) ≈ 20-30 → hiçbir banda giremez. Çelişkili sinyaller yön-
+    # farkında formülde zaten ölür (2v2 → ws≈0).
     "live_conf_position_bands": [
         [50, 100],                          # eşiği yeni geçen sinyal → $100
         [60, 150],
@@ -369,9 +372,9 @@ STOCK_CONFIG = {
     "partial_profit_pct": 0.05,             # %5'de yarısını sat
 
     # === SINYAL EŞİKLERİ ===
-    # v4.8: 60 → 50. Sayı KÜÇÜLDÜ ama bar DÜŞMEDİ: yön-farkında güven ölçeğinde
-    # temiz-mutabakat sinyali için yeni-50 ≈ eski-60 (Monte Carlo kalibrasyonu).
-    # Eski formülde 60'ı geçebilen çelişkili sinyaller yeni ölçekte 10-30 alır → ölür.
+    # v4.8: 60 → 50. v4.9: 50 KALDI ama artık remap'li ölçekte okunur
+    # (conf = |ws|×çarpanlar×2.0): 50 ≈ ham ws 25 = net, çok-ajanlı mutabakat.
+    # Remap'siz dönemde (06-07 Tem) bu eşiğe hiçbir sinyal ulaşamamıştı.
     "min_confidence_score": 50,
     "rsi_oversold": 30,
     "rsi_overbought": 70,
@@ -579,7 +582,14 @@ DATA_CONFIG = {
 # ============================================================
 OPTIONS_CONFIG = {
     # === ANA KONTROL ===
-    "options_enabled": True,
+    # v4.9: KAPATILDI. 06 Tem'de CRWD PUT churn'ü 50 dakikada -$2,170 yaktı:
+    # bozuk snapshot (str-request bug'ı) yüzünden bayat close_price ($0.71) entry
+    # sanılıyor, gerçek dolum $0.42, stop bid $0.20'ye karşı anında -%72 → sat →
+    # cooldown yok → 60-90sn sonra tekrar al (×8 tur). Yeniden açma şartları:
+    # (1) snapshot fix doğrulanmış (v4.9'da yapıldı), (2) fill-onaylı muhasebe
+    # (v4.9'da yapıldı), (3) spread/likidite kapısı canlı veriyle test edilmiş,
+    # (4) paper'da en az 1 hafta churn'süz gözlem. Açmadan önce PLAN.md v4.9'a bak.
+    "options_enabled": False,
     "options_paper_only": True,              # Sadece paper'da aktif
 
     # === POZİSYON LİMİTLERİ ===
@@ -599,6 +609,8 @@ OPTIONS_CONFIG = {
     "options_max_spread_pct": 0.10,          # Max %10 bid-ask spread
 
     # === RİSK YÖNETİMİ ===
+    # v4.9: stop-out sonrası aynı underlying'e tekrar giriş yasağı (churn kilidi)
+    "options_reentry_cooldown_hours": 4,
     "options_stop_loss_pct": 0.40,           # %40 zarar → kapat
     "options_take_profit_pct": 0.80,         # %80 kar → kapat
     "options_partial_profit_pct": 0.50,      # %50 karda yarısını sat
@@ -633,10 +645,14 @@ PAPER_AGGRESSIVE_CONFIG = {
     # === HİSSE AYARLARI (override) ===
     "max_position_usd": 5000,                # $200 → $5000
     "max_open_positions": 8,                  # 3 → 8
-    # v4.8: 60 → 45 (yön-farkında yeni güven ölçeğinde). Paper'ın işi ÖĞRENME
-    # VERİSİ üretmek (meta_labeler WIRE kapısı 30-50 kapalı işlem bekliyor; eski
-    # ayarla 2 Tem'de 0 işlem çıktı). Canlı eşiği 50'de (≈eski-60 seçiciliği).
-    "min_confidence_score": 45,
+    # v4.9: 45 → 30. v4.8'in Monte Carlo kalibrasyonu GERÇEK oy dağılımını
+    # tutturamadı: 06-07 Tem canlı veride koordinatör güveni (|ws|) max 15'te
+    # kaldı, NVDA'nın 3'lü BUY mutabakatı bile ~32'ydi → 45 HİÇ ulaşılamıyordu
+    # (2 günde 0 paper işlem). v4.9 remap (conf=|ws|×2.0 çarpanlar sonrası) ile
+    # ölçek 0-100'e açıldı; 30 eşiği ≈ ws 15 = "koordinatörün kendi sinyal
+    # tabanı" (ws>15 → BUY/SELL). Paper'ın işi ÖĞRENME VERİSİ üretmek
+    # (meta_labeler WIRE kapısı 30-50 kapalı işlem bekliyor).
+    "min_confidence_score": 30,
     "scan_interval_seconds": 15,              # 30 → 15 (daha sık tara)
     "stop_loss_pct": 0.05,                    # %4 → %5 (biraz daha geniş)
     "take_profit_pct": 0.06,                  # %8 → %6 (daha hızlı kar al)
@@ -654,8 +670,9 @@ PAPER_AGGRESSIVE_CONFIG = {
     "short_min_confidence": 35,               # 40 → 35
 
     # === OPTIONS ===
-    "enable_options": True,
-    "prefer_options_over_stock": True,         # Güçlü sinyalde opsiyon tercih et
+    # v4.9: churn nedeniyle kapalı (OPTIONS_CONFIG.options_enabled yorumuna bak)
+    "enable_options": False,
+    "prefer_options_over_stock": False,
 
     # === INDEX PARKING (paper'da AÇIK — nakit sürüklemesini azalt, beta yakala) ===
     "index_parking_enabled": True,

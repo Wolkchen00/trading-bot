@@ -20,6 +20,29 @@ from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 
 
+def trading_hours_between(start: datetime, end: datetime) -> float:
+    """İki an arasındaki saatlerden Cts/Paz'a düşenleri çıkarır (v4.9).
+
+    Alarm "X saattir işlem yok" duvar-saatiyle sayınca her Pzt raporu
+    hafta sonunu da sayıp yalancı 🔴 üretiyordu (05 Tem: "73.7h işlem yok").
+    Tatiller sayılmaya devam eder (nadir; kabul edilen yaklaşıklık).
+    """
+    if end <= start:
+        return 0.0
+    total = 0.0
+    cur = start
+    while cur < end:
+        # İçinde bulunulan günün sonu (ertesi gün 00:00)
+        day_end = (cur + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        seg_end = min(day_end, end)
+        if cur.weekday() < 5:  # Pzt-Cum
+            total += (seg_end - cur).total_seconds() / 3600.0
+        cur = seg_end
+    return total
+
+
 def check_health(alert_hours: float = 12.0):
     """Bot saglik kontrolu yapar."""
     # v4.8.2: anahtarlari config'den al — konteynerlerde anahtarlar prefix'li
@@ -91,11 +114,17 @@ def check_health(alert_hours: float = 12.0):
             val = qty * price
             p(f"  {ts} {side:4s} {sym:12s} ${val:>8.2f}")
 
-        # Son islem ne zaman?
+        # Son islem ne zaman? (v4.9: hafta sonu saatleri sayılmaz)
         if filled:
             last_ts = max(o.filled_at or o.created_at for o in filled)
-            hours_since_last = (datetime.now(last_ts.tzinfo) - last_ts).total_seconds() / 3600
-            p(f"\n  Son islem: {hours_since_last:.1f} saat once")
+            now = datetime.now(last_ts.tzinfo)
+            wall_hours = (now - last_ts).total_seconds() / 3600
+            hours_since_last = trading_hours_between(last_ts, now)
+            if wall_hours - hours_since_last > 1:
+                p(f"\n  Son islem: {hours_since_last:.1f} islem-günü saati once "
+                  f"(duvar saati: {wall_hours:.1f}h, hafta sonu düşüldü)")
+            else:
+                p(f"\n  Son islem: {hours_since_last:.1f} saat once")
             bot_alive = hours_since_last < alert_hours
         else:
             p(f"\n  SON 7 GUNDE HICBIR ISLEM YOK!")

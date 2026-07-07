@@ -82,6 +82,76 @@ için sistematik engellerin kaldırılması. Testler 82/84 (2 bilinen lokal uyar
    haftalar içinde dolar); PF 0.96 başabaş = sanal parayla ucuz öğrenme bedeli.
    CANLI eşiği gevşetilmedi (kalibre edilmiş 50 = eski 60 seçiciliği).
 
+## v4.9 — 24-saat denetimi düzeltmeleri (2026-07-07, İhsan onayı: "hepsini onaylıyorum")
+06-07 Tem canlı loglar + Alpaca defteri + kod denetiminin bulguları. Testler 91
+(84+7 yeni), 89 geçti / 0 fail / 2 bilinen lokal uyarı.
+
+**Denetim bulguları (bağlam):**
+- ✅ LIVE kusursuzdu: PARK BUY SPY $288.03 Pzt açılışta plana birebir; stoplar
+  günlük yenileniyor; 45 saat sıfır hata. Ama yeni hisse girişi de SIFIRDI → sebep
+  aşağıdaki kalibrasyon hatası (canlı fiilen parking-only çalışıyordu).
+- 🔴 KALİBRASYON: v4.8 Monte Carlo tahmini (yeni≈eski×0.83) gerçek oy dağılımında
+  tutmadı — 2 günde koordinatör ham |ws| max 15 (NVDA 3'lü BUY ~32), eşikler
+  paper 45 / live 50 HİÇ ulaşılamadı. Backtest coordinator yolunu kullanmadığı
+  için A/B'de görünmedi (bilinen sınırlama, aşağıda).
+- 🔴 PAPER opsiyon churn (Pzt 50 dk, -$2,170): koordinatör 5/5 HOLD iken
+  analyzer-SHORT arka kapısı sinyali eski-ölçek güvenle (60) geçiriyor → BULL
+  rejim short'u engelliyor AMA PUT dalı kilidin dışında → snapshot str-bug'ı
+  (('str' object has no attribute 'to_request_fields') yüzünden fiyatlar bayat
+  close_price ($0.71; gerçek dolum $0.42) → stop tek taraflı bid'e ($0.20) bakıp
+  anında "-%72" → sat → cooldown yok → 60-90 sn sonra tekrar al ×8.
+  Kapanış PnL'i hep $+0.00 loglandı, ajan istatistiğine 8 sahte LOSS yazıldı;
+  07 Tem'de dolmamış SMCI limit emri "ALINDI $920" diye loglandı.
+- ⚠️ ALPACA-TARAFI OLAY (bot suçu değil): 06→07 Tem gecesi $45,269 SPY sleeve +
+  18 SMCI PUT hesaptan DEFTERDE SIFIR KAYITLA silindi (fill/journal/corp-action
+  yok; equity 62,116→14,638). 01-02 Tem'de equity'nin hiç kıpırdamadan
+  64,247.28'de durması sleeve'in zaten hayalet olduğunu gösteriyor (Alpaca gece
+  "gerçeğe çekti"). Sabah get_account hâlâ hayalet $64k dönerken parking $3,973
+  notional SELL attı → gerçek pozisyon 0 → hesap 5.3 SPY SHORT'a düştü; kill
+  switch 14:12'de Alpaca'nın raporladığı -%77'ye DOĞRU tepki verip kapattı.
+  Paper gerçek bakiyesi $14,645 (<$25k → artık PDT'ye tabi).
+
+**Yapılan düzeltmeler:**
+1. **Güven KAYNAK-REMAP (×2.0)** — coordinator: conf = |ws|×2.0 (×1.2 çoğunluk,
+   ×0.5 veto, tavan 100). Güçlü mutabakat (ws 25-35+çoğunluk) → 60-84 bandı,
+   zayıf 2'li oylar → 20-30'da ölür. Live 50 + bantlar 50/60/70/80 AYNEN korunur
+   (İhsan'ın onayladığı seçicilik anlamını geri kazandı; ×2.5 değil ×2.0 seçildi
+   çünkü ×2.5 NVDA-tipi sinyali 97'ye taşıyıp $300 bandını fazla kolaylaştırırdı).
+   Paper min_conf 45→**30** (= ham ws 15, koordinatörün kendi BUY/SELL tabanı) →
+   öğrenme akışı gerçekçi. Coordinator loguna ham `ws:` eklendi → 1 hafta gerçek
+   dağılım toplanıp eşikler yüzdelik bazlı ince-ayarlanacak.
+2. **Analyzer-SHORT arka kapısı KALDIRILDI** (stock_bot) — SHORT yalnız
+   koordinatör SELL mutabakatından türer; analyzer'ın tekil SHORT'u artık
+   decision'ı ezemez.
+3. **Opsiyon dalları executor-sonucuna kilitlendi** — PUT yalnız `execute_short`
+   True dönerse (rejim/kara-liste/squeeze bloklarını bypass edemez), CALL yalnız
+   `execute_buy` True dönerse; "gate'den geçemese bile opsiyon dene" fallback'i
+   silindi. SignalQueue yolları dahil.
+4. **OPSİYON MODÜLÜ KAPALI** (`options_enabled: False`) — yeniden açma şartları:
+   snapshot fix doğrulama + fill-onaylı muhasebe + spread kapısı canlı testi +
+   1 hafta churn'süz paper gözlemi.
+5. **Opsiyon altyapısı düzeltildi (kapalı dursa da doğru):** snapshot çağrısı
+   `OptionSnapshotRequest` objesiyle (str-bug fix); girişte CANLI bid/ask şart +
+   spread >%10 = işlem yok; emir sonrası fill POLL edilir — dolmazsa iptal + kayıt
+   YOK, dolarsa GERÇEK dolum fiyatı/adediyle defter; kapanış PnL'i kapanış emrinin
+   gerçek dolumundan (bilinmiyorsa ajan istatistiğine kayıt atılmaz); underlying
+   başına 4 saat re-entry cooldown; stop değerlemesi bid yerine MID.
+6. **Parking short-imkânsız** — `_sell` artık `close_position` endpoint'i
+   (DELETE /v2/positions: mevcut pozisyonu küçültebilir, short AÇAMAZ) + qty
+   eldekiyle sınırlı; `maybe_rebalance` başında negatif-pozisyon self-heal
+   (bekleyen emir kontrolüyle, emir yığmadan derhal buy-to-close).
+7. **Health alarmı hafta sonu bilinci** — "X saattir işlem yok" artık Cts/Paz
+   saatlerini saymaz (05 Tem "73.7h işlem yok 🔴" yalancı alarmı fix).
+
+**Bilinen sınırlama (v4.9'da bilinçli dokunulmadı):** backtest.py sinyal yolu
+koordinatörü değil analyzer'ı kullanır → koordinatör-eşik değişikliklerini
+backtest DOĞRULAYAMAZ (haber/sosyal verisi tarihsel yok). Kalibrasyon artık
+canlı `ws:` loglarından yapılır; backtest yalnız çıkış/gate mantığı için geçerli.
+
+**Operasyonel:** paper kill dosyası + hayalet günlük baseline deploy sonrası
+temizlendi; Alpaca paper hesabının dashboard'dan resetlenmesi İhsan'da (bakiye
+$14.6k + PDT kısıtı öğrenme için dar).
+
 ## FAZ 1 — v4.7 canlıda (deploy sonrası ilk hafta)
 - İlk alımların güven bandına uyduğunu doğrula (log: `PositionSizer [LONG-KADEMELI]: $... | GÜVEN x → $y`).
 - Beklenen davranış değişimi: min_confidence 30→60 → **daha az ama daha büyük ve seçici işlem**

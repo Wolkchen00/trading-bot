@@ -221,8 +221,15 @@ class OptionsAnalyzer:
             return None
 
         try:
-            # Snapshot API (delta, gamma, theta, vega)
-            snapshot = self.data_client.get_option_snapshot(contract_symbol)
+            # Snapshot API (delta, gamma, theta, vega).
+            # v4.9 FIX: alpaca-py Request OBJESİ bekler; düz str geçilince
+            # "'str' object has no attribute 'to_request_fields'" ile HER çağrı
+            # sessizce ölüyordu → fiyatlar bayat close_price'a düşüyordu (06 Tem
+            # churn'ünün kök halkası; v4.7.1'deki get_stock_snapshot fix'inin ikizi).
+            # Dönüş Dict[str, OptionsSnapshot] — sembol anahtarıyla çekilir.
+            req = OptionSnapshotRequest(symbol_or_symbols=contract_symbol)
+            snaps = self.data_client.get_option_snapshot(req)
+            snapshot = snaps.get(contract_symbol) if isinstance(snaps, dict) else snaps
             if snapshot:
                 return {
                     "symbol": contract_symbol,

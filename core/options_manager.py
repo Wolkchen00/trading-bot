@@ -145,13 +145,21 @@ class OptionsPositionManager:
         return None
 
     def _get_current_price(self, contract_symbol: str):
-        """Kontratın güncel fiyatını al."""
+        """Kontratın güncel fiyatını al.
+
+        v4.9: MID tercih edilir. Stop-loss bu fiyata bakar; tek taraflı bid
+        okumak geniş-spread kontratlarda alımdan saniyeler sonra sahte
+        "-%70 zarar" üretip anında stop tetikliyordu (06 Tem churn'ü).
+        """
         try:
             if hasattr(self.bot, "options_analyzer"):
                 snap = self.bot.options_analyzer.get_contract_snapshot(
                     contract_symbol
                 )
                 if snap:
+                    bid, ask = snap.get("bid"), snap.get("ask")
+                    if bid and ask and ask >= bid > 0:
+                        return (bid + ask) / 2.0
                     price = snap.get("latest_trade_price") or snap.get("bid")
                     return price
 

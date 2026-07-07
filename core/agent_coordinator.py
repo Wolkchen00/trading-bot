@@ -460,9 +460,17 @@ class AgentCoordinator:
         # karşı yönde oy veren ajanın güveni bile nihai BUY güvenine EKLENIYORDU
         # (pozisyon boyutu bantları bu sayıya bağlı → çelişkili sinyalde büyük
         # pozisyon riski). |weighted_score| tam istenen ölçü: aynı yön güven katar,
-        # karşı yön düşer, HOLD sulandırır (katkı 0). Tam mutabakat sinyallerinde
-        # eski ve yeni değer hemen hemen aynıdır — 60/70/80/90 bantları anlamını korur.
-        confidence = abs(weighted_score)
+        # karşı yön düşer, HOLD sulandırır (katkı 0).
+        #
+        # v4.9 KAYNAK-REMAP (×2.0): "tam mutabakatta eski≈yeni" varsayımı gerçek
+        # veride ÇÖKTÜ — ajan güvenleri pratikte 20-40 bandında ve ağırlıklar ≤0.25
+        # olduğundan ham |ws| 0-35'e sıkışıyor (06-07 Tem: gözlenen max 15, NVDA
+        # Tech26+Fund30+Sent100 üçlü BUY'ı bile ws≈32). Eşikler (paper 30 / live 50
+        # / bantlar 50-80) 0-100 ölçeği varsayar → ×2.0 ile ölçek açılır:
+        # zayıf 2'li oy (ws 10-15) → 20-30, güçlü mutabakat (ws 25-35 + çoğunluk
+        # ×1.2) → 60-84, teorik tavan yine 100'de kapanır. Ham ws ayrıca loglanır
+        # ve result'ta durur — ileride dağılıma göre ince ayar buradan yapılır.
+        confidence = abs(weighted_score) * 2.0
         if majority:
             confidence *= 1.2  # Çoğunluk = daha güvenli
         if risk_veto:
@@ -505,7 +513,7 @@ class AgentCoordinator:
         # Log
         logger.info(
             f"  Coordinator {symbol}: {final_signal} "
-            f"(guven:{confidence:.0f}%) "
+            f"(guven:{confidence:.0f}% ws:{weighted_score:+.1f}) "
             f"[{vote_summary}] "
             f"{'COGUNLUK' if majority else 'tekil'} "
             f"{'⚠️VETO' if risk_veto else ''}"

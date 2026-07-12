@@ -1437,6 +1437,55 @@ def test_v411_parking_directive_and_scan_exclusion():
     print("     Direktifler + tarama dışlaması + genişlik oranı ✓")
 test("v4.11 parking direktifi + tarama dışlaması", test_v411_parking_directive_and_scan_exclusion)
 
+def test_v4111_vix_cache_override():
+    """v4.11.1: VIX makro-cache'ten ayrıştı — 6h TTL seans boyunca tek okuma
+    demekti, bear skorunun vix bileşeni (25p) gün-içi çöküşe kör kalıyordu.
+    Anahtar-bazlı override: vix ≤ 1h, diğer makro anahtarlar 6h kalır."""
+    from datetime import datetime as _dt, timedelta as _td
+    from core.macro_data import MACRO_CONFIG, MacroDataAnalyzer
+    overrides = MACRO_CONFIG.get("cache_hours_overrides", {})
+    assert "vix" in overrides, "vix TTL override tanımlı değil!"
+    assert overrides["vix"] <= 1.0, f"vix TTL 1 saati aşıyor: {overrides['vix']}h"
+    assert MACRO_CONFIG["cache_hours"] >= 6, "Genel makro TTL değişmemeli (6h)!"
+
+    ma = MacroDataAnalyzer.__new__(MacroDataAnalyzer)  # __init__ ağ kurmasın
+    ma.cache = {"vix": {"vix": 20.0}, "oil": {"score": 0}}
+    forty_min_ago = _dt.now() - _td(minutes=40)
+    ma.last_fetch = {"vix": forty_min_ago, "oil": forty_min_ago}
+    assert not ma._is_cached("vix"), "40dk'lık VIX hâlâ cache'li (override çalışmıyor)!"
+    assert ma._is_cached("oil"), "40dk'lık oil cache'ten düşmüş (genel TTL bozuldu)!"
+    assert not ma._is_cached("hic_yok"), "Olmayan anahtar cache'li sayıldı!"
+    print(f"     VIX TTL {overrides['vix']}h (taze), diğer makro {MACRO_CONFIG['cache_hours']}h ✓")
+test("v4.11.1 VIX cache TTL override", test_v4111_vix_cache_override)
+
+def test_v4111_bear_cycle_error_visibility():
+    """v4.11.1: run_cycle hataları artık görünür — 30dk'da bir WARNING (arası
+    debug), hata döngüyü ASLA kırmaz (v4.10 dersi: debug'a gömülü arıza =
+    günlerce sessiz ölü sistem)."""
+    from datetime import datetime as _dt, timedelta as _td
+    bb = _make_bear_brain()
+    bb.enabled = True
+
+    def _boom():
+        raise RuntimeError("test patlaması")
+    bb._manage_exits = _boom
+    bb._maybe_enter = lambda cfg: None
+
+    bb.run_cycle({})  # raise etmemeli
+    first_ts = bb._last_error_log.get("çıkış yönetimi")
+    assert first_ts is not None, "İlk hata warning olarak kayıtlanmadı!"
+
+    bb.run_cycle({})  # 30dk dolmadan → debug yolu, timestamp İLERLEMEZ
+    assert bb._last_error_log["çıkış yönetimi"] == first_ts, \
+        "Rate-limit çalışmıyor (her hata warning basacak = spam)!"
+
+    bb._last_error_log["çıkış yönetimi"] = _dt.now() - _td(minutes=31)
+    bb.run_cycle({})  # 30dk geçti → yeniden warning + timestamp ilerler
+    assert bb._last_error_log["çıkış yönetimi"] > first_ts, \
+        "30dk sonrası warning yenilenmedi!"
+    print("     Hata döngüyü kırmıyor + 30dk rate-limitli warning ✓")
+test("v4.11.1 bear döngü hata görünürlüğü", test_v4111_bear_cycle_error_visibility)
+
 
 # ============================================================
 # SONUÇ RAPORU

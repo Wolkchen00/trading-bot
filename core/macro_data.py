@@ -43,6 +43,11 @@ MACRO_CONFIG = {
 
     # Cache
     "cache_hours": 6,  # Makro veri yavas degisir
+    # v4.11.1: anahtar-bazli TTL — VIX makro degil, GUN-ICI kriz sinyalidir.
+    # 6h cache ile seans boyunca fiilen 1 kez okunuyordu; BearBrain'in
+    # vix-seviye+sicrama bileseni (25 puan) gun-ici cokuse KOR kaliyordu.
+    # 30dk = rejim turu kadansiyla ayni (tur basina en fazla 1 Yahoo istegi).
+    "cache_hours_overrides": {"vix": 0.5},
 
     # Etki esikleri
     "rate_change_threshold": 0.25,  # %0.25 faiz degisimi onemli
@@ -448,4 +453,7 @@ class MacroDataAnalyzer:
         if key not in self.cache or key not in self.last_fetch:
             return False
         elapsed = (datetime.now() - self.last_fetch[key]).total_seconds()
-        return elapsed < MACRO_CONFIG["cache_hours"] * 3600
+        ttl_hours = MACRO_CONFIG.get("cache_hours_overrides", {}).get(
+            key, MACRO_CONFIG["cache_hours"]
+        )
+        return elapsed < ttl_hours * 3600

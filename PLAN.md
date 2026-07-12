@@ -1,5 +1,5 @@
 # Trading Bot — Geliştirme Planı (v4.6 sonrası)
-_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-11 v4.11 BEAR BRAIN (düşüş-kazanç beyni)_
+_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-12 v4.11.1 doğrulama denetimi (VIX gün-içi TTL + bear hata görünürlüğü)_
 
 ## Mevcut durum (özet)
 - **LIVE** ($487 gerçek): **v4.8 CANLI** — `GÜVENE GÖRE $100-300` (yön-farkında yeni güven ölçeği: 50-59→$100, 60-69→$150, 70-79→$200, 80+→$300), kill %5, floor $414.
@@ -266,6 +266,40 @@ kilitleri gevşetilmedi; bear tarafı KENDİ tavanlarıyla eklendi.
 (sakin piyasada OFF/WATCH'ta kalmalı), (b) ilk DEFENSE girişinde boyut $100 ve
 bracket stop Alpaca'da NEW mi, (c) ATTACK'ta parking unwind + SQQQ girişi
 sıralı mı, (d) skor-çıkışı/zaman-stopu spam yapmıyor mu (30dk deneme aralığı).
+
+## v4.11.1 — Cumartesi doğrulama denetimi (2026-07-12, "düzeltmeler doğru çalışıyor mu + açık tespiti")
+Deploy doğrulandı: iki VPS konteyneri de e4096cf ile birebir aynı (md5), restart
+yok, heartbeat `🐻 OFF(0)` (sakin piyasada beklenen), state_live kalıcı volume.
+Denetimde bulunan 2 açık kapatıldı:
+1. **VIX cache 6h → BearBrain gün-içi KÖRDÜ:** `_update_market_regime` 30dk'da
+   bir VIX "okuyordu" ama macro cache 6h aynı değeri döndürüyordu → seans başına
+   fiilen 1 okuma; skorun vix bileşeni (25p: seviye+sıçrama) gün-içi çöküşü
+   göremiyordu (gün-1 DEFENSE tetiklenmesi çoğu senaryoda buna bağlı).
+   Fix: `MACRO_CONFIG["cache_hours_overrides"] = {"vix": 0.5}` — yalnız VIX
+   30dk TTL, diğer makro anahtarlar 6h kalır (tur başına ≤1 Yahoo isteği).
+2. **Bear döngü hataları görünmezdi:** `run_cycle` istisnaları `logger.debug`'a
+   gömülüydü (v4.10 dersi: debug'daki arıza = günlerce sessiz ölü sistem).
+   Fix: 30dk rate-limitli WARNING (`_log_cycle_error`), arası debug.
+Testler 105/105 (2 yeni). Ayrıca doğrulandı: earnings'in diskteki zehirli boş
+takvimi (09 Tem) Pazartesi pre-market'te kendini tazeler (TTL 24h aşılmış,
+v4.10 boş-CSV koruması yazımı engeller); `is_paper` bantları doğru ayrışıyor.
+
+**Bilinen tasarım sınırları (İhsan kararı bekler, koruma kilidi gevşetmeden çözüm yok):**
+- **DEFENSE bandında net LONG kalınıyor:** parking sleeve (~$290 SPY) yalnız
+  ATTACK'ta çözülür; DEFENSE'te (skor 55-71) $100 SH hedge'e karşı sleeve long
+  kalır → yavaş/orta düşüşte kayıp azalır ama kâra dönmez. Seçenek: DEFENSE'te
+  de sleeve unwind (günde 1, whipsaw maliyeti düşük). İhsan onayı gerekir.
+- **SH→SQQQ terfisi yok:** canlıda `max_bear_positions: 1` + %35 maruziyet
+  tavanı → DEFENSE'te SH girildiyse, kriz ATTACK'a tırmanınca SQQQ eklenemez
+  (3x ateş gücü yalnız skor 55'i atlayıp direkt 72+ açıldığında devreye girer).
+  Seçenek: ATTACK'ta SH'yi kapatıp SQQQ'ya rotasyon (PDT: SH ≥1 gün önceyse
+  day-trade değil). İhsan onayı gerekir.
+- **Tek-gün flash crash'te kill switch önce davranır:** gün −%5 (≈$24) kill →
+  tüm pozisyonlar kapanır, bear girişi de durur. Bear kazancı ancak kademeli
+  (çok-günlü) düşüşte realize olur — koruma hiyerarşisi bilinçli böyle.
+- **Nakit rezervi boyutu kırpar:** `cash_reserve_pct` %15 → bugünkü nakitle
+  ($171) SH hedefi $100→$98'e, SQQQ $150→$98'e iner (AMZN stop'lanıp nakit
+  açılırsa tam boyut). Kırpma bilinçli: rezerv likiditesi > bant sadakati.
 
 ## FAZ 1 — v4.7 canlıda (deploy sonrası ilk hafta)
 - İlk alımların güven bandına uyduğunu doğrula (log: `PositionSizer [LONG-KADEMELI]: $... | GÜVEN x → $y`).

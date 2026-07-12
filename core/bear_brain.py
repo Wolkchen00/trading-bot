@@ -56,6 +56,7 @@ class BearBrain:
         self.parts: Dict = {}
         self._last_update = datetime.min
         self._last_exit_attempt: Dict[str, datetime] = {}
+        self._last_error_log: Dict[str, datetime] = {}
 
         # Kalıcı durum: cooldown/günlük sayaç restart'ta kaybolmasın
         self._state_file = state_path("bear_brain.json")
@@ -310,11 +311,22 @@ class BearBrain:
         try:
             self._manage_exits()
         except Exception as e:
-            logger.debug(f"  BearBrain çıkış yönetimi hatası: {e}")
+            self._log_cycle_error("çıkış yönetimi", e)
         try:
             self._maybe_enter(config)
         except Exception as e:
-            logger.debug(f"  BearBrain giriş hatası: {e}")
+            self._log_cycle_error("giriş", e)
+
+    def _log_cycle_error(self, stage: str, e: Exception):
+        """Kalıcı arıza üretim logunda GÖRÜNSÜN (v4.10 dersi: debug'a gömülen
+        hata = günlerce sessiz ölü giriş hunisi). 30dk'da bir WARNING, arası debug
+        — döngü 15-30sn'de bir döndüğü için spam'e izin verilmez."""
+        now = datetime.now()
+        if (now - self._last_error_log.get(stage, datetime.min)).total_seconds() >= 1800:
+            self._last_error_log[stage] = now
+            logger.warning(f"  🐻 BearBrain {stage} hatası: {e}")
+        else:
+            logger.debug(f"  BearBrain {stage} hatası: {e}")
 
     # ------------------------------------------------------------
     # ÇIKIŞLAR — skor histerezisi + zaman-stopu + rejim dönüşü

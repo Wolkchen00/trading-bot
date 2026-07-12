@@ -127,6 +127,27 @@ class StockBot:
         # Alpaca istemcileri
         is_paper = TRADING_MODE != "live"
         self.is_paper = is_paper
+
+        # === PAPER AGRESİF MOD (v4.12: merge __init__ BAŞINA taşındı) ===
+        # Merge, config okuyan HER kurulumdan önce olmalı: max_pos_usd (aşağıda),
+        # equity_floor ve KillSwitch bu dict'ten beslenir. Eski yeri (KillSwitch
+        # kurulumundan SONRA) yüzünden paper'ın max_daily_loss_pct /
+        # equity_floor_pct override'ları sessizce UYGULANMIYORDU.
+        if is_paper:
+            for key, value in PAPER_AGGRESSIVE_CONFIG.items():
+                if key.startswith("short_"):
+                    SHORT_CONFIG[key] = value  # Short ayarları SHORT_CONFIG'a
+                elif key.startswith("enable_") or key.startswith("prefer_"):
+                    pass  # Bunlar sadece referans, config'a eklenmez
+                else:
+                    config[key] = value  # Geri kalan her şey STOCK_CONFIG'a
+            logger.info("  📈 PAPER AGGRESSIVE MODE: Aktif (v4.12 agresif+)")
+            logger.info(f"     Max poz: {config.get('max_open_positions')} | "
+                        f"Güven: {config.get('min_confidence_score')} | "
+                        f"Pozisyon: ${config.get('max_position_usd')} | "
+                        f"Kill: -{config.get('max_daily_loss_pct', 0.05):.0%}/gün | "
+                        f"Floor: {config.get('equity_floor_pct', 0.85):.0%}")
+
         self.client = TradingClient(
             ALPACA_API_KEY, ALPACA_SECRET_KEY,
             paper=is_paper,
@@ -253,23 +274,6 @@ class StockBot:
             OPTIONS_CONFIG.get("options_enabled", False)
             and (is_paper or not OPTIONS_CONFIG.get("options_paper_only", True))
         )
-
-        # === PAPER AGRESİF MOD ===
-        if is_paper:
-            for key, value in PAPER_AGGRESSIVE_CONFIG.items():
-                if key.startswith("short_"):
-                    SHORT_CONFIG[key] = value  # Short ayarları SHORT_CONFIG'a
-                elif key.startswith("enable_") or key.startswith("prefer_"):
-                    pass  # Bunlar sadece referans, config'a eklenmez
-                else:
-                    config[key] = value  # Geri kalan her şey STOCK_CONFIG'a
-            # max_pos_usd init'te override'dan ÖNCE atanıyordu → banner/fallback
-            # eski $200'ü gösteriyordu; aggressive değeriyle senkronla
-            self.max_pos_usd = config.get("max_position_usd", self.max_pos_usd)
-            logger.info("  📈 PAPER AGGRESSIVE MODE: Aktif")
-            logger.info(f"     Max poz: {config.get('max_open_positions')} | "
-                        f"Güven: {config.get('min_confidence_score')} | "
-                        f"Pozisyon: ${config.get('max_position_usd')}")
 
         # === INDEX PARKING (boştaki nakit → SPY beta; paper-first, config-gated) ===
         # Sync'ten ÖNCE kurulmalı: sync parking pozisyonunu dışlamak için manager'ı kullanır.

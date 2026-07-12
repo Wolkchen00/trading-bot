@@ -1258,7 +1258,8 @@ def test_v410_paper_loss_streak_and_logging():
         fresh = importlib.import_module("config")
         pa = fresh.PAPER_AGGRESSIVE_CONFIG
         assert pa.get("loss_streak_warn") == 999, "Paper loss_streak_warn 999 değil!"
-        assert pa.get("loss_streak_halt") == 6, "Paper loss_streak_halt 6 değil!"
+        # v4.12 agresif+: halt 6 → 8 (paper freni daha geç, duraklama 4h)
+        assert pa.get("loss_streak_halt") == 8, "Paper loss_streak_halt 8 değil!"
         # LIVE koruma kilidi aynen (STOCK_CONFIG taban değerleri)
         assert fresh.STOCK_CONFIG["loss_streak_warn"] == 2, "LIVE loss_streak_warn değişmiş!"
         assert fresh.STOCK_CONFIG["loss_streak_halt"] == 4, "LIVE loss_streak_halt değişmiş!"
@@ -1273,7 +1274,7 @@ def test_v410_paper_loss_streak_and_logging():
     with open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8") as f:
         src = f.read()
     assert "_root.addHandler" not in src, "stock_bot hâlâ root'a handler ekliyor!"
-    print("     Paper warn=999/halt=6, LIVE kilit aynen; propagate=False ✓")
+    print("     Paper warn=999/halt=8, LIVE kilit aynen; propagate=False ✓")
 test("v4.10 paper loss-streak + log üçlemesi", test_v410_paper_loss_streak_and_logging)
 
 
@@ -1625,6 +1626,117 @@ def test_v4112_exposure_headroom():
     assert not buys3, "Tavan doluyken giriş yapıldı (koruma delindi)!"
     print("     Tam boyut / tavana kırpma / dolu-tavanda blok ✓")
 test("v4.11.2 maruziyet tavanına sığdırma", test_v4112_exposure_headroom)
+
+
+section("18. v4.12 PAPER AGRESİF+ (stres gözlemi)")
+
+def test_v412_paper_aggressive_config():
+    """v4.12: paper agresif+ değerleri + LIVE tabanlarının DEĞİŞMEDİĞİ kanıtı."""
+    import importlib, sys as _sys
+    saved = _sys.modules.pop("config", None)
+    try:
+        fresh = importlib.import_module("config")
+        pa = fresh.PAPER_AGGRESSIVE_CONFIG
+        # Paper bantları: canlının mekanizması, agresif dolarlar
+        bands = pa["conf_position_bands"]
+        assert bands[0][0] == 30 and bands[-1][0] == 75, f"Paper bant eşikleri: {bands}"
+        assert all(bands[i][0] < bands[i + 1][0] and bands[i][1] < bands[i + 1][1]
+                   for i in range(len(bands) - 1)), "Paper bantları monoton değil!"
+        assert pa["max_position_usd"] >= bands[-1][1], "Tavan bandı max_position_usd'yi aşıyor!"
+        # Gevşetilen kapılar/frenler
+        assert pa["multi_tf_enabled"] is False, "Paper MTF kapısı kapatılmamış!"
+        assert pa["max_atr_pct"] == 0.08, "Paper VOL kapısı 0.08 değil!"
+        assert pa["max_positions_per_sector"] == 3, "Paper sektör tavanı 3 değil!"
+        assert pa["coin_max_consecutive_losses"] == 5, "Paper hisse devre-kesici 5 değil!"
+        assert pa["cash_reserve_pct"] == 0.05, "Paper nakit rezervi 0.05 değil!"
+        assert pa["equity_floor_pct"] == 0.75, "Paper floor 0.75 değil!"
+        assert pa["max_daily_loss_pct"] == 0.08, "Paper kill 0.08 değil!"
+        assert pa["short_max_exposure_pct"] == 0.50, "Paper short maruziyet 0.50 değil!"
+        assert pa["short_min_confidence"] == 32, "Paper short conf 32 değil!"
+        # Opsiyonlar KAPALI KALDI (v4.9 açma şartları hâlâ karşılanmadı)
+        assert pa["enable_options"] is False, "Opsiyonlar paper'da açılmış!"
+        # LIVE tabanları AYNEN (İhsan'ın koruma kilitleri)
+        sc = fresh.STOCK_CONFIG
+        assert sc["max_daily_loss_pct"] == 0.05, "LIVE kill eşiği değişmiş!"
+        assert sc["equity_floor_pct"] == 0.85, "LIVE floor değişmiş!"
+        assert sc["cash_reserve_pct"] == 0.10, "LIVE nakit rezervi değişmiş!"
+        assert sc["multi_tf_enabled"] is True, "LIVE MTF kapısı kapanmış!"
+        assert sc["max_atr_pct"] == 0.05, "LIVE VOL kapısı gevşemiş!"
+        assert sc["max_positions_per_sector"] == 2, "LIVE sektör tavanı değişmiş!"
+        assert sc["live_max_position_usd"] == 300, "LIVE $300 tavanı değişmiş!"
+        assert sc["live_conf_position_bands"][0] == [50, 100], "LIVE bantları değişmiş!"
+        assert sc["min_confidence_score"] == 50, "LIVE min_conf değişmiş!"
+        # Bear brain: paper bantları büyüdü, CANLI bantlar aynen
+        bc = fresh.BEAR_BRAIN_CONFIG
+        assert bc["paper_size_bands"] == [[55, 3000], [72, 6000]], "Bear paper bantları v4.12 değil!"
+        assert bc["size_bands"] == [[55, 100], [72, 150]], "CANLI bear bantları değişmiş!"
+        assert bc["paper_entry_cooldown_hours"] == 2, "Bear paper cooldown 2h değil!"
+        assert bc["entry_cooldown_hours"] == 4, "CANLI bear cooldown değişmiş!"
+        assert bc["paper_max_entries_per_day"] == 3, "Bear paper günlük giriş 3 değil!"
+        assert bc["max_entries_per_day"] == 1, "CANLI bear günlük giriş değişmiş!"
+    finally:
+        _sys.modules.pop("config", None)
+        if saved is not None:
+            _sys.modules["config"] = saved
+    print("     Paper agresif+ bant/kapı/fren değerleri; LIVE kilitleri birebir ✓")
+test("v4.12 paper agresif+ config + LIVE kilit koruması", test_v412_paper_aggressive_config)
+
+def test_v412_merge_order():
+    """v4.12: PAPER_AGGRESSIVE merge'i KillSwitch/floor kurulumundan ÖNCE olmalı —
+    eski yerinde (KillSwitch'ten sonra) paper'ın kill/floor override'ları
+    sessizce uygulanmıyordu."""
+    with open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8") as f:
+        src = f.read()
+    merge_idx = src.index("PAPER_AGGRESSIVE_CONFIG.items()")
+    kill_idx = src.index("self.kill_switch = KillSwitch(")
+    floor_idx = src.index("self.equity_floor = equity *")
+    maxpos_idx = src.index('config.get("live_max_position_usd"')
+    assert merge_idx < kill_idx, "Merge KillSwitch'ten SONRA — kill override işlemez!"
+    assert merge_idx < floor_idx, "Merge floor'dan SONRA — floor override işlemez!"
+    assert merge_idx < maxpos_idx, "Merge max_pos_usd atamasından SONRA!"
+    print("     Merge → max_pos/floor/kill sıralaması doğru ✓")
+test("v4.12 merge sırası (kill/floor override'ı işler)", test_v412_merge_order)
+
+def test_v412_paper_band_sizing():
+    """v4.12: paper bant modunda — Kelly-negatif ~$3.1k sabit boyut yerine
+    güvene göre $2.5k-9k; bant altı güven → giriş yok."""
+    from core.position_sizer import PositionSizer
+    import importlib, sys as _sys
+    saved = _sys.modules.pop("config", None)
+    try:
+        fresh = importlib.import_module("config")
+        cfg = dict(fresh.STOCK_CONFIG)
+        for k, v in fresh.PAPER_AGGRESSIVE_CONFIG.items():
+            if not (k.startswith("short_") or k.startswith("enable_") or k.startswith("prefer_")):
+                cfg[k] = v
+    finally:
+        _sys.modules.pop("config", None)
+        if saved is not None:
+            _sys.modules["config"] = saved
+    sizer = PositionSizer(performance_tracker=None)
+    r_hi = sizer.calculate_position_size(
+        equity=62000, price=100, atr=2.0, config=cfg, side="LONG", confidence=76)
+    assert abs(r_hi["position_usd"] - 9000) < 1e-6, f"Güven 76 → $9000 değil: {r_hi['position_usd']}"
+    r_lo = sizer.calculate_position_size(
+        equity=62000, price=100, atr=2.0, config=cfg, side="LONG", confidence=31)
+    assert abs(r_lo["position_usd"] - 2500) < 1e-6, f"Güven 31 → $2500 değil: {r_lo['position_usd']}"
+    r_none = sizer.calculate_position_size(
+        equity=62000, price=100, atr=2.0, config=cfg, side="LONG", confidence=29)
+    assert r_none["position_usd"] == 0, "Bant altı güven boyut aldı!"
+    print("     Güven 76→$9000, 31→$2500, 29→$0 (paper bant modu) ✓")
+test("v4.12 paper bant boyutlandırma", test_v412_paper_band_sizing)
+
+def test_v412_bear_paper_cooldown():
+    """v4.12: bear brain paper'da 2h cooldown, CANLI 4h aynen."""
+    from datetime import datetime as _dt, timedelta as _td
+    bb = _make_bear_brain(paper=True)
+    bb._state = {"last_entry_ts": (_dt.now() - _td(hours=3)).isoformat(), "entries": {}}
+    assert bb._cooldown_ok(_dt.now()), "Paper 3h önceki girişte takıldı (2h olmalı)!"
+    bb_live = _make_bear_brain(paper=False)
+    bb_live._state = {"last_entry_ts": (_dt.now() - _td(hours=3)).isoformat(), "entries": {}}
+    assert not bb_live._cooldown_ok(_dt.now()), "CANLI 4h bear cooldown gevşemiş!"
+    print("     Paper 2h / canlı 4h bear cooldown ✓")
+test("v4.12 bear paper cooldown", test_v412_bear_paper_cooldown)
 
 
 # ============================================================

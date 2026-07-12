@@ -1,10 +1,11 @@
 # Trading Bot — Geliştirme Planı (v4.6 sonrası)
-_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-12 v4.11.2 iki taraf tam aktif (DEFENSE sleeve-unwind + ATTACK rotasyonu)_
+_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-12 v4.12 paper agresif+ (stres gözlemi; LIVE kilitleri aynen)_
 
 ## Mevcut durum (özet)
 - **LIVE** ($487 gerçek): **v4.8 CANLI** — `GÜVENE GÖRE $100-300` (yön-farkında yeni güven ölçeği: 50-59→$100, 60-69→$150, 70-79→$200, 80+→$300), kill %5, floor $414.
-- **PAPER** ($64k sanal): 2 ay kilitli kaldıktan sonra (bayat kill dosyası) **canlandı** —
-  PAPER AGGRESSIVE + index parking VPS'te çalışıyor; lokal kopya durduruldu (STOP_BOT).
+- **PAPER** ($64k sanal): **v4.12 AGRESİF+** — bant-boyutlandırma $2.5k-9k, 10 pozisyon,
+  MTF kapalı/VOL %8, kill -%8/floor %75; amaç agresif rejimin stres gözlemi +
+  hızlı öğrenme verisi. Index parking açık; lokal kopya durdurulmuş (STOP_BOT).
 - **Repo:** `Wolkchen00/trading-bot` (public; eski Wolkchen0 push-ölü, o da public'ti).
 - **Deploy akışı:** push SONRASI deploy OTOMATİK DEĞİL — API ile tetiklenir:
   `TOKEN=$(ssh root@91.99.9.121 cat /root/.coolify_claude_token)` →
@@ -323,6 +324,49 @@ canlı günde-1-giriş, 4h cooldown, PDT korumaları aynen.
 **İzleme (ilk düşüş günü):** DEFENSE'e geçişte `PARK BEAR-UNWIND` logu →
 ertesi heartbeat'te sleeve 0; ATTACK tırmanışında `BEAR ROTASYON` → SH SELL →
 ~90sn sonra SQQQ BUY (bracket'li); 45-55 bandında SH açıkken `PARK DURDU` logu.
+
+## v4.12 — PAPER AGRESİF+ (2026-07-12, İhsan: "paper'ı agresifleştirelim, sistemin agresif hâlinde neler yaşadığını görelim")
+SADECE PAPER değişti; tüm değerler `PAPER_AGGRESSIVE_CONFIG` + bear `paper_*`
+anahtarlarında. **LIVE kilitleri birebir aynen** (kill %5, floor %85, rezerv %10,
+$100-300 bantları, MTF/VOL/sektör kapıları, bear canlı bantları/cooldown).
+Amaç: (a) canlının mekanizmalarını büyük dolarlarla stres-gözlemek,
+(b) meta_labeler/ajan-öğrenme örnek üretimini hızlandırmak.
+
+1. **Paper bant-boyutlandırma (yeni):** paper artık canlının `conf_position_bands`
+   kod yolunu kullanır — 30→$2.5k, 45→$4k, 60→$6k, 75→$9k (eskiden Kelly-negatif
+   ~%5 tabanı boyutu sinyalden bağımsız ~$3.1k'ya sabitliyordu). max_position_usd
+   $5k→$9k, max_open_positions 8→10, sektör tavanı 2→3.
+2. **Kapı gevşetmeleri (paper):** MTF 4h kapısı KAPALI (karşı-trend girişler de
+   örneklensin — canlıda en çok giriş yutan kapı), VOL kapısı ATR %5→%8
+   (MARA/RIOT/SMCI sınıfı akışa girer), hisse devre-kesici 3→5 ardışık zarar,
+   loss-streak halt 6→8 zarar / 6h→4h.
+3. **Sermaye/fren (paper):** nakit rezervi %10→%5, equity floor %85→%75,
+   günlük kill %5→%8 (kill KALKMADI — tasma uzadı; felaket freni duruyor).
+4. **Short (paper):** max 4→5 pozisyon, $4k→$6k/pozisyon, maruziyet %40→%50,
+   min güven 35→32.
+5. **Bear brain (paper):** boyut bantları 2× ($3k/$6k), günde 2→3 giriş,
+   cooldown 4h→2h (`paper_entry_cooldown_hours`, bear_brain paper-farkında).
+6. **MERGE-SIRASI FIX (gerçek bug):** PAPER_AGGRESSIVE merge'i `__init__`
+   BAŞINA taşındı — eski yeri KillSwitch/equity-floor kurulumundan SONRAydı,
+   yani paper'a kill/floor override'ı yazılsa bile sessizce uygulanmıyordu
+   (bu yüzden eski paper kill hep %5'te kalmıştı). Testte kaynak-sıra denetimi var.
+7. Opsiyonlar paper'da da KAPALI KALDI (v4.9 açma şartları karşılanmadı).
+8. `min_confidence_score` 30'da BIRAKILDI — bilinçli: koordinatör ws≤15'te zaten
+   HOLD üretir (conf=|ws|×2 → taban 30); daha düşük eşik hiçbir şey açmaz.
+
+Testler: **111/111** (4 yeni v4.12 testi: config+LIVE-kilit koruması, merge
+sırası, bant boyutlandırma, bear paper cooldown; 2 uyarı lokal-ortam:
+onnxruntime/ntscraper — Docker'da sorun değil).
+
+**İzleme (ilk hafta):** paper banner `PAPER AGGRESSIVE MODE: Aktif (v4.12
+agresif+)` + `Kill: -8%/gün | Floor: 75%`; alım loglarında
+`PositionSizer [LONG-KADEMELI]: $2500-9000 | GÜVEN x → $y`; işlem sayısı
+belirgin artmalı (MTF kapalı + VOL %8). Beklenen: PF<1 stratejide daha derin
+paper DD — bu deneyin AMACI (agresif rejimin gerçek yüzü); kill -%8 günü ve
+floor %75 dipleri not et. Öğrenme: meta_labeler 30-50 kapalı işlem kapısı
+hızla dolar. Geri alma: v4.12 değerlerini önceki değerlere çek (git diff
+config.py) — mekanizma değişiklikleri (merge sırası, bant yolu, paper cooldown
+anahtarı) geri almasız kalabilir, davranışları config'e bağlı.
 
 ## FAZ 1 — v4.7 canlıda (deploy sonrası ilk hafta)
 - İlk alımların güven bandına uyduğunu doğrula (log: `PositionSizer [LONG-KADEMELI]: $... | GÜVEN x → $y`).

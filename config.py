@@ -558,8 +558,9 @@ BEAR_BRAIN_CONFIG = {
     "paper_max_bear_positions": 2,
     "max_bear_exposure_pct": 0.35,   # equity'nin en fazla %35'i ters-ETF'de
     "entry_cooldown_hours": 4,
+    "paper_entry_cooldown_hours": 2, # v4.12: paper'da 2h — günde 3 giriş sığsın
     "max_entries_per_day": 1,        # canlı: günde 1 giriş (PDT-dostu, churn'süz)
-    "paper_max_entries_per_day": 2,
+    "paper_max_entries_per_day": 3,  # v4.12: 2 → 3 (agresif gözlem)
 
     # v4.11.2 — İhsan 12 Tem "iki taraftan kazanırız": iki taraf TAM aktif
     "defense_parking_unwind": True,  # DEFENSE'te SPY sleeve de çözülür (eskiden
@@ -571,7 +572,7 @@ BEAR_BRAIN_CONFIG = {
     # (canlı $487: DEFENSE $100≈%20 equity; ATTACK $150 3x ≈ $450 efektif
     # short-delta ≈ equity'nin ~%92'si — İhsan'ın istediği yüksek risk/kazanç)
     "size_bands": [[55, 100], [72, 150]],
-    "paper_size_bands": [[55, 1500], [72, 3000]],
+    "paper_size_bands": [[55, 3000], [72, 6000]],  # v4.12: 2× büyütüldü (agresif+)
 
     # Emir planı (kaldıraca göre stop/hedef; executor plan_exit_pcts okur)
     "rr_target": 1.5,
@@ -706,18 +707,41 @@ OPTIONS_CONFIG = {
 # PAPER HESAP AGRESİF AYARLAR
 # Paper'da daha hızlı ve agresif trade etmek için override'lar.
 # Live hesapta bu ayarlar UYGULANMAZ.
+#
+# v4.12 AGRESİF+ (İhsan kararı 2026-07-12): "paper'ı daha agresifleştirelim,
+# sistemin agresif hâlinde neler yaşadığını görelim." Amaç iki katlı:
+#   1) STRES GÖZLEMİ — canlının kullandığı mekanizmalar (güven-bantlı boyut,
+#      bracket emirler, kill/floor) büyük dolarlarla zorlanınca ne oluyor?
+#   2) ÖĞRENME HIZI — daha çok giriş = meta_labeler/ajan-öğrenme örneği.
+# LIVE KİLİTLERİ DEĞİŞMEDİ: STOCK_CONFIG taban değerleri (kill %5, floor %85,
+# rezerv %10, MTF/VOL/sektör kapıları, $100-300 bantları) aynen duruyor.
+# NOT: max_daily_loss_pct / equity_floor_pct override'ları stock_bot'taki
+# merge'in KillSwitch/floor kurulumundan ÖNCE çalışmasına bağlıdır (v4.12'de
+# merge __init__ başına taşındı — eski yerinde bu ikisi sessizce işlemezdi).
 # ============================================================
 PAPER_AGGRESSIVE_CONFIG = {
     # === HİSSE AYARLARI (override) ===
-    "max_position_usd": 5000,                # $200 → $5000
-    "max_open_positions": 8,                  # 3 → 8
+    "max_position_usd": 9000,                # v4.12: $5000 → $9000 (bant tavanı geçsin)
+    "max_open_positions": 10,                 # v4.12: 8 → 10 (havuz ~20 sembol)
+    # v4.12: paper artık CANLININ bant mekanizmasını kullanır (sizer'daki aynı
+    # kod yolu, agresif dolarlarla). Eskiden paper Kelly yoluna düşüyordu ve
+    # PF<1'de Kelly-negatif tabanı ~%5 equity'ye ($3.1k) sabitleniyordu — boyut
+    # sinyal kalitesinden bağımsızdı. Bantla: zayıf sinyal küçük, güçlü sinyal
+    # büyük → canlının davranışı büyütülmüş ölçekte gözlemlenir.
+    # Ölçek: conf 30 ≈ ws 15 (koordinatör tabanı), 75+ ≈ güçlü çoklu mutabakat.
+    "conf_position_bands": [
+        [30, 2500],
+        [45, 4000],
+        [60, 6000],
+        [75, 9000],
+    ],
     # v4.9: 45 → 30. v4.8'in Monte Carlo kalibrasyonu GERÇEK oy dağılımını
     # tutturamadı: 06-07 Tem canlı veride koordinatör güveni (|ws|) max 15'te
     # kaldı, NVDA'nın 3'lü BUY mutabakatı bile ~32'ydi → 45 HİÇ ulaşılamıyordu
     # (2 günde 0 paper işlem). v4.9 remap (conf=|ws|×2.0 çarpanlar sonrası) ile
     # ölçek 0-100'e açıldı; 30 eşiği ≈ ws 15 = "koordinatörün kendi sinyal
-    # tabanı" (ws>15 → BUY/SELL). Paper'ın işi ÖĞRENME VERİSİ üretmek
-    # (meta_labeler WIRE kapısı 30-50 kapalı işlem bekliyor).
+    # tabanı" (ws>15 → BUY/SELL). Daha aşağısı ANLAMSIZ: koordinatör ws≤15'te
+    # zaten HOLD üretir — agresiflik eşikten değil kapı/boyuttan gelir.
     "min_confidence_score": 30,
     "scan_interval_seconds": 15,              # 30 → 15 (daha sık tara)
     "stop_loss_pct": 0.05,                    # %4 → %5 (biraz daha geniş)
@@ -730,13 +754,32 @@ PAPER_AGGRESSIVE_CONFIG = {
     "take_profit_max_pct": 0.10,
     "sell_cooldown_seconds": 120,             # 5dk → 2dk (daha hızlı geri gir)
 
+    # === KAPILAR (v4.12 — paper'da gevşetilen filtreler; LIVE'da hepsi aynen) ===
+    "multi_tf_enabled": False,      # 4h MTF kapısı KAPALI: karşı-trend girişler de
+                                    # örneklensin (canlıda en çok giriş yutan kapı)
+    "max_atr_pct": 0.08,            # VOL kapısı %5 → %8: MARA/RIOT/SMCI sınıfı
+                                    # yüksek-ATR isimler de akışa girsin
+    "max_positions_per_sector": 3,  # sektör tavanı 2 → 3 (çeşitlilik yine var)
+    "coin_max_consecutive_losses": 5,  # hisse-bazlı devre kesici 3 → 5 zarar
+
+    # === SERMAYE KULLANIMI (v4.12) ===
+    "cash_reserve_pct": 0.05,       # %10 → %5: daha çok nakit sahaya
+    "equity_floor_pct": 0.75,       # %85 → %75: agresif deney daha derin DD'ye
+                                    # rağmen veri üretmeye devam etsin
+    "max_daily_loss_pct": 0.08,     # kill %5 → %8/gün: agresif günün frene
+                                    # takılmadan gözlemi (kill YİNE var — felaket
+                                    # freni kalkmadı, sadece tasması uzadı)
+
     # === SHORT AYARLARI (override) ===
-    "short_max_positions": 4,                 # 3 → 4
-    "short_max_position_usd": 4000,           # $2000 → $4000
-    "short_min_confidence": 35,               # 40 → 35
+    "short_max_positions": 5,                 # v4.12: 4 → 5
+    "short_max_position_usd": 6000,           # v4.12: $4000 → $6000
+    "short_min_confidence": 32,               # v4.12: 35 → 32 (taban 30'un hemen üstü)
+    "short_max_exposure_pct": 0.50,           # v4.12: 0.40 → 0.50
 
     # === OPTIONS ===
     # v4.9: churn nedeniyle kapalı (OPTIONS_CONFIG.options_enabled yorumuna bak)
+    # v4.12'de de KAPALI KALDI — agresiflik deneyi hisse/short/bear yolunda;
+    # opsiyon açma şartları (PLAN v4.9) hâlâ karşılanmadı.
     "enable_options": False,
     "prefer_options_over_stock": False,
 
@@ -751,9 +794,9 @@ PAPER_AGGRESSIVE_CONFIG = {
     # istiyordu (META ~96 kez bundan bloklandı) → 4 günde 1 işlem. Paper'ın işi
     # ÖRNEK ÜRETMEK (meta_labeler 30-50 kapalı işlem bekliyor) ve beklenen PF
     # ~0.96'yla zarar serisi kaçınılmaz; sermaye koruması DEĞİL (sahte para,
-    # kill-switch -%5/gün freni ayrıca duruyor). LIVE değerleri DEĞİŞMEDİ
+    # kill-switch günlük freni ayrıca duruyor). LIVE değerleri DEĞİŞMEDİ
     # (warn 2 / halt 4 / 24h — İhsan'ın koruma kilidi aynen).
     "loss_streak_warn": 999,        # güven-yükseltme fiilen kapalı
-    "loss_streak_halt": 6,          # 6 ardışık zarar → yine fren
-    "loss_streak_halt_hours": 6,    # 24h değil 6h — öğrenme günü çöpe gitmesin
+    "loss_streak_halt": 8,          # v4.12: 6 → 8 ardışık zarar → fren
+    "loss_streak_halt_hours": 4,    # v4.12: 6h → 4h — agresif deneyde duraklama kısa
 }

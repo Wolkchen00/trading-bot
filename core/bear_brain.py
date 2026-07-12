@@ -450,6 +450,10 @@ class BearBrain:
         except (ValueError, TypeError):
             return True
         hours = self.cfg.get("entry_cooldown_hours", 4)
+        if self.is_paper:
+            # v4.12: paper agresif+ — kısa cooldown ki paper_max_entries_per_day
+            # gerçekten dolabilsin (4h ile 6.5h seansa en çok 2 giriş sığıyordu)
+            hours = self.cfg.get("paper_entry_cooldown_hours", hours)
         return (now - last).total_seconds() >= hours * 3600
 
     def pick_instrument(self) -> Optional[str]:

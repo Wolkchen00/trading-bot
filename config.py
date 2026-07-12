@@ -523,6 +523,66 @@ MARKET_REGIME_CONFIG = {
 }
 
 # ============================================================
+# BEAR BRAIN — DÜŞÜŞ-KAZANÇ BEYNİ (v4.11)
+# ------------------------------------------------------------
+# İhsan kararı 2026-07-11: "stock düşüşe geçince kazanabileceğimiz yeni AI
+# beynini entegre et — risk yüksek, kazanç da yüksek." Canlıda gerçek short
+# İMKÂNSIZ (Alpaca marj şartı $2.000 > $487 equity) → düşüş tezi ters-ETF
+# LONG'una çevrilir (cash hesapta çalışır, BOT_MODE=long_only bozulmaz).
+# Eski ters-ETF yolu ölüydü: BEAR rejim şartı (SPY<EMA200, geç sinyal) +
+# BEAR'da +10 BUY eşiği + long kapıları (ETF'nin kendi EMA200'ü, ATR<=%5)
+# 3x ters-ETF'yi yapısal blokluyordu. Bear Brain kendi bileşik skorunu
+# (trend+momentum+VIX+genişlik) kullanır, kendi kapıları vardır; emirler
+# executor'dan geçer (floor/rezerv/PDT/bracket-stop korumaları AYNEN).
+# KORUMA KİLİTLERİ DEĞİŞMEDİ: kill %5/gün, equity floor %85, live hisse
+# bantları/eşikleri bu bloktan etkilenmez.
+# ============================================================
+BEAR_BRAIN_CONFIG = {
+    "enabled": True,
+    "allow_live": True,              # canlıda ters-ETF ile düşüş-kazancı AÇIK
+
+    # Skor eşikleri (0-100 bileşik skor)
+    "score_watch": 40,               # izleme (log)
+    "score_defense": 55,             # DEFENSE: 1x ters-ETF girişi
+    "score_attack": 72,              # ATTACK: 3x ters-ETF girişi
+    "score_exit": 45,                # skor altına inince pozisyon kapat (histerezis)
+
+    # Enstrümanlar (havuz tech-ağırlıklı → ATTACK NASDAQ tersi)
+    "defense_symbol": "SH",          # 1x ters S&P
+    "attack_symbol": "SQQQ",         # 3x ters NASDAQ
+    "extra_inverse_symbols": ["SPXS"],   # legacy pozisyon devralma listesi
+    "leverage3_symbols": ["SQQQ", "SPXS"],
+
+    # Pozisyon/maruziyet sınırları
+    "max_bear_positions": 1,         # canlı: tek ters-ETF pozisyonu
+    "paper_max_bear_positions": 2,
+    "max_bear_exposure_pct": 0.35,   # equity'nin en fazla %35'i ters-ETF'de
+    "entry_cooldown_hours": 4,
+    "max_entries_per_day": 1,        # canlı: günde 1 giriş (PDT-dostu, churn'süz)
+    "paper_max_entries_per_day": 2,
+
+    # Boyut bantları: [min_skor, $] — skoru karşılayan EN YÜKSEK bant
+    # (canlı $487: DEFENSE $100≈%20 equity; ATTACK $150 3x ≈ $450 efektif
+    # short-delta ≈ equity'nin ~%92'si — İhsan'ın istediği yüksek risk/kazanç)
+    "size_bands": [[55, 100], [72, 150]],
+    "paper_size_bands": [[55, 1500], [72, 3000]],
+
+    # Emir planı (kaldıraca göre stop/hedef; executor plan_exit_pcts okur)
+    "rr_target": 1.5,
+    "sl_1x": 0.04, "sl_max_1x": 0.05, "tp_floor_1x": 0.06, "tp_cap_1x": 0.08,
+    "sl_3x": 0.06, "sl_max_3x": 0.08, "tp_floor_3x": 0.09, "tp_cap_3x": 0.15,
+    "atr_mult_3x": 2.0,
+
+    # Zaman-stopu: kaldıraçlı ETF günlük-rebalans erimesi yüzünden uzun tutulmaz
+    "time_stop_days_3x": 7,
+    "time_stop_days_1x": 15,
+
+    # Wash-sale: bear girişlerinde sadece UYARI (30g kilit stratejiyi öldürür,
+    # $487'de vergi etkisi kuruş — bilinçli karar). True yapılırsa sert blok.
+    "respect_wash_sale": False,
+}
+
+# ============================================================
 # ZAMANLAMA AYARLARI (US Eastern Time)
 # ============================================================
 SCHEDULE_CONFIG = {

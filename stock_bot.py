@@ -41,7 +41,7 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from config import (
     ALPACA_API_KEY, ALPACA_SECRET_KEY, TRADING_MODE, BOT_MODE,
     get_base_url, STOCK_CONFIG, SHORT_CONFIG, STOCK_IDS, STOCK_SEARCH_TERMS,
-    SECTOR_MAP, MARKET_REGIME_CONFIG,
+    SECTOR_MAP, MARKET_REGIME_CONFIG, BEAR_BRAIN_CONFIG,
     OPTIONS_CONFIG, PAPER_AGGRESSIVE_CONFIG, state_path,
 )
 
@@ -71,6 +71,7 @@ from core.agent_performance import AgentPerformanceTracker
 from core.gap_scanner import GapScanner
 from core.relative_strength import RelativeStrength
 from core.market_regime import MarketRegimeDetector
+from core.bear_brain import BearBrain
 from core.signal_queue import SignalQueue
 from core.options_engine import OptionsEngine
 from core.options_analyzer import OptionsAnalyzer
@@ -275,6 +276,14 @@ class StockBot:
         from core.index_parking import IndexParkingManager
         self.index_parking = IndexParkingManager(self, config)
 
+        # === BEAR BRAIN (v4.11 — düşüş-kazanç beyni) ===
+        # Ters-ETF'ler artık YALNIZ bu beynin malı: tarama/koordinatör yolundan
+        # çıkarıldı (o yol yapısal olarak hiç çalışmamıştı). Genişlik verisi
+        # koordinatör ws'lerinden toplanır (_bear_breadth).
+        self._bear_breadth = {}
+        self._last_vix = 0.0
+        self.bear_brain = BearBrain(self, BEAR_BRAIN_CONFIG)
+
         # === POZİSYON SENKRONİZASYONU (restart-safe) ===
         self._sync_positions_from_alpaca()
         self._load_position_metadata()
@@ -307,6 +316,16 @@ class StockBot:
         logger.info(f"  Options: {options_str} | Opsiyon poz: {len(self.options_positions)}")
         logger.info(f"  PDT: {'EXEMPT' if equity >= 25000 else f'ACTIVE (max 2 DT/hafta)'}")
         logger.info(f"  KillSwitch: AKTIF | WashSale: AKTIF")
+        if self.bear_brain.enabled:
+            bb_cfg = BEAR_BRAIN_CONFIG
+            logger.info(
+                f"  BearBrain: 🐻 AKTIF | DEFENSE>={bb_cfg.get('score_defense', 55)}"
+                f"→{bb_cfg.get('defense_symbol', 'SH')} | "
+                f"ATTACK>={bb_cfg.get('score_attack', 72)}"
+                f"→{bb_cfg.get('attack_symbol', 'SQQQ')} (düşüşten kazanç)"
+            )
+        else:
+            logger.info("  BearBrain: kapalı")
         logger.info("=" * 60)
 
     # ============================================================
@@ -444,6 +463,14 @@ class StockBot:
                             self._opt_mgr_errors = 0
                         else:
                             logger.debug(f"  Options pozisyon yonetim hatasi: {e}")
+
+                # 🐻 BEAR BRAIN (v4.11) — düşüş modunda ters-ETF stratejisi.
+                # Parking'den ÖNCE koşar: ATTACK çıkış/girişleri nakit durumunu
+                # değiştirir, parking direktifi (pause/unwind) taze modu okur.
+                try:
+                    self.bear_brain.run_cycle(config)
+                except Exception as e:
+                    logger.debug(f"  BearBrain döngü hatası: {e}")
 
                 # Idle-cash index parking (paper-first) — günde 1 rebalance, nakit → beta
                 try:
@@ -629,6 +656,7 @@ class StockBot:
                 # Veri yoksa/0 ise muhafazakâr 20 (normal) varsay.
                 vix_value = float(vix_data.get("vix") or 0) or 20.0
                 logger.info(f"  VIX: {vix_data.get('description', 'N/A')} ({vix_value:.1f})")
+                self._last_vix = vix_value  # v4.11: rejim detektörü + BearBrain okur
                 # Sektör rotasyonu güncelle
                 self.sector_rotator.update_vix(vix_value)
                 sr_status = self.sector_rotator.get_status()
@@ -717,7 +745,23 @@ class StockBot:
             else:
                 self._market_regime = "BULL"
 
+            # VIX'i tazele (macro cache'li) — v4.11: _last_vix daha önce HİÇ
+            # atanmıyordu (yalnız getattr ile okunuyordu) → gelişmiş rejim
+            # detektörü hep vix=0 görüyordu. Artık 30dk'lık rejim turunda
+            # güncellenir; BearBrain da seviye+sıçramayı buradan alır.
+            vix_change = 0.0
+            try:
+                macro = self.macro_analyzer.get_macro_score()
+                vix_data = macro.get("vix", {}) or {}
+                _vix_val = float(vix_data.get("vix") or 0)
+                vix_change = float(vix_data.get("change") or 0)
+                if _vix_val > 0:
+                    self._last_vix = _vix_val
+            except Exception as e:
+                logger.debug(f"  VIX tazeleme hatası: {e}")
+
             # v3.0 Gelismis 4-rejim algilama (ADX + BB + EMA)
+            enhanced = None
             try:
                 vix = getattr(self, '_last_vix', 0)
                 enhanced = self.regime_detector.detect_regime(df, vix=vix)
@@ -732,6 +776,18 @@ class StockBot:
                     )
             except Exception as e:
                 logger.debug(f"  Gelismis rejim hatasi: {e}")
+
+            # 🐻 BEAR BRAIN skoru (v4.11) — aynı günlük SPY verisiyle
+            try:
+                self.bear_brain.update(
+                    df,
+                    vix=getattr(self, '_last_vix', 0),
+                    vix_change=vix_change,
+                    breadth_neg_ratio=self._bear_breadth_ratio(),
+                    enhanced_regime=enhanced,
+                )
+            except Exception as e:
+                logger.debug(f"  BearBrain skor hatası: {e}")
 
         except Exception as e:
             logger.debug(f"  Rejim tespiti hatasi: {e}")
@@ -757,6 +813,15 @@ class StockBot:
             # Multi-agent karar
             decision = self._get_agent_decision(symbol, analysis, config)
 
+            # 🐻 Genişlik verisi (v4.11): koordinatör ws'i BearBrain'in piyasa-
+            # genişliği bileşenini besler (evrenin % kaçı bearish mutabakatta)
+            try:
+                self._bear_breadth[symbol] = (
+                    datetime.now(), float(decision.get("weighted_score", 0) or 0)
+                )
+            except (TypeError, ValueError):
+                pass
+
             # SHORT sinyal mapping:
             # 1. analyzer.py zaten SHORT üretir (sell_score >= 45)
             # 2. Coordinator SELL döndürür ama SELL != SHORT:
@@ -773,11 +838,17 @@ class StockBot:
             # Ters ETF & Endeks filtresi
             _inverse_etfs = MARKET_REGIME_CONFIG.get("inverse_etf_symbols", [])
             _index_symbols = MARKET_REGIME_CONFIG.get("index_symbols", [])
-            _is_inverse_etf = symbol in _inverse_etfs
             _is_index = symbol in _index_symbols
 
             # Endeksler asla trade edilmez (sadece rejim tespiti icin)
             if _is_index:
+                return
+
+            # v4.11: Ters ETF'ler YALNIZ BearBrain'den işlem görür. Eski yol
+            # (BEAR rejim şartı + BUY eşiği+10 + long kapıları) yapısal olarak
+            # hiç çalışmamıştı; koordinatör oyu ETF'nin kendisi için anlamsız —
+            # düşüş tezini piyasa-geneli skor verir (bear_brain.run_cycle).
+            if symbol in _inverse_etfs:
                 return
 
             # Rejim bazli guven ayarlamasi
@@ -789,13 +860,16 @@ class StockBot:
                 effective_buy_conf += MARKET_REGIME_CONFIG.get("bear_buy_conf_increase", 10)
                 effective_short_conf -= MARKET_REGIME_CONFIG.get("bear_short_conf_reduction", 10)
 
-            # Ters ETF'ler sadece BEAR modda BUY (long) olarak alinir
-            if _is_inverse_etf:
-                if self._market_regime != "BEAR":
-                    return  # Bull/Unknown modda ters ETF alma
-                # Ters ETF icin short sinyal ALMA (zaten ters)
-                if decision["signal"] == "SHORT":
-                    return
+            # 🐻 v4.11: bear skoru yüksekken gerçek-short eşiği gevşer (paper'ın
+            # öğrenme akışı düşüş dönemlerinde hızlansın; DEFENSE −5, ATTACK −10).
+            # Taban 25: koordinatörün kendi sinyal tabanının (ws>15 ≈ conf 30)
+            # anlamlı altına inilmez.
+            try:
+                effective_short_conf = max(
+                    25, effective_short_conf - self.bear_brain.short_conf_relief()
+                )
+            except Exception:
+                pass
 
             # === OPTIONS DEĞERLENDİRMESİ (v4.0) ===
             # Güçlü sinyalde hisse yerine opsiyon tercih et
@@ -837,8 +911,6 @@ class StockBot:
                     analysis["confidence"] = decision["confidence"]
                     analysis["reasons"] = [decision["reasoning"]]
                     analysis["sector_weight"] = self.sector_rotator.get_weight_multiplier(symbol)
-                    if _is_inverse_etf:
-                        analysis["reasons"].append("🐻 BEAR_MODE_INVERSE_ETF")
 
                     # v4.8: UZAMIŞ girişte hemen alma → SignalQueue'ya koy, %1.5
                     # pullback bekle (2 saat; gelmezse iptal). Kuyruk bugüne dek
@@ -1207,18 +1279,30 @@ class StockBot:
             # Yoksa varsayılan havuz
             symbols = STOCK_CONFIG.get("symbols", list(STOCK_IDS.keys()))[:10]
 
-        # v4.8: BEAR rejimde ters-ETF'ler analiz listesinin BAŞINA eklenir.
-        # _analyze_and_trade'deki bear-only alım mantığı zaten vardı ama ne screener
-        # evreni ne de ilk-10 fallback bu sembolleri içeriyordu → özellik ölüydü.
-        # Long-only canlı hesabın ayı piyasasında tek katılım aracı budur.
-        if self._market_regime == "BEAR":
-            inverse = [
-                s for s in MARKET_REGIME_CONFIG.get("inverse_etf_symbols", [])
-                if s not in symbols
-            ]
-            symbols = inverse + symbols
+        # v4.11: ters-ETF'ler tarama evreninden ÇIKTI — onları BearBrain kendi
+        # piyasa-geneli skoruyla alıp satar (v4.8'in BEAR-rejim prepend'i, hiç
+        # işlem üretmeyen ölü yoldu; koordinatör oyu ETF'nin kendisinde anlamsız).
+        inverse = set(MARKET_REGIME_CONFIG.get("inverse_etf_symbols", []))
+        return [s for s in symbols if s not in inverse]
 
-        return symbols
+    def _bear_breadth_ratio(self) -> Optional[float]:
+        """Evrenin % kaçı bearish mutabakatta? (BearBrain genişlik bileşeni)
+
+        Son 45 dk'daki koordinatör ws kayıtlarından: ws <= -5 oranı.
+        5'ten az taze örnek varsa None (fail-neutral — skor şişmez).
+        """
+        try:
+            now = datetime.now()
+            fresh = [
+                ws for (ts, ws) in self._bear_breadth.values()
+                if (now - ts).total_seconds() <= 2700
+            ]
+            if len(fresh) < 5:
+                return None
+            neg = sum(1 for ws in fresh if ws <= -5)
+            return neg / len(fresh)
+        except Exception:
+            return None
 
     def _sector_limit_reached(self, symbol: str, config: Dict) -> bool:
         """Aynı sektörde max pozisyon kontrolü."""
@@ -1270,6 +1354,9 @@ class StockBot:
                 entry = data.get("entry_price", 0)
                 pos_details.append(f"{sym}@${entry:.2f}")
 
+            bear_str = ""
+            if getattr(self.bear_brain, "enabled", False):
+                bear_str = f"🐻 {self.bear_brain.mode}({self.bear_brain.score:.0f}) | "
             logger.info(
                 f"  💓 ${equity:,.2f} ({pnl:+.2f}/{pnl_pct:+.1f}%) | "
                 f"Cash: ${cash:,.2f} | "
@@ -1278,6 +1365,7 @@ class StockBot:
                 f"İşlem: {len(self.trades_today)} | "
                 f"DT: {pdt_status['week_day_trades']}/{pdt_status['max_day_trades']} | "
                 f"Zarar serisi: {self._consecutive_losses} | "
+                f"{bear_str}"
                 f"Piyasa: {market_status['status']} {market_status.get('time_et', '')} | "
                 f"Kill: {'⚠️AKTİF' if self.kill_switch.is_active else 'OK'}"
             )
@@ -1658,6 +1746,12 @@ class StockBot:
                             self.positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
                         if meta.get("take_profit_pct") is not None:  # None enjekte etme
                             self.positions[sym]["take_profit_pct"] = meta["take_profit_pct"]
+                        # v4.11 BearBrain etiketi restart'ta korunur (sahiplik zaten
+                        # sembolden çıkarılır; etiket log/giriş-skoru içindir)
+                        if meta.get("bear_brain") is not None:
+                            self.positions[sym]["bear_brain"] = meta["bear_brain"]
+                        if meta.get("entry_score") is not None:
+                            self.positions[sym]["entry_score"] = meta["entry_score"]
                 # Short pozisyon metadata'sını yükle
                 for sym, meta in data.get("short_positions", {}).items():
                     if sym in self.short_positions:

@@ -1277,6 +1277,167 @@ def test_v410_paper_loss_streak_and_logging():
 test("v4.10 paper loss-streak + log üçlemesi", test_v410_paper_loss_streak_and_logging)
 
 
+section("17. v4.11 BEAR BRAIN (düşüş-kazanç beyni)")
+
+def _make_bear_brain(paper=True):
+    """Test için hafif BearBrain — sahte bot + disk yazımı kapalı."""
+    import types
+    from config import BEAR_BRAIN_CONFIG
+    from core.bear_brain import BearBrain
+    fake_bot = types.SimpleNamespace(is_paper=paper, positions={}, short_positions={})
+    bb = BearBrain(fake_bot, BEAR_BRAIN_CONFIG)
+    bb._save_state = lambda: None  # test diski kirletmesin
+    return bb
+
+def test_v411_bear_config_sanity():
+    """v4.11: BEAR_BRAIN_CONFIG tutarlılığı — eşik sırası, bantlar, semboller."""
+    from config import BEAR_BRAIN_CONFIG as bc, STOCK_IDS
+    assert bc["score_watch"] < bc["score_defense"] < bc["score_attack"], "Eşik sırası bozuk!"
+    assert bc["score_exit"] < bc["score_defense"], "Çıkış histerezisi yok (exit >= defense)!"
+    for bands_key in ("size_bands", "paper_size_bands"):
+        bands = bc[bands_key]
+        assert bands and all(len(b) == 2 for b in bands), f"{bands_key} bozuk!"
+        confs = [b[0] for b in bands]
+        assert confs == sorted(confs), f"{bands_key} skor sırası artan değil!"
+    assert bc["defense_symbol"] in STOCK_IDS and bc["attack_symbol"] in STOCK_IDS, \
+        "Bear sembolleri STOCK_IDS'te yok (veri çekilemez)!"
+    assert bc["attack_symbol"] in bc["leverage3_symbols"], "ATTACK sembolü 3x listesinde değil!"
+    assert bc["sl_3x"] > bc["sl_1x"], "3x stop 1x'ten geniş olmalı!"
+    assert bc["max_bear_exposure_pct"] <= 0.50, "Bear maruziyeti equity'nin yarısını aşmamalı!"
+    print(f"     Eşikler {bc['score_watch']}/{bc['score_defense']}/{bc['score_attack']} "
+          f"(çıkış {bc['score_exit']}), {bc['defense_symbol']}/{bc['attack_symbol']} ✓")
+test("v4.11 BEAR_BRAIN_CONFIG tutarlılığı", test_v411_bear_config_sanity)
+
+def test_v411_bear_score_calm_bull():
+    """v4.11: sakin boğa piyasası → skor düşük, mod OFF (yanlış alarm yok)."""
+    import numpy as np
+    import pandas as pd
+    from core.bear_brain import BearBrain
+    up_df = pd.DataFrame({"close": np.linspace(300.0, 420.0, 260)})
+    res = BearBrain.compute_score(
+        up_df, vix=14.0, vix_change=-0.5, breadth_neg_ratio=0.05,
+        enhanced_regime={"regime": "BULL_TREND", "trend_direction": "UP"},
+    )
+    bb = _make_bear_brain()
+    assert res["score"] < bb.cfg["score_watch"], f"Boğada skor şişti: {res}"
+    assert bb.mode_for_score(res["score"]) == "OFF"
+    # Veri yokken de şişmemeli (fail-neutral)
+    res_none = BearBrain.compute_score(None, vix=0, vix_change=0)
+    assert res_none["score"] == 0, f"Veri yokken skor 0 olmalı: {res_none}"
+    print(f"     Boğa skoru {res['score']:.0f} → OFF; verisiz skor 0 ✓")
+test("v4.11 skor: sakin boğa → OFF", test_v411_bear_score_calm_bull)
+
+def test_v411_bear_score_crash_attack():
+    """v4.11: sert düşüş (SPY -18%/15g + VIX 38 sıçramalı + geniş bearish
+    mutabakat) → skor ATTACK eşiğini aşar, enstrüman 3x SQQQ."""
+    import numpy as np
+    import pandas as pd
+    from core.bear_brain import BearBrain
+    vals = np.concatenate([np.linspace(300.0, 420.0, 245), np.linspace(420.0, 344.0, 15)])
+    crash_df = pd.DataFrame({"close": vals})
+    res = BearBrain.compute_score(
+        crash_df, vix=38.0, vix_change=5.0, breadth_neg_ratio=0.8,
+        enhanced_regime={"regime": "BEAR_TREND", "trend_direction": "DOWN"},
+    )
+    bb = _make_bear_brain()
+    assert res["score"] >= bb.cfg["score_attack"], f"Krizde skor yetersiz: {res}"
+    bb.mode = bb.mode_for_score(res["score"])
+    assert bb.mode == "ATTACK", f"Mod ATTACK değil: {bb.mode}"
+    assert bb.pick_instrument() == bb.cfg["attack_symbol"], "ATTACK enstrümanı yanlış!"
+    assert bb._is_3x(bb.pick_instrument()), "ATTACK enstrümanı 3x sayılmıyor!"
+    p = res["parts"]
+    assert p["trend"] > 0 and p["momentum"] > 0 and p["vix"] > 0 and p["breadth"] > 0, \
+        f"Bileşenlerden biri ölü: {p}"
+    print(f"     Kriz skoru {res['score']:.0f} → ATTACK → {bb.pick_instrument()} (3x) ✓")
+test("v4.11 skor: kriz → ATTACK + SQQQ", test_v411_bear_score_crash_attack)
+
+def test_v411_bear_modes_and_relief():
+    """v4.11: mod eşikleri, DEFENSE enstrümanı, paper short gevşetmesi."""
+    bb = _make_bear_brain()
+    d, a, w = bb.cfg["score_defense"], bb.cfg["score_attack"], bb.cfg["score_watch"]
+    assert bb.mode_for_score(w - 1) == "OFF"
+    assert bb.mode_for_score(w) == "WATCH"
+    assert bb.mode_for_score(d) == "DEFENSE"
+    assert bb.mode_for_score(a - 0.1) == "DEFENSE"
+    assert bb.mode_for_score(a) == "ATTACK"
+    bb.mode = "DEFENSE"
+    assert bb.pick_instrument() == bb.cfg["defense_symbol"]
+    assert bb.short_conf_relief() == 5
+    bb.mode = "ATTACK"
+    assert bb.short_conf_relief() == 10
+    bb.mode = "WATCH"
+    assert bb.short_conf_relief() == 0 and bb.pick_instrument() is None
+    print("     OFF/WATCH/DEFENSE/ATTACK eşikleri + relief 0/5/10 ✓")
+test("v4.11 mod eşikleri + short gevşetmesi", test_v411_bear_modes_and_relief)
+
+def test_v411_bear_exit_decisions():
+    """v4.11: skor-çıkışı (histerezis) ve kaldıraca göre zaman-stopu."""
+    from datetime import datetime as _dt, timedelta as _td
+    bb = _make_bear_brain()
+    now = _dt.now()
+    fresh_pos = {"entry_time": (now - _td(days=2)).isoformat()}
+    old_pos = {"entry_time": (now - _td(days=10)).isoformat()}
+
+    # Restart korunumu: skor bu süreçte hiç ölçülmemişken (bayat/0 skor)
+    # skor-çıkışı ASLA tetiklenmez (bracket SL/TP zaten korur)
+    bb.score = 0
+    assert bb.exit_reason("SQQQ", fresh_pos, now) is None, \
+        "Ölçülmemiş skorla pozisyon kapatıldı (restart bug'ı)!"
+
+    # Skor tez-bitti (canlı ölçümle) → her pozisyon kapanır
+    bb._last_update = now
+    bb.score = bb.cfg["score_exit"] - 5
+    assert "BEAR_SCORE_EXIT" in (bb.exit_reason("SQQQ", fresh_pos, now) or ""), "Skor-çıkışı çalışmadı!"
+
+    # Skor sağlıklı → 3x'te 10 gün zaman-stopuna takılır, 1x'te takılmaz (cap 15)
+    bb.score = bb.cfg["score_defense"] + 10
+    assert "BEAR_TIME_STOP" in (bb.exit_reason("SQQQ", old_pos, now) or ""), "3x zaman-stopu çalışmadı!"
+    assert bb.exit_reason("SH", old_pos, now) is None, "1x erken zaman-stopuna takıldı!"
+    assert bb.exit_reason("SQQQ", fresh_pos, now) is None, "Taze pozisyon yanlış kapandı!"
+    # entry_time bozuksa çökme yok
+    assert bb.exit_reason("SQQQ", {"entry_time": "bozuk"}, now) is None
+    print("     SCORE_EXIT + TIME_STOP(3x 7g / 1x 15g) + bozuk-tarih toleransı ✓")
+test("v4.11 bear çıkış kararları", test_v411_bear_exit_decisions)
+
+def test_v411_parking_directive_and_scan_exclusion():
+    """v4.11: parking direktifi (DEFENSE=pause, ATTACK=unwind) + ters-ETF'ler
+    tarama evreninden çıktı (BearBrain tekeli)."""
+    import types
+    bb = _make_bear_brain()
+    bb.mode = "OFF";     assert bb.parking_directive() is None
+    bb.mode = "WATCH";   assert bb.parking_directive() is None
+    bb.mode = "DEFENSE"; assert bb.parking_directive() == "pause"
+    bb.mode = "ATTACK";  assert bb.parking_directive() == "unwind"
+    bb.enabled = False
+    assert bb.parking_directive() is None, "Kapalı beyin direktif vermemeli!"
+
+    # Tarama dışlaması: BEAR rejiminde bile ters-ETF listeye girmez
+    from stock_bot import StockBot
+    from config import MARKET_REGIME_CONFIG
+    fake = types.SimpleNamespace(
+        screener=types.SimpleNamespace(scan_cache={}),
+        _market_regime="BEAR",
+    )
+    syms = StockBot._get_symbols_to_analyze(fake)
+    inverse = set(MARKET_REGIME_CONFIG.get("inverse_etf_symbols", []))
+    assert syms and not (set(syms) & inverse), f"Ters-ETF hâlâ taramada: {set(syms) & inverse}"
+
+    # Genişlik oranı: 5'ten az taze örnek → None; 6 örnekte 4 negatif → 4/6
+    from datetime import datetime as _dt, timedelta as _td
+    now = _dt.now()
+    fake2 = types.SimpleNamespace(_bear_breadth={
+        "A": (now, -10.0), "B": (now, -8.0), "C": (now, -6.0),
+        "D": (now, -20.0), "E": (now, 4.0), "F": (now, 12.0),
+        "G": (now - _td(hours=2), -30.0),  # bayat — sayılmaz
+    })
+    ratio = StockBot._bear_breadth_ratio(fake2)
+    assert abs(ratio - 4 / 6) < 1e-9, f"Genişlik oranı yanlış: {ratio}"
+    fake3 = types.SimpleNamespace(_bear_breadth={"A": (now, -10.0)})
+    assert StockBot._bear_breadth_ratio(fake3) is None, "Az örnekte None dönmeli!"
+    print("     Direktifler + tarama dışlaması + genişlik oranı ✓")
+test("v4.11 parking direktifi + tarama dışlaması", test_v411_parking_directive_and_scan_exclusion)
+
+
 # ============================================================
 # SONUÇ RAPORU
 # ============================================================

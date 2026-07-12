@@ -37,6 +37,10 @@ class IndexParkingManager:
         self.reserve_pct = float(config.get("index_parking_reserve_pct", 0.30))
         self.min_trade = float(config.get("index_parking_min_trade_usd", 50))
         self._last_rebalance = None
+        # v4.11 BearBrain etkileşimi: aynı-gün AL-SAT (PDT) engeli için alım
+        # günü izlenir; ATTACK çözülmesi günde 1 kez denenir
+        self._last_buy_date = None
+        self._bear_unwind_date = None
 
         enabled = bool(config.get("index_parking_enabled", False))
         # paper-first: LIVE'da çalışması için ekstra açık onay şart
@@ -94,6 +98,35 @@ class IndexParkingManager:
         except Exception as e:
             logger.debug(f"  Park self-heal kontrol hatası: {e}")
         today = date.today()
+
+        # 🐻 v4.11 BEAR BRAIN direktifi: düşen piyasada SPY betası tutup aynı
+        # anda ters-ETF almak kendini iptal eder (long-delta + short-delta =
+        # fee'ye çalışmak). DEFENSE → yeni park YOK (rezerv satışı serbest);
+        # ATTACK → sleeve tümüyle çözülür (nakit bear pozisyonuna açılır).
+        bear_directive = None
+        bear = getattr(self.bot, "bear_brain", None)
+        if bear is not None:
+            try:
+                bear_directive = bear.parking_directive()
+            except Exception:
+                bear_directive = None
+
+        if bear_directive == "unwind":
+            # Günde 1 deneme; SPY bugün alındıysa çözme (aynı-gün AL-SAT = PDT)
+            if self._bear_unwind_date != today and self._last_buy_date != today:
+                self._bear_unwind_date = today
+                qty, _price, mval = self._get_park_position()
+                if qty > 0 and mval > 0:
+                    try:
+                        self.bot.client.close_position(self.symbol)
+                        logger.info(
+                            f"  🅿️🐻 PARK BEAR-UNWIND: {self.symbol} sleeve çözüldü "
+                            f"({qty} pay ≈ ${mval:,.2f}) — düşüş modunda beta tutulmaz"
+                        )
+                    except Exception as e:
+                        logger.debug(f"  Park bear-unwind hatası: {e}")
+            return  # ATTACK sürerken normal rebalance (yeni park) yok
+
         if self._last_rebalance == today:
             return
         # Drawdown koruması: equity-floor ihlalinde yeni beta ekleme
@@ -110,6 +143,12 @@ class IndexParkingManager:
             if abs(delta) < self.min_trade:
                 return
             if delta > 0:
+                if bear_directive == "pause":
+                    logger.info(
+                        f"  🅿️🐻 PARK DURDU: BearBrain DEFENSE — yeni {self.symbol} "
+                        f"parkı yok (${delta:,.2f} likit kalıyor)"
+                    )
+                    return
                 self._buy(round(delta, 2))
             else:
                 self._sell(round(-delta, 2))
@@ -124,6 +163,7 @@ class IndexParkingManager:
                 side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
             )
             self.bot.client.submit_order(req)
+            self._last_buy_date = date.today()  # v4.11: aynı-gün unwind engeli (PDT)
             logger.info(f"  🅿️ PARK BUY {self.symbol}: ${notional:,.2f} (boş nakit → beta)")
         except Exception as e:
             logger.debug(f"  Park buy hatası: {e}")

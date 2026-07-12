@@ -16,10 +16,8 @@ Swing trading + sınırlı day trade stratejisi.
   - Pozisyon senkronizasyonu (restart-safe)
 """
 import os
-import sys
 import time
 import json
-import logging
 from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional
 
@@ -90,22 +88,14 @@ from utils.logger import logger
 
 
 # ============================================================
-# FLUSH STREAM HANDLER (Docker/Coolify log çıktısı)
+# LOG ÜÇLEMESİ FIX (v4.10)
+# ------------------------------------------------------------
+# Eski kod buraya root logger'a İKİNCİ bir stdout handler ekliyordu;
+# utils/logger'ın kendi console handler'ı + root'a propagation + (bir
+# bağımlılığın basicConfig'i) ile her satır docker loguna 3 KEZ yazılıyordu
+# (04-10 Tem loglarında kanıtlı). utils/logger artık propagate=False ve
+# kendi flush'lı stdout handler'ına sahip — root'a handler eklemek gereksiz.
 # ============================================================
-class FlushStreamHandler(logging.StreamHandler):
-    def emit(self, record):
-        super().emit(record)
-        self.flush()
-
-# Root logger'a flush handler ekle
-_root = logging.getLogger()
-if not any(isinstance(h, FlushStreamHandler) for h in _root.handlers):
-    fh = FlushStreamHandler(sys.stdout)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
-    ))
-    _root.addHandler(fh)
-    _root.setLevel(logging.INFO)
 
 
 class StockBot:
@@ -482,6 +472,8 @@ class StockBot:
                             continue
                         if sig["signal"] == "BUY" and BOT_MODE in ("long_only", "both"):
                             q_bought = self.executor.execute_buy(sym, sig_analysis, config)
+                            if q_bought:
+                                self._record_trade_votes(sym, sig.get("decision") or {})
                             # Kuyruk BUY'ında opsiyon — v4.9: yalnız hisse alımı gerçekleştiyse
                             if q_bought and self._options_enabled and sig.get("confidence", 0) >= 60:
                                 try:
@@ -496,6 +488,8 @@ class StockBot:
                                     pass
                         elif sig["signal"] == "SHORT" and BOT_MODE in ("short_only", "both"):
                             q_shorted = self.short_executor.execute_short(sym, sig_analysis, config, SHORT_CONFIG)
+                            if q_shorted:
+                                self._record_trade_votes(sym, sig.get("decision") or {})
                             # Kuyruk SHORT'unda PUT — v4.9: yalnız short gerçekten açıldıysa
                             if q_shorted and self._options_enabled and sig.get("confidence", 0) >= 60:
                                 try:
@@ -611,6 +605,13 @@ class StockBot:
         logger.info("  🌅 SABAH TARAMASI")
         logger.info("=" * 50)
 
+        # Earnings takvimini KOTA TAZEYKEN yenile (v4.10) — gün içindeki lazy
+        # yenileme AV kotası bittikten sonra denk gelip boş dönüyordu
+        try:
+            self.earnings_calendar.ensure_fresh()
+        except Exception as e:
+            logger.debug(f"  Earnings takvim yenileme hatası: {e}")
+
         # Makro analiz (VIX, petrol, faiz)
         try:
             macro = self.macro_analyzer.get_macro_score()
@@ -619,7 +620,11 @@ class StockBot:
                 logger.info(f"  Petrol: {macro['oil'].get('description', 'N/A')}")
             if "vix" in macro:
                 vix_data = macro["vix"]
-                vix_value = vix_data.get("value", 20)
+                # v4.10 BUG FIX: değer anahtarı "vix"tir, "value" DEĞİL — eski kod
+                # her gün varsayılan 20'yi okuyup rejimi kalıcı "normal"e çiviliyordu
+                # (gerçek VIX 16.4 iken bile; VIX 40 krizinde de defansife GEÇEMEZDİ).
+                # Veri yoksa/0 ise muhafazakâr 20 (normal) varsay.
+                vix_value = float(vix_data.get("vix") or 0) or 20.0
                 logger.info(f"  VIX: {vix_data.get('description', 'N/A')} ({vix_value:.1f})")
                 # Sektör rotasyonu güncelle
                 self.sector_rotator.update_vix(vix_value)
@@ -628,6 +633,7 @@ class StockBot:
                     f"  🔄 Sektör Rejim: {sr_status['regime'].upper()} | "
                     f"Max Poz: {sr_status['max_positions']} | "
                     f"Favori: {', '.join(sr_status['preferred_sectors']) or 'YOK'} | "
+                    f"Kısıtlı(×0.7): {', '.join(sr_status.get('reduced_sectors', [])) or 'YOK'} | "
                     f"Kaçın: {', '.join(sr_status['avoid_sectors']) or 'YOK'}"
                 )
         except Exception as e:
@@ -845,6 +851,10 @@ class StockBot:
                             return
 
                     bought = self.executor.execute_buy(symbol, analysis, config)
+                    if bought:
+                        # v4.10: ajan oyları yalnız GERÇEKLEŞEN işlemde kaydedilir —
+                        # record_outcome kapanışta bu kaydı çözümler (meta_labeler beslenir)
+                        self._record_trade_votes(symbol, decision)
 
                     # Opsiyon da ekle (güçlü sinyalde hisse + opsiyon birlikte)
                     # v4.9: yalnız hisse alımı GERÇEKLEŞTİYSE — executor'ın kendi
@@ -887,6 +897,8 @@ class StockBot:
                 if self._market_regime == "BEAR":
                     analysis["reasons"].append("🐻 BEAR_MODE")
                 shorted = self.short_executor.execute_short(symbol, analysis, config, SHORT_CONFIG)
+                if shorted:
+                    self._record_trade_votes(symbol, decision)
 
                 # SHORT sinyalinde PUT opsiyon da ekle — v4.9: yalnız short
                 # GERÇEKTEN açıldıysa. Eski kod execute_short'un rejim/kara-liste/
@@ -1020,22 +1032,35 @@ class StockBot:
                 sent_data, social_data, risk_data
             )
 
-            # Ajan tahminlerini kaydet (öz-değerlendirme için)
-            try:
-                if decision.get("signal") != "HOLD":
-                    self.agent_perf.record_prediction(
-                        symbol=symbol,
-                        agent_votes=decision.get("votes", []),
-                        coordinator_signal=decision["signal"],
-                    )
-            except Exception:
-                pass
+            # v4.10: ajan tahmini artık BURADA kaydedilmez. Eski kod her taramada
+            # (2dk'da bir, işlemsiz) yazıyordu → 4 günde 5.500+ asla çözümlenmeyecek
+            # null kayıt + record_outcome'un sondan-eşleşmesi işlem ANINDAKİ oyu
+            # değil rastgele geç bir taramayı yakalıyordu (yanlış kredi ataması).
+            # Kayıt yalnız işlem gerçekten açılınca yapılır (_record_trade_votes).
 
             return decision
 
         except Exception as e:
             logger.debug(f"  {symbol} ajan karar hatası: {e}")
             return {"signal": "HOLD", "confidence": 0}
+
+    def _record_trade_votes(self, symbol: str, decision: Dict):
+        """Gerçekleşen işlemin ajan oylarını kaydet (v4.10).
+
+        record_outcome kapanışta symbol'ün EN SON çözümsüz kaydını günceller;
+        kayıt yalnız işlem anında atıldığı için bu artık giriş-anındaki oy setidir
+        (eski her-tarama kaydında rastgele geç bir tarama yakalanıyordu).
+        """
+        try:
+            votes = decision.get("votes") or []
+            if votes:
+                self.agent_perf.record_prediction(
+                    symbol=symbol,
+                    agent_votes=votes,
+                    coordinator_signal=decision.get("signal", "BUY"),
+                )
+        except Exception as e:
+            logger.debug(f"  {symbol} oy kaydı hatası: {e}")
 
     def _build_risk_data(self, analysis: Dict, config: Dict) -> Dict:
         """Risk ajanı için veri hazırla."""
@@ -1245,6 +1270,15 @@ class StockBot:
 
             # PDT güncelle
             self.pdt_tracker.update_equity(equity)
+
+            # Canlılık dosyası (v4.10) — health_check "işlem yok"u değil BUNU
+            # ölçer: seçici bot günlerce işlem yapmayabilir ama döngüsü canlıdır
+            try:
+                with open(state_path("heartbeat.json"), "w") as _hb:
+                    json.dump({"ts": datetime.now().isoformat(),
+                               "equity": equity}, _hb)
+            except Exception:
+                pass
 
             # Periyodik pozisyon sync (her 10 heartbeat'te)
             if self._heartbeat_counter % 300 == 0:
@@ -1726,6 +1760,13 @@ class StockBot:
             self.position_manager.ensure_protective_stops(STOCK_CONFIG)
         except Exception as e:
             logger.debug(f"  Günlük koruma emri kontrolü hatası: {e}")
+
+        # Ajan performans dosyası bakımı (v4.10): çözümsüz/eski kayıtları buda —
+        # konteyner günlerce restart görmediği için açılış budaması yetmez
+        try:
+            self.agent_perf.prune()
+        except Exception as e:
+            logger.debug(f"  Agent perf budama hatası: {e}")
 
     def _emergency_close_all(self, reason: str):
         """KillSwitch tarafından çağrılır — tüm pozisyonları kapat."""

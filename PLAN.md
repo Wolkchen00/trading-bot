@@ -1,5 +1,5 @@
 # Trading Bot — Geliştirme Planı (v4.6 sonrası)
-_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-05 v4.8 "açık kapama" paketi_
+_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-11 v4.10 "giriş hunisi" denetimi_
 
 ## Mevcut durum (özet)
 - **LIVE** ($487 gerçek): **v4.8 CANLI** — `GÜVENE GÖRE $100-300` (yön-farkında yeni güven ölçeği: 50-59→$100, 60-69→$150, 70-79→$200, 80+→$300), kill %5, floor $414.
@@ -151,6 +151,74 @@ canlı `ws:` loglarından yapılır; backtest yalnız çıkış/gate mantığı 
 **Operasyonel:** paper kill dosyası + hayalet günlük baseline deploy sonrası
 temizlendi; Alpaca paper hesabının dashboard'dan resetlenmesi İhsan'da (bakiye
 $14.6k + PDT kısıtı öğrenme için dar).
+
+## v4.10 — Giriş hunisi denetimi (2026-07-11, "açıkları bul ve düzelt")
+08-10 Tem (v4.9 sonrası 4 işlem günü) canlı+paper log denetimi. Testler 97/97.
+
+**Denetim bulguları:**
+- LIVE: 4 günde SIFIR yeni giriş (tek işlem: 09 Tem META yönetim satışı; equity
+  $487→$489, kazanç = SPY park betası). Remap ÇALIŞTI — eşiği geçen sinyaller
+  VARDI ama HEPSİ seri kapılara öldü: MARA guven 50-62 (09 Tem, 3.5 saat kesintisiz)
+  → "SEKTÖR ROTASYON normal rejiminde kaçınılıyor"; AMD 56 (09 Tem 14:03) → MTF
+  4h düşüş; COIN ~55 (10 Tem) → EMA200. Güven zirvesi ile kapıların açık anı
+  hiç çakışmadı.
+- 🔴 VIX ANAHTAR BUG'I: `vix_data.get("value", 20)` — macro dict'in anahtarı
+  `"vix"`; her gün varsayılan 20 okunuyordu → sektör rejimi KALICI "normal"
+  (log kanıtı: `VIX: 16.40 ... (20.0)`). Çift yönlü arıza: normalde EV+Crypto
+  kalıcı yasak + gerçek VIX-40 krizinde defansife GEÇEMEZDİ.
+- 🔴 "normal" rejim avoid listesi (EV+CryptoMining) piyasanın VARSAYILAN halinde
+  20 sembolün 6'sını (momentum katmanı) kalıcı yasaklıyordu; VIX 14.9→15.1
+  geçişi 6 sembolü tam-boy↔tam-yasak arasında çeviriyordu (uçurum etkisi).
+- 🔴 EARNINGS TAKVİMİ BOŞ: AV kota bittikten sonra (tarama ortası) yenilenince
+  200+header-only CSV dönüyor, kod bunu "başarılı" sayıp DOLU cache üstüne {}
+  yazıyordu → temmuz kazanç sezonu öncesi gate kör (fail-open). Manuel test
+  (kota tazeyken): 5.680 satır, tüm evren sembolleri mevcut — API sağlam.
+- 🔴 AJAN ÖĞRENMESİ ÖLÜ: record_prediction her taramada (işlemsiz) yazıyordu →
+  4 günde 5.515 kayıt, TAMAMI actual_outcome:null (paper 1.4MB); outcome
+  eşleşmesi giriş-anı oyunu değil rastgele geç taramayı yakalıyordu; cleanup_old
+  hiç çağrılmıyordu. meta_labeler'ın beklediği WIN/LOSS satırları hiç oluşmuyordu.
+- 🔴 PAPER DONUK: min_conf 30'a rağmen 4 günde 1 gerçek işlem (AMD, -$17).
+  Blokerler: MARA sektör ~100×, META loss-streak ~96× (2 zarar → conf≥70 şartı,
+  PF~0.96 beklentili öğrenme hesabında yapısal çelişki), TSLA sektör ~57×,
+  SMCI/SOFI EMA200. Bu hızla meta_labeler 30-50 işlem kapısı AYLAR sürerdi.
+- ⚠️ Log ÜÇLEMESİ: utils/logger console + stock_bot'un root handler'ı + bir
+  bağımlılığın basicConfig'i → her satır 3× (disk + analiz kirliliği).
+- ⚠️ Health cron 10 Tem'de sağlıklı-ama-seçici canlıya "32h işlem yok 🔴 redeploy
+  edin" dedi (işlemsizlik ≠ ölülük).
+
+**Yapılan düzeltmeler (koruma kilitleri GEVŞETİLMEDİ):**
+1. **VIX anahtarı fix** — `get("vix") or 20`; rejim artık gerçek VIX'i izliyor
+   (bugün 16 → normal; <15 → low; kriz → high/extreme tepkisi geri geldi).
+2. **Sektör rotasyonu "reduced" katmanı** — normal rejimde EV+CryptoMining
+   hard-veto DEĞİL boyut ×0.7 (MARA-62 artık $150 bandı × 0.7 = $105 girer);
+   high/extreme VIX hard-avoid AYNEN. Bant (LIVE) boyut yolu sector_weight'i
+   artık uyguluyor (eski kod yalnız Kelly yolunda çarpıyordu); weight_boost
+   bant dolarlarını YUKARI esnetemez (İhsan'ın $100-300 sözleşmesi tavan).
+3. **Earnings boş-CSV koruması** — boş sonuç = başarısız fetch (eski takvim
+   korunur, fetched_at ilerlemez, 30dk retry + 7g bayat-tolerans devrede) +
+   sabah taramasında `ensure_fresh()` (kota TAZEyken, 08:00 UTC) → gün-içi lazy
+   yenileme kota-sonrası boşluğa denk gelmiyor. Mevcut zehirli {} cache ilk
+   sabah taramasında kendini onarır.
+4. **Ajan öğrenme kaydı işlem-anına taşındı** — `_record_trade_votes` yalnız
+   `execute_buy/execute_short` True dönünce (kuyruk yolları dahil); outcome artık
+   giriş-anı oy setine yazılır (doğru kredi ataması) → meta_labeler beslenmeye
+   başlar. `prune()`: çözümsüz >3g + çözümlü >90g kayıtlar açılışta ve günlük
+   reset'te budanır (mevcut 5.5k null migrasyonda temizlenir).
+5. **Paper loss-streak öğrenme ayarı** — PAPER_AGGRESSIVE: warn 999 (conf-70
+   şartı kapalı), halt 6 zarar / 6 saat (fren duruyor); kill switch -%5/gün aynen.
+   **LIVE warn 2 / halt 4 / 24h / conf-70 DEĞİŞMEDİ.**
+6. **Log üçlemesi fix** — TradingBot logger `propagate=False` + stock_bot'un
+   root-handler bloğu kaldırıldı → satır başına tek emisyon.
+7. **Health canlılık = heartbeat** — bot her heartbeat'te `state/heartbeat.json`
+   yazar; health_check döngü canlıysa işlemsizliği ℹ️ bilgi notuna düşürür
+   (yalancı 🔴 bitti), heartbeat >30dk eskiyse gerçek 🔴 "DURMUŞ" verir.
+   Ek: notional emirlerin $0.00 görünme bug'ı fix.
+
+**Beklenen davranış değişimi:** canlı hâlâ seçici (min_conf 50 + EMA200 + MTF +
+VOL + R:R + earnings kapıları aynen) ama MARA-tipi çok-saatlik mutabakat artık
+küçük boyutla ($70-105) işleme dönüşebilir; paper örnek akışı açılır (hedef:
+FAZ 2'nin 30-50 işlem kapısını haftalar içinde doldurmak). Eşik/bant İNCE-AYARI
+için 1 hafta daha ws dağılımı toplanacak — v4.9'daki plan geçerli.
 
 ## FAZ 1 — v4.7 canlıda (deploy sonrası ilk hafta)
 - İlk alımların güven bandına uyduğunu doğrula (log: `PositionSizer [LONG-KADEMELI]: $... | GÜVEN x → $y`).

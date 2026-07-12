@@ -36,6 +36,8 @@ class AgentPerformanceTracker:
         "RiskAgent": 0.20,
     }
 
+    UNRESOLVED_TTL_DAYS = 3    # outcome'suz kayıt bu süreden sonra çöptür
+
     def __init__(self, history_file: str = None):
         if history_file is None:
             try:
@@ -45,6 +47,10 @@ class AgentPerformanceTracker:
                 history_file = self.HISTORY_FILE
         self.HISTORY_FILE = history_file  # instance, live/paper izole
         self.predictions: Dict[str, List[Dict]] = self._load()
+        # v4.10 MİGRASYON: eski kod her taramada (işlemsiz) tahmin yazıyordu →
+        # 5.500+ sonsuza dek null kalacak kayıt birikti (paper 1.4MB). Açılışta
+        # buda; yeni akışta tahmin yalnız GERÇEK işlem açılınca kaydedilir.
+        self.prune()
         total_preds = sum(len(v) for v in self.predictions.values())
         logger.info(
             f"AgentPerformanceTracker başlatıldı — "
@@ -272,3 +278,38 @@ class AgentPerformanceTracker:
         if cleaned > 0:
             self._save()
             logger.info(f"AgentPerformance: {cleaned} eski kayıt temizlendi")
+
+    def prune(self, unresolved_days: int = None, resolved_days: int = 90):
+        """Çöp kayıtları buda (v4.10) — açılışta + günlük reset'te çağrılır.
+
+        İki sınıf temizlenir:
+          1. actual_outcome=None ve unresolved_days'ten eski: bunlara outcome
+             hiçbir zaman yazılmayacak (eşleşecekleri işlem çoktan geçti);
+             record_outcome'un sondan-eşleşmesini de kirletiyorlar.
+          2. Çözümlenmiş ama resolved_days'ten eski: LOOKBACK penceresi (30g)
+             dışında kaldıklarından ağırlık hesabına girmiyorlar.
+        """
+        if unresolved_days is None:
+            unresolved_days = self.UNRESOLVED_TTL_DAYS
+        now = datetime.now()
+        unresolved_cutoff = (now - timedelta(days=unresolved_days)).isoformat()
+        resolved_cutoff = (now - timedelta(days=resolved_days)).isoformat()
+        pruned = 0
+
+        for agent_name in list(self.predictions.keys()):
+            before = len(self.predictions[agent_name])
+            kept = []
+            for p in self.predictions[agent_name]:
+                ts = p.get("timestamp", "")
+                if p.get("actual_outcome") is None:
+                    if ts >= unresolved_cutoff:
+                        kept.append(p)
+                elif ts >= resolved_cutoff:
+                    kept.append(p)
+            self.predictions[agent_name] = kept
+            pruned += before - len(kept)
+
+        if pruned > 0:
+            self._save()
+            logger.info(f"AgentPerformance: {pruned} çöp kayıt budandı "
+                        f"(çözümsüz>{unresolved_days}g / çözümlü>{resolved_days}g)")

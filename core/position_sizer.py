@@ -89,6 +89,10 @@ class PositionSizer:
         bands = config.get("conf_position_bands") or []
         fixed_usd = float(config.get("fixed_position_usd", 0) or 0)
         if side == "LONG" and (bands or fixed_usd > 0):
+            # v4.10: sektör rotasyonunun "avoid" ağırlığı (0) bant modunda da
+            # geçerli — should_buy zaten bloklar ama çift emniyet.
+            if sector_weight <= 0:
+                return self._empty_result("Sektör ağırlığı 0 — rejimde kaçınılan sektör")
             if bands:
                 target_usd = 0.0
                 for band_conf, band_usd in bands:
@@ -102,6 +106,14 @@ class PositionSizer:
             else:
                 target_usd = fixed_usd
                 mode_str = f"SABİT ${fixed_usd:.0f}"
+            # v4.10: kısıtlı sektör (reduced, ×0.7) bant boyutunu da küçültür —
+            # eski kod sector_weight'i yalnız Kelly yolunda uyguluyordu, bant
+            # yolu (LIVE) sektör ayarını tamamen yok sayıyordu. Yalnız KÜÇÜLTME
+            # uygulanır; weight_boost bant dolarlarını (İhsan'ın sözleşmesi)
+            # yukarı esnetemez.
+            if sector_weight < 1.0:
+                target_usd *= sector_weight
+                mode_str += f" ×sektör {sector_weight:.2f}"
             cap_pct = float(config.get("fixed_position_max_pct", 0.55))
             max_pos_usd = config.get("max_position_usd", 500)
             position_usd = min(target_usd, equity * cap_pct, max_pos_usd)

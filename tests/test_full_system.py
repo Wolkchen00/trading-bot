@@ -1111,6 +1111,173 @@ test("v4.9 opsiyon snapshot str-bug fix", test_v49_snapshot_request_object)
 
 
 # ============================================================
+# 16. v4.10 DÜZELTMELERİ (11 Tem denetimi)
+# ============================================================
+section("16. v4.10 DÜZELTMELERİ")
+
+def test_v410_sector_rotation_reduced():
+    """v4.10: normal rejimde EV/CryptoMining hard-veto DEĞİL, ×0.7 kısıtlı.
+    08-10 Tem: MARA guven 50-62 (canlının en güçlü sinyali) 'normal rejiminde
+    kaçınılıyor' bloğuyla öldü — 4 günde 0 canlı giriş."""
+    from core.sector_rotation import SectorRotator
+    sr = SectorRotator()
+    sr.update_vix(18)  # normal rejim
+    assert sr.current_regime == "normal", f"VIX 18 → normal değil: {sr.current_regime}"
+    assert sr.should_buy("MARA"), "MARA normal rejimde alınabilir olmalı (reduced)!"
+    assert sr.should_buy("TSLA"), "TSLA normal rejimde alınabilir olmalı (reduced)!"
+    w = sr.get_weight_multiplier("MARA")
+    assert 0 < w < 1.0, f"MARA kısıtlı ağırlık ×0.7 bekleniyor: {w}"
+    # Yüksek VIX'te koruma AYNEN: hard-avoid geri gelir
+    sr.update_vix(30)
+    assert sr.current_regime == "high", f"VIX 30 → high değil: {sr.current_regime}"
+    assert not sr.should_buy("MARA"), "MARA yüksek VIX'te bloklanmalı!"
+    assert not sr.should_buy("AMD"), "Semiconductors yüksek VIX'te bloklanmalı!"
+    sr.update_vix(40)
+    assert sr.current_regime == "extreme", "VIX 40 → extreme değil!"
+    print("     Normal: MARA/TSLA izinli ×0.7 | VIX 30: hard-avoid | VIX 40: extreme ✓")
+test("v4.10 sektör rotasyonu reduced katmanı", test_v410_sector_rotation_reduced)
+
+def test_v410_vix_key_fix():
+    """v4.10: stock_bot VIX değerini 'vix' anahtarından okumalı — 'value' anahtarı
+    hiç var olmadı, her gün varsayılan 20 okunup rejim 'normal'e çivileniyordu."""
+    src_path = os.path.join(PROJECT_ROOT, "stock_bot.py")
+    with open(src_path, encoding="utf-8") as f:
+        src = f.read()
+    assert 'vix_data.get("value"' not in src, "VIX hâlâ olmayan 'value' anahtarından okunuyor!"
+    assert 'vix_data.get("vix")' in src, "VIX 'vix' anahtarından okunmuyor!"
+    # macro_data'nın gerçekten bu anahtarla döndüğünü doğrula (statik — ağ çağrısı yok)
+    with open(os.path.join(PROJECT_ROOT, "core", "macro_data.py"), encoding="utf-8") as f:
+        macro_src = f.read()
+    assert '"vix": round(current_vix' in macro_src, "macro vix dict'i 'vix' anahtarıyla dönmüyor!"
+    print("     VIX 'vix' anahtarından okunuyor (kalıcı-normal bug'ı fix) ✓")
+test("v4.10 VIX anahtar bug fix", test_v410_vix_key_fix)
+
+def test_v410_band_sector_weight():
+    """v4.10: bant (LIVE) boyut yolu sector_weight'i uygular — kısıtlı sektör
+    $150 bandını $105'e indirir; boost bandı YUKARI esnetemez; avoid=0 boş sonuç."""
+    from core.position_sizer import PositionSizer
+    ps = PositionSizer()
+    cfg = {
+        "conf_position_bands": [[50, 100], [60, 150], [70, 200], [80, 300]],
+        "fixed_position_max_pct": 0.62,
+        "max_position_usd": 300,
+        "min_trade_value": 10,
+    }
+    # Kısıtlı sektör: 60 bandı ($150) × 0.7 = $105
+    r = ps.calculate_position_size(487, 20.0, 0.5, cfg, side="LONG",
+                                   sector_weight=0.7, confidence=62)
+    assert abs(r["position_usd"] - 105.0) < 0.01, f"×0.7 uygulanmadı: {r['position_usd']}"
+    # Nötr sektör: bant aynen
+    r2 = ps.calculate_position_size(487, 20.0, 0.5, cfg, side="LONG",
+                                    sector_weight=1.0, confidence=62)
+    assert abs(r2["position_usd"] - 150.0) < 0.01, f"Bant bozuldu: {r2['position_usd']}"
+    # Boost bandı yukarı ESNETEMEZ (İhsan'ın dolar sözleşmesi)
+    r3 = ps.calculate_position_size(487, 20.0, 0.5, cfg, side="LONG",
+                                    sector_weight=1.2, confidence=62)
+    assert abs(r3["position_usd"] - 150.0) < 0.01, f"Boost bandı şişirdi: {r3['position_usd']}"
+    # Avoid (0) → boş sonuç (çift emniyet)
+    r4 = ps.calculate_position_size(487, 20.0, 0.5, cfg, side="LONG",
+                                    sector_weight=0.0, confidence=62)
+    assert r4["position_usd"] == 0, f"Avoid sektörde boyut sıfır olmalı: {r4['position_usd']}"
+    print("     Bant: ×0.7=$105, nötr=$150, boost şişirmez, avoid=$0 ✓")
+test("v4.10 bant yolunda sektör ağırlığı", test_v410_band_sector_weight)
+
+def test_v410_earnings_empty_csv_guard():
+    """v4.10: boş CSV (AV kota) dolu takvimi EZEMEZ — 09-10 Tem'de {} yazılıp
+    temmuz kazanç sezonu öncesi gate kör kalmıştı."""
+    from core import earnings_calendar as ec_mod
+    from datetime import datetime as _dt, timedelta as _td
+    ec = ec_mod.EarningsCalendar.__new__(ec_mod.EarningsCalendar)  # __init__'siz (disk I/O yok)
+    ec.alpha_vantage_key = "test"
+    ec._calendar = {"AAPL": ["2026-07-30"]}
+    ec._fetched_at = _dt.now() - _td(hours=48)   # bayat → refresh dener
+    ec._last_attempt = _dt.min
+    ec._warned_no_data = False
+    ec._cache_file = os.path.join(PROJECT_ROOT, "tests", "_tmp_earnings_test.json")
+
+    class _FakeResp:
+        status_code = 200
+        text = "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\r\n"  # header-only
+    _orig_get = ec_mod.requests.get
+    ec_mod.requests.get = lambda *a, **k: _FakeResp()
+    try:
+        ec._refresh_if_needed()
+    finally:
+        ec_mod.requests.get = _orig_get
+        try:
+            os.remove(ec._cache_file)
+        except OSError:
+            pass
+    assert ec._calendar == {"AAPL": ["2026-07-30"]}, f"Boş CSV takvimi ezdi: {ec._calendar}"
+    assert (_dt.now() - ec._fetched_at).total_seconds() > 3600, "fetched_at ilerletildi (bayat-tolerans bozulur)!"
+    print("     Boş CSV → eski takvim korunur, fetched_at ilerlemez ✓")
+test("v4.10 earnings boş-CSV cache koruması", test_v410_earnings_empty_csv_guard)
+
+def test_v410_agent_perf_prune():
+    """v4.10: çözümsüz kayıtlar 3 günde budanır; taze + çözümlü korunur.
+    (Eski akış 4 günde 5.500+ asla-çözülmeyecek null kayıt biriktirdi.)"""
+    import tempfile
+    from core.agent_performance import AgentPerformanceTracker
+    from datetime import datetime as _dt, timedelta as _td
+    tmp = os.path.join(tempfile.gettempdir(), "agent_perf_test_v410.json")
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    t = AgentPerformanceTracker(history_file=tmp)
+    old_ts = (_dt.now() - _td(days=5)).isoformat()
+    fresh_ts = _dt.now().isoformat()
+    t.predictions = {
+        "TechAgent": [
+            {"symbol": "OLD", "predicted_signal": "BUY", "confidence": 50,
+             "coordinator_signal": "BUY", "actual_outcome": None, "timestamp": old_ts, "correct": None},
+            {"symbol": "FRESH", "predicted_signal": "BUY", "confidence": 50,
+             "coordinator_signal": "BUY", "actual_outcome": None, "timestamp": fresh_ts, "correct": None},
+            {"symbol": "DONE", "predicted_signal": "BUY", "confidence": 50,
+             "coordinator_signal": "BUY", "actual_outcome": "WIN", "timestamp": old_ts, "correct": True},
+        ]
+    }
+    t.prune()
+    syms = [p["symbol"] for p in t.predictions["TechAgent"]]
+    assert "OLD" not in syms, "5 günlük çözümsüz kayıt budanmadı!"
+    assert "FRESH" in syms, "Taze çözümsüz kayıt yanlışlıkla budandı!"
+    assert "DONE" in syms, "Çözümlü kayıt yanlışlıkla budandı!"
+    # Outcome akışı: en son çözümsüz kayıt çözümlenir
+    t.record_outcome("FRESH", "WIN", pnl=12.0)
+    fresh_rec = [p for p in t.predictions["TechAgent"] if p["symbol"] == "FRESH"][0]
+    assert fresh_rec["actual_outcome"] == "WIN" and fresh_rec["correct"] is True
+    os.remove(tmp)
+    print("     Prune: eski-null gitti, taze+çözümlü kaldı; outcome çözümleme ✓")
+test("v4.10 agent perf budama + outcome", test_v410_agent_perf_prune)
+
+def test_v410_paper_loss_streak_and_logging():
+    """v4.10: paper'da loss-streak warn kapalı (999) — 2 zarar sonrası conf-70
+    şartı paper'ı donduruyordu (META ~96 blok); LIVE değerleri DEĞİŞMEDİ.
+    + TradingBot logger'ı root'a propagate ETMEZ (log üçlemesi fix)."""
+    import importlib, sys as _sys
+    saved = _sys.modules.pop("config", None)
+    try:
+        fresh = importlib.import_module("config")
+        pa = fresh.PAPER_AGGRESSIVE_CONFIG
+        assert pa.get("loss_streak_warn") == 999, "Paper loss_streak_warn 999 değil!"
+        assert pa.get("loss_streak_halt") == 6, "Paper loss_streak_halt 6 değil!"
+        # LIVE koruma kilidi aynen (STOCK_CONFIG taban değerleri)
+        assert fresh.STOCK_CONFIG["loss_streak_warn"] == 2, "LIVE loss_streak_warn değişmiş!"
+        assert fresh.STOCK_CONFIG["loss_streak_halt"] == 4, "LIVE loss_streak_halt değişmiş!"
+        assert fresh.STOCK_CONFIG["loss_streak_elevated_conf"] == 70, "LIVE elevated_conf değişmiş!"
+    finally:
+        _sys.modules.pop("config", None)
+        if saved is not None:
+            _sys.modules["config"] = saved
+    from utils.logger import logger as _lg
+    assert _lg.propagate is False, "TradingBot logger'ı hâlâ root'a propagate ediyor (üçleme)!"
+    # stock_bot'taki eski root-handler bloğu kaldırıldı mı?
+    with open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8") as f:
+        src = f.read()
+    assert "_root.addHandler" not in src, "stock_bot hâlâ root'a handler ekliyor!"
+    print("     Paper warn=999/halt=6, LIVE kilit aynen; propagate=False ✓")
+test("v4.10 paper loss-streak + log üçlemesi", test_v410_paper_loss_streak_and_logging)
+
+
+# ============================================================
 # SONUÇ RAPORU
 # ============================================================
 print("\n" + "=" * 60)

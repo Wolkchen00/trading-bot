@@ -679,4 +679,15 @@ PAPER_AGGRESSIVE_CONFIG = {
 
     # === SIGNAL QUEUE (paper'da AÇIK — pullback girişi paper-first denenir) ===
     "pullback_queue_enabled": True,
+
+    # === KAYIP SERİSİ (v4.10 — paper'da öğrenme akışını dondurmasın) ===
+    # 08-10 Tem kanıtı: paper 2 ardışık zarardan sonra her giriş için güven ≥70
+    # istiyordu (META ~96 kez bundan bloklandı) → 4 günde 1 işlem. Paper'ın işi
+    # ÖRNEK ÜRETMEK (meta_labeler 30-50 kapalı işlem bekliyor) ve beklenen PF
+    # ~0.96'yla zarar serisi kaçınılmaz; sermaye koruması DEĞİL (sahte para,
+    # kill-switch -%5/gün freni ayrıca duruyor). LIVE değerleri DEĞİŞMEDİ
+    # (warn 2 / halt 4 / 24h — İhsan'ın koruma kilidi aynen).
+    "loss_streak_warn": 999,        # güven-yükseltme fiilen kapalı
+    "loss_streak_halt": 6,          # 6 ardışık zarar → yine fren
+    "loss_streak_halt_hours": 6,    # 24h değil 6h — öğrenme günü çöpe gitmesin
 }

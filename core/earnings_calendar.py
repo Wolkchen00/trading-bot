@@ -139,6 +139,19 @@ class EarningsCalendar:
             for sym in new_cal:
                 new_cal[sym].sort()
 
+            # v4.10 CACHE ZEHİRLENMESİ FIX: AV, dakika/gün kotası dolunca 200 +
+            # header-only (boş) CSV dönebiliyor. Eski kod bunu "başarılı yenileme"
+            # sayıp DOLU cache'in üstüne {} yazıyordu — 09-10 Tem'de canlı+paper
+            # "0 sembol" ile kör kaldı (temmuz kazanç sezonu kapıdayken). Boş
+            # sonuç = başarısız fetch: eski takvim korunur, fetched_at ilerlemez
+            # (bayat-cache toleransı + 30dk retry devrede kalır).
+            if not new_cal:
+                logger.warning(
+                    "Earnings takvimi BOŞ döndü (muhtemel AV kota/limit) — "
+                    f"{'eski takvim korunuyor' if self._calendar else 'gate fail-open'}"
+                )
+                return
+
             self._calendar = new_cal
             self._fetched_at = datetime.now()
             self._warned_no_data = False
@@ -149,6 +162,16 @@ class EarningsCalendar:
             )
         except Exception as e:
             logger.warning(f"Earnings takvim fetch hatası: {e} — mevcut cache ile devam")
+
+    def ensure_fresh(self):
+        """Takvimi gerekiyorsa yenile — sabah taraması çağırır (v4.10).
+
+        Amaç: yenilemeyi AV kotası TAZEyken (pre-market, henüz haber/overview
+        çağrıları kotayı yakmadan) yapmak. Eski akışta ilk yenileme tarama
+        ortasında (ilk gate kontrolünde) tetikleniyordu; o saatte kota çoktan
+        bitmiş oluyor ve boş CSV dönüyordu.
+        """
+        self._refresh_if_needed()
 
     # ------------------------------------------------------------
     # Sorgular

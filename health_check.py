@@ -92,6 +92,29 @@ def check_health(alert_hours: float = 12.0):
     except Exception as e:
         p(f"\n[POZISYONLAR] HATA: {e}")
 
+    # === BOT DÖNGÜSÜ CANLI MI? (v4.10 — heartbeat dosyası) ===
+    # "Son işlem X saat önce" bot SEÇİCİLİĞİNİ ölçer, canlılığını değil: canlı
+    # bot tasarım gereği günlerce işlem yapmayabilir (10 Tem: 32h işlemsiz diye
+    # sahte 🔴 "redeploy edin" üretti — bot sapasağlam tarıyordu). Asıl canlılık
+    # sinyali stock_bot'un her heartbeat'te yazdığı state dosyasıdır.
+    loop_alive = None  # None = dosya yok (eski sürüm) → eski davranışa düş
+    try:
+        from config import state_path
+        hb_file = state_path("heartbeat.json")
+        if os.path.exists(hb_file):
+            import json as _json
+            with open(hb_file) as f:
+                hb = _json.load(f)
+            hb_ts = datetime.fromisoformat(hb.get("ts", ""))
+            hb_age_min = (datetime.now() - hb_ts).total_seconds() / 60
+            # Hafta sonu/gece bot piyasa beklerken heartbeat yine atar (ana döngü
+            # sleep'li de olsa dakikalar mertebesinde) — 30 dk tolerans yeterli
+            loop_alive = hb_age_min < 30
+            p(f"\n[BOT DÖNGÜSÜ] son heartbeat {hb_age_min:.0f} dk önce "
+              f"→ {'CANLI' if loop_alive else 'DURMUŞ'}")
+    except Exception as e:
+        p(f"\n[BOT DÖNGÜSÜ] okunamadı: {e}")
+
     # === SON EMIRLER ===
     bot_alive = False
     hours_since_last = None
@@ -110,8 +133,12 @@ def check_health(alert_hours: float = 12.0):
             side = o.side.value
             sym = o.symbol
             price = float(o.filled_avg_price) if o.filled_avg_price else 0
-            qty = float(o.qty) if o.qty else 0
+            # v4.10: notional (dolar-bazlı) emirlerde qty alanı boş gelir —
+            # filled_qty > qty > notional sırasıyla dene ($0.00 satırları fix)
+            qty = float(getattr(o, "filled_qty", None) or o.qty or 0)
             val = qty * price
+            if val == 0 and getattr(o, "notional", None):
+                val = float(o.notional)
             p(f"  {ts} {side:4s} {sym:12s} ${val:>8.2f}")
 
         # Son islem ne zaman? (v4.9: hafta sonu saatleri sayılmaz)
@@ -132,9 +159,23 @@ def check_health(alert_hours: float = 12.0):
     except Exception as e:
         p(f"\n[EMIRLER] HATA: {e}")
 
-    # === SONUC ===
+    # === SONUC (v4.10: canlılık birincil, işlemsizlik bilgilendirme) ===
     p(f"\n{'=' * 60}")
-    if bot_alive:
+    if loop_alive:
+        # Döngü canlı → bot SAĞLIKLI; işlemsizlik yalnız bilgi notu
+        if bot_alive:
+            p(f"  ✅ BOT SAGLIKLI — son islem {hours_since_last:.1f}h once")
+        elif hours_since_last is not None:
+            p(f"  ✅ BOT SAGLIKLI (döngü canlı) — ℹ️ {hours_since_last:.1f}h'dir "
+              f"islem yok (seçici mod; eşik/kapı bekliyor)")
+        else:
+            p(f"  ✅ BOT SAGLIKLI (döngü canlı) — ℹ️ son 7 günde hiç işlem yok")
+        bot_alive = True
+    elif loop_alive is False:
+        p(f"  🔴 BOT DURMUŞ — heartbeat 30dk+ eski!")
+        p(f"     >> Coolify kontrol edin veya botu yeniden deploy edin")
+        bot_alive = False
+    elif bot_alive:
         p(f"  ✅ BOT SAGLIKLI — son islem {hours_since_last:.1f}h once")
     elif hours_since_last is not None:
         p(f"  🔴 BOT SORUNLU — {hours_since_last:.1f}h'dir islem yok! (limit: {alert_hours}h)")

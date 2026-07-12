@@ -28,6 +28,10 @@ def setup_logger(name: str = "TradingBot") -> logging.Logger:
 
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)  # Logger seviyesi en düşük, handler'lar filtreler
+    # v4.10: root'a propagation KAPALI — root'taki ek handler'lar (eski stock_bot
+    # bloğu + bağımlılıkların basicConfig'i) her satırı 3 kez bastırıyordu.
+    # Tek çıkış noktası: aşağıdaki console + file handler.
+    logger.propagate = False
 
     # Format — PID eklendi (çift instance tespiti için)
     pid = os.getpid()

@@ -332,6 +332,9 @@ class StockBot:
 
                 # Heartbeat
                 self._heartbeat_counter += 1
+                self._touch_liveness()  # v4.10: her turda (kapalı piyasada tur 60s
+                # sürer; 30-turda-bir yazım dosyayı health_check'in 30dk tazelik
+                # eşiğinin tam sınırına getirip alarm flap'ine yol açıyordu)
                 if self._heartbeat_counter % config.get("heartbeat_interval", 30) == 0:
                     self._log_heartbeat()
 
@@ -1237,6 +1240,17 @@ class StockBot:
             return True
         return False
 
+    def _touch_liveness(self):
+        """Canlılık dosyası (v4.10) — health_check "işlem yok"u değil BUNU ölçer:
+        seçici bot günlerce işlem yapmayabilir ama döngüsü canlıdır. Her ana-döngü
+        turunda yazılır (60 byte; kapalı piyasada ~60sn'de bir)."""
+        try:
+            with open(state_path("heartbeat.json"), "w") as _hb:
+                json.dump({"ts": datetime.now().isoformat(),
+                           "equity": getattr(self, "equity", 0)}, _hb)
+        except Exception:
+            pass
+
     def _log_heartbeat(self):
         """Gelişmiş heartbeat logu."""
         try:
@@ -1270,15 +1284,6 @@ class StockBot:
 
             # PDT güncelle
             self.pdt_tracker.update_equity(equity)
-
-            # Canlılık dosyası (v4.10) — health_check "işlem yok"u değil BUNU
-            # ölçer: seçici bot günlerce işlem yapmayabilir ama döngüsü canlıdır
-            try:
-                with open(state_path("heartbeat.json"), "w") as _hb:
-                    json.dump({"ts": datetime.now().isoformat(),
-                               "equity": equity}, _hb)
-            except Exception:
-                pass
 
             # Periyodik pozisyon sync (her 10 heartbeat'te)
             if self._heartbeat_counter % 300 == 0:

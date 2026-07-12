@@ -561,6 +561,12 @@ BEAR_BRAIN_CONFIG = {
     "max_entries_per_day": 1,        # canlı: günde 1 giriş (PDT-dostu, churn'süz)
     "paper_max_entries_per_day": 2,
 
+    # v4.11.2 — İhsan 12 Tem "iki taraftan kazanırız": iki taraf TAM aktif
+    "defense_parking_unwind": True,  # DEFENSE'te SPY sleeve de çözülür (eskiden
+                                     # yalnız yeni park duruyordu → net-LONG kalınıyordu)
+    "attack_rotation": True,         # ATTACK'a tırmanışta SH kapat → SQQQ terfisi
+                                     # (satış PDT korumalı: SH aynı gün alındıysa yarın)
+
     # Boyut bantları: [min_skor, $] — skoru karşılayan EN YÜKSEK bant
     # (canlı $487: DEFENSE $100≈%20 equity; ATTACK $150 3x ≈ $450 efektif
     # short-delta ≈ equity'nin ~%92'si — İhsan'ın istediği yüksek risk/kazanç)

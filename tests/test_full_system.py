@@ -1406,8 +1406,18 @@ def test_v411_parking_directive_and_scan_exclusion():
     bb = _make_bear_brain()
     bb.mode = "OFF";     assert bb.parking_directive() is None
     bb.mode = "WATCH";   assert bb.parking_directive() is None
-    bb.mode = "DEFENSE"; assert bb.parking_directive() == "pause"
+    # v4.11.2: DEFENSE de unwind (İhsan "iki taraftan kazanırız"); bayrak
+    # kapatılırsa eski "pause" davranışına döner
+    bb.mode = "DEFENSE"; assert bb.parking_directive() == "unwind"
+    bb.cfg["defense_parking_unwind"] = False
+    assert bb.parking_directive() == "pause", "Bayrak kapalıyken DEFENSE=pause olmalı!"
+    bb.cfg["defense_parking_unwind"] = True
     bb.mode = "ATTACK";  assert bb.parking_directive() == "unwind"
+    # Histerezis bandı: mod düştü ama bear pozisyonu açık → yeni park yok
+    bb.mode = "WATCH"
+    bb.bot.positions = {"SH": {"qty": 3}}
+    assert bb.parking_directive() == "pause", "Açık bear pozisyonuyla re-park engellenmedi!"
+    bb.bot.positions = {}
     bb.enabled = False
     assert bb.parking_directive() is None, "Kapalı beyin direktif vermemeli!"
 
@@ -1485,6 +1495,136 @@ def test_v4111_bear_cycle_error_visibility():
         "30dk sonrası warning yenilenmedi!"
     print("     Hata döngüyü kırmıyor + 30dk rate-limitli warning ✓")
 test("v4.11.1 bear döngü hata görünürlüğü", test_v4111_bear_cycle_error_visibility)
+
+def test_v4112_attack_rotation():
+    """v4.11.2: SH açıkken skor ATTACK'a tırmanırsa 1x kapatılır → SQQQ yolu
+    açılır (İhsan 12 Tem 'iki taraftan kazanırız'). Bayat modla/bayrak
+    kapalıyken/SQQQ zaten varken rotasyon YAPILMAZ."""
+    import types
+    from datetime import datetime as _dt
+
+    def make(mode, positions, last_update, flag=True):
+        bb = _make_bear_brain()
+        bb.enabled = True
+        bb.cfg["attack_rotation"] = flag
+        bb.mode = mode
+        bb.score = 80.0
+        bb._last_update = last_update
+        sells = []
+        bb.bot.positions = positions
+        bb.bot.executor = types.SimpleNamespace(
+            execute_sell=lambda sym, reason: sells.append((sym, reason)) or True
+        )
+        return bb, sells
+
+    sh_pos = {"SH": {"qty": 3, "entry_price": 30.0, "bear_brain": True}}
+
+    # Mutlu yol: ATTACK + taze skor + SH açık + SQQQ yok → SH satılır
+    bb, sells = make("ATTACK", dict(sh_pos), _dt.now())
+    bb._maybe_rotate()
+    assert sells and sells[0][0] == "SH" and "BEAR_ROTATE" in sells[0][1], \
+        f"Rotasyon satışı yapılmadı: {sells}"
+    assert bb._last_rotation_ts != _dt.min, "Rotasyon zamanı kaydedilmedi!"
+    # Giriş 90sn beklemeli (satış dolumu otursun)
+    called = []
+    bb._state = {"last_entry_ts": "", "entries": {}}
+    bb.bot._floor_block = False
+    real_enter_blocked = (_dt.now() - bb._last_rotation_ts).total_seconds() < 90
+    assert real_enter_blocked, "Rotasyon hemen sonrası giriş beklemesi kurulmadı!"
+
+    # 30dk backoff: aynı sembole hemen ikinci deneme yok
+    bb._maybe_rotate()
+    assert len(sells) == 1, "Rotasyon 30dk backoff'a uymadı (spam)!"
+
+    # Bayat mod (restore edilmiş, bu süreçte ölçüm yok) → rotasyon yok
+    bb2, sells2 = make("ATTACK", dict(sh_pos), _dt.min)
+    bb2._maybe_rotate()
+    assert not sells2, "Bayat modla rotasyon yapıldı (restore riski)!"
+
+    # DEFENSE'te rotasyon yok
+    bb3, sells3 = make("DEFENSE", dict(sh_pos), _dt.now())
+    bb3._maybe_rotate()
+    assert not sells3, "DEFENSE'te rotasyon yapıldı!"
+
+    # SQQQ zaten açık → rotasyon yok
+    both = dict(sh_pos); both["SQQQ"] = {"qty": 5}
+    bb4, sells4 = make("ATTACK", both, _dt.now())
+    bb4._maybe_rotate()
+    assert not sells4, "SQQQ varken SH satıldı (çifte işlem)!"
+
+    # Bayrak kapalı → rotasyon yok
+    bb5, sells5 = make("ATTACK", dict(sh_pos), _dt.now(), flag=False)
+    bb5._maybe_rotate()
+    assert not sells5, "attack_rotation=False sayılmadı!"
+    print("     ATTACK'ta SH→SQQQ terfisi + bayat-mod/bayrak/çift korumaları ✓")
+test("v4.11.2 ATTACK rotasyonu (SH→SQQQ)", test_v4112_attack_rotation)
+
+def test_v4112_exposure_headroom():
+    """v4.11.2: maruziyet tavanı artık kırpar, komple bloklamaz — $150 hedef
+    $147 tavanı aştı diye kriz girişi iptal edilmez; tavan AYNEN korunur."""
+    import types
+    from datetime import datetime as _dt, timedelta as _td
+
+    def make_bot(equity, positions):
+        buys = []
+        bot = types.SimpleNamespace(
+            is_paper=False,
+            positions=positions,
+            short_positions={},
+            equity=equity,
+            _floor_block=False,
+            kill_switch=types.SimpleNamespace(is_active=False),
+            wash_sale_tracker=types.SimpleNamespace(
+                check_wash_sale=lambda s: (False, "")
+            ),
+            _get_technical_analysis=lambda s, c: {"price": 30.0, "atr": 0.6},
+            executor=types.SimpleNamespace(
+                execute_buy=lambda s, a, c: buys.append((s, c)) or True
+            ),
+        )
+        return bot, buys
+
+    from core.bear_brain import BearBrain
+    from config import BEAR_BRAIN_CONFIG
+
+    # Senaryo 1: equity $600, mevcut bear yok → ATTACK $150 tam sığar
+    bot, buys = make_bot(600.0, {})
+    bb = BearBrain(bot, BEAR_BRAIN_CONFIG)
+    bb._save_state = lambda: None
+    bb.enabled = True; bb.is_paper = False
+    bb.mode = "ATTACK"; bb.score = 80.0; bb._last_update = _dt.now()
+    bb._state = {"last_entry_ts": "", "entries": {}}
+    bb._maybe_enter({"min_trade_value": 10})
+    assert buys and buys[0][0] == "SQQQ", f"ATTACK girişi yapılmadı: {buys}"
+    assert abs(buys[0][1]["max_position_usd"] - 150.0) < 1e-9, \
+        f"Tam boyut $150 olmalıydı: {buys[0][1]['max_position_usd']}"
+
+    # Senaryo 2: equity $420 → tavan $147 < hedef $150 → $147'ye KIRPILIR (blok değil)
+    bot2, buys2 = make_bot(420.0, {})
+    bb2 = BearBrain(bot2, BEAR_BRAIN_CONFIG)
+    bb2._save_state = lambda: None
+    bb2.enabled = True; bb2.is_paper = False
+    bb2.mode = "ATTACK"; bb2.score = 80.0; bb2._last_update = _dt.now()
+    bb2._state = {"last_entry_ts": "", "entries": {}}
+    bb2._maybe_enter({"min_trade_value": 10})
+    assert buys2, "Tavan-üstü hedef girişi tamamen blokladı (kırpmalıydı)!"
+    got = buys2[0][1]["max_position_usd"]
+    assert abs(got - 420.0 * 0.35) < 0.01, f"Kırpılmış boyut yanlış: {got}"
+
+    # Senaryo 3: tavan zaten dolu → giriş yok (koruma aynen). Canlıda max 1
+    # pozisyon bu dalı erken keser; dolu-tavan dalı PAPER'da (max 2) erişilir.
+    full = {"SH": {"entry_price": 30.0, "qty": 5.0}}  # $150 mevcut bear
+    bot3, buys3 = make_bot(420.0, full)  # tavan $147 < mevcut $150
+    bot3.is_paper = True
+    bb3 = BearBrain(bot3, BEAR_BRAIN_CONFIG)
+    bb3._save_state = lambda: None
+    bb3.enabled = True
+    bb3.mode = "ATTACK"; bb3.score = 80.0; bb3._last_update = _dt.now()
+    bb3._state = {"last_entry_ts": "", "entries": {}}
+    bb3._maybe_enter({"min_trade_value": 10})
+    assert not buys3, "Tavan doluyken giriş yapıldı (koruma delindi)!"
+    print("     Tam boyut / tavana kırpma / dolu-tavanda blok ✓")
+test("v4.11.2 maruziyet tavanına sığdırma", test_v4112_exposure_headroom)
 
 
 # ============================================================

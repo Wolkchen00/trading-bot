@@ -101,8 +101,10 @@ class IndexParkingManager:
 
         # 🐻 v4.11 BEAR BRAIN direktifi: düşen piyasada SPY betası tutup aynı
         # anda ters-ETF almak kendini iptal eder (long-delta + short-delta =
-        # fee'ye çalışmak). DEFENSE → yeni park YOK (rezerv satışı serbest);
-        # ATTACK → sleeve tümüyle çözülür (nakit bear pozisyonuna açılır).
+        # fee'ye çalışmak). v4.11.2: DEFENSE de "unwind" gönderir (İhsan 12 Tem
+        # "iki taraftan kazanırız" — sleeve 55+ skorda tümüyle çözülür, nakit
+        # bear pozisyonuna açılır); "pause" artık açık-bear-pozisyonu histerezis
+        # bandında yeni parkı engelleyen direktiftir.
         bear_directive = None
         bear = getattr(self.bot, "bear_brain", None)
         if bear is not None:

@@ -57,6 +57,7 @@ class BearBrain:
         self._last_update = datetime.min
         self._last_exit_attempt: Dict[str, datetime] = {}
         self._last_error_log: Dict[str, datetime] = {}
+        self._last_rotation_ts = datetime.min
 
         # Kalıcı durum: cooldown/günlük sayaç restart'ta kaybolmasın
         self._state_file = state_path("bear_brain.json")
@@ -265,18 +266,31 @@ class BearBrain:
         return 0
 
     def parking_directive(self) -> Optional[str]:
-        """Index parking'e talimat: ATTACK'ta sleeve çözülür, DEFENSE'te yeni park yok.
+        """Index parking'e talimat — düşen piyasada SPY betası tutup aynı anda
+        ters-ETF almak kendini iptal eder (long-delta + short-delta = fee'ye
+        çalışmak); beyin ikisini birden yönetir.
 
-        Düşen piyasada SPY betası tutup aynı anda ters-ETF almak kendini iptal
-        eder (long SPY + short-delta = fee'ye çalışmak) — beyin ikisini birden
-        yönetir.
+        v4.11.2 (İhsan 12 Tem "iki taraftan kazanırız"): DEFENSE'te de sleeve
+        ÇÖZÜLÜR (eskiden yalnız yeni park duruyordu → 55-71 bandında ~%60
+        equity SPY long kalıp net-LONG bırakıyordu). Ayrıca mod düşse bile
+        açık bear pozisyonu varken yeni park yapılmaz (histerezis bandı 45-55'te
+        hedge + taze beta çelişkisi).
         """
         if not self.enabled:
             return None
         if self.mode == "ATTACK":
             return "unwind"
         if self.mode == "DEFENSE":
-            return "pause"
+            return (
+                "unwind"
+                if self.cfg.get("defense_parking_unwind", True)
+                else "pause"
+            )
+        try:
+            if self.open_bear_positions():
+                return "pause"
+        except Exception:
+            pass
         return None
 
     # ============================================================
@@ -312,6 +326,10 @@ class BearBrain:
             self._manage_exits()
         except Exception as e:
             self._log_cycle_error("çıkış yönetimi", e)
+        try:
+            self._maybe_rotate()
+        except Exception as e:
+            self._log_cycle_error("rotasyon", e)
         try:
             self._maybe_enter(config)
         except Exception as e:
@@ -379,6 +397,44 @@ class BearBrain:
             self.bot.executor.execute_sell(sym, reason)
 
     # ------------------------------------------------------------
+    # ROTASYON — DEFENSE'te girilen 1x, kriz ATTACK'a tırmanınca 3x'e terfi
+    # ------------------------------------------------------------
+
+    def _maybe_rotate(self):
+        """ATTACK terfisi (v4.11.2, İhsan 12 Tem "iki taraftan kazanırız"):
+        canlıda max_bear_positions=1 → DEFENSE'te SH girildiyse skor 72+'ya
+        tırmandığında SQQQ eklenemiyordu (3x ateş gücü yalnız direkt-ATTACK
+        açılışta devreye giriyordu). Çözüm: ATTACK'ta 1x kapatılır → giriş
+        yolu açılır; SQQQ sonraki turda _maybe_enter'ın NORMAL kapılarından
+        (cooldown/gün-tavanı/maruziyet/floor/kill) geçerek açılır.
+        Satış execute_sell'in PDT korumasından geçer: SH bugün alındıysa
+        rotasyon bugün BLOKLANIR, yarın döner (30dk deneme aralığı)."""
+        if not self.cfg.get("attack_rotation", True):
+            return
+        if self.mode != "ATTACK":
+            return
+        # Restore edilmiş bayat modla asla rotasyon yapılmaz — skor bu süreçte ölçülmüş olmalı
+        if self._last_update == datetime.min:
+            return
+        d_sym = self.cfg.get("defense_symbol", "SH")
+        a_sym = self.cfg.get("attack_symbol", "SQQQ")
+        positions = getattr(self.bot, "positions", {})
+        if d_sym not in positions or a_sym in positions:
+            return
+        now = datetime.now()
+        if (now - self._last_exit_attempt.get(d_sym, datetime.min)).total_seconds() < 1800:
+            return
+        self._last_exit_attempt[d_sym] = now
+        logger.info(
+            f"  🐻 BEAR ROTASYON: {d_sym} → {a_sym} | skor {self.score:.0f} ATTACK "
+            f"(1x kapat, 3x yolu açılıyor)"
+        )
+        if self.bot.executor.execute_sell(
+            d_sym, f"BEAR_ROTATE skor {self.score:.0f} ATTACK (1x→3x terfi)"
+        ):
+            self._last_rotation_ts = now
+
+    # ------------------------------------------------------------
     # GİRİŞLER
     # ------------------------------------------------------------
 
@@ -420,6 +476,11 @@ class BearBrain:
         if self._last_update == datetime.min:
             return
         if (datetime.now() - self._last_update).total_seconds() > 3 * 3600:
+            return
+
+        # Rotasyon sonrası kısa bekleme: 1x satış dolumu/cash yansıması otursun,
+        # SQQQ tam boyutla (bölünmemiş nakitle) girsin
+        if (datetime.now() - self._last_rotation_ts).total_seconds() < 90:
             return
 
         # Küresel frenler (executor floor'u ayrıca kontrol eder — çift emniyet)
@@ -468,12 +529,17 @@ class BearBrain:
                 if s in self.bear_symbols()
             )
             cap = equity * self.cfg.get("max_bear_exposure_pct", 0.35)
-            if exposure + planned_usd > cap:
+            headroom = cap - exposure
+            # v4.11.2: tavana SIĞDIR (eskiden komple bloktu — drawdown'da
+            # $150 hedef $147 tavanı $3 aştı diye kriz girişini iptal etmek
+            # anlamsız). Tavan AYNEN korunur; boyut altına kırpılır.
+            if headroom < float(config.get("min_trade_value", 10)):
                 logger.debug(
-                    f"  BearBrain {symbol}: maruziyet tavanı "
-                    f"(${exposure:.0f}+${planned_usd:.0f} > ${cap:.0f})"
+                    f"  BearBrain {symbol}: maruziyet tavanı dolu "
+                    f"(${exposure:.0f} / tavan ${cap:.0f})"
                 )
                 return
+            planned_usd = min(planned_usd, headroom)
 
         # Wash-sale: varsayılan sadece uyarı (30g kilit stratejiyi öldürür;
         # $487 hesapta vergi etkisi kuruş — bilinçli risk kabulü). Bayrakla sertleşir.
@@ -506,7 +572,11 @@ class BearBrain:
         call_cfg = dict(config)
         call_cfg["conf_position_bands"] = bands
         call_cfg["fixed_position_usd"] = 0
-        call_cfg["max_position_usd"] = max(float(b[1]) for b in bands)
+        # planned_usd maruziyet-tavanına kırpılmış olabilir — sizer'ın bant
+        # hedefi ($150) yerine kırpılmış boyut bağlayıcıdır
+        call_cfg["max_position_usd"] = min(
+            max(float(b[1]) for b in bands), planned_usd
+        )
         call_cfg["min_rr_ratio"] = self.cfg.get("rr_target", 1.5)
         if self._is_3x(symbol):
             call_cfg["stop_loss_pct"] = self.cfg.get("sl_3x", 0.06)

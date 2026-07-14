@@ -13,6 +13,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
+from core.streak import update_loss_streak
 from core.trade_gates import plan_exit_pcts
 from utils.logger import logger
 
@@ -311,23 +312,17 @@ class OrderExecutor:
                 "pnl": pnl_usd, "reason": reason, "time": datetime.now().isoformat(),
             })
 
-            # Kayıp/kazanç serisi takibi
-            if "STOP_LOSS" in reason:
-                bot._consecutive_losses = getattr(bot, '_consecutive_losses', 0) + 1
-                sym_losses = getattr(bot, '_symbol_consecutive_losses', {})
-                sym_losses[symbol] = sym_losses.get(symbol, 0) + 1
-                bot._symbol_consecutive_losses = sym_losses
-                logger.info(f"  Ardisik zarar: {bot._consecutive_losses} | {symbol}: {sym_losses[symbol]}")
-                # WashSale kaydı — gerçek zarar tutarı
-                if hasattr(bot, 'wash_sale_tracker') and pnl_usd < 0:
-                    bot.wash_sale_tracker.record_loss_sale(
-                        symbol, pnl_usd, datetime.now().isoformat()[:10]
-                    )
-            elif "TAKE_PROFIT" in reason or "TRAILING_STOP" in reason:
-                bot._consecutive_losses = 0
-                sym_losses = getattr(bot, '_symbol_consecutive_losses', {})
-                sym_losses[symbol] = 0
-                bot._symbol_consecutive_losses = sym_losses
+            # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti
+            # (v4.12.1, core/streak.py; kârlı stop-out artık zarar SAYILMAZ).
+            # Bear/ters-ETF hedge kapanışları seriyi etkilemez — hedge zararı
+            # long giriş hunisini kilitlemesin (BEAR_* eski davranışla uyumlu).
+            if not pos.get("bear_brain"):
+                update_loss_streak(bot, symbol, pnl_usd)
+            # WashSale kaydı — gerçekleşen zarar, çıkış etiketinden bağımsız
+            if hasattr(bot, 'wash_sale_tracker') and pnl_usd < 0:
+                bot.wash_sale_tracker.record_loss_sale(
+                    symbol, pnl_usd, datetime.now().isoformat()[:10]
+                )
 
             # Performans takibi
             if hasattr(bot, 'performance'):

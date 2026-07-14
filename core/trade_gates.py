@@ -69,13 +69,15 @@ class TradeGates:
             if not status["is_trading_allowed"]:
                 confidence = analysis.get("confidence", 0)
                 if not self.bot.market_hours.should_allow_extended_hours(confidence):
-                    logger.debug(f"  {symbol} MARKET GATE: {status['reason']}")
+                    # v4.12.1: blok sebepleri INFO — yalnız koordinatör-BUY'da
+                    # çağrılır; DEBUG'ken sinyal→giriş hunisi canlıda okunamıyordu
+                    logger.info(f"  {symbol} MARKET GATE: {status['reason']}")
                     return False, "MARKET_CLOSED"
 
         # 2. EMA200 Trend Gate
         if config.get("ema200_trend_gate", True):
             if not analysis.get("above_ema200", True):
-                logger.debug(f"  {symbol} EMA200 GATE: Fiyat EMA200 altinda, BUY engellendi")
+                logger.info(f"  {symbol} EMA200 GATE: Fiyat EMA200 altinda, BUY engellendi")
                 return False, "EMA200"
 
         # 3. Earnings Gate (YENİ)
@@ -119,7 +121,7 @@ class TradeGates:
                 atr_pct = atr_val / cur_price
                 max_atr = config.get("max_atr_pct", 0.05)
                 if atr_pct > max_atr:
-                    logger.debug(f"  {symbol} VOL GATE: ATR={atr_pct:.1%} > {max_atr:.0%}")
+                    logger.info(f"  {symbol} VOL GATE: ATR={atr_pct:.1%} > {max_atr:.0%}")
                     return False, "VOLATILITY"
 
         # 9. PDT Gate (YENİ)
@@ -181,7 +183,7 @@ class TradeGates:
         if planned_sl > 0:
             rr_ratio = planned_tp / planned_sl
             if rr_ratio + 1e-9 < min_rr:
-                logger.debug(f"  {symbol} R:R GATE: {rr_ratio:.2f}:1 < {min_rr}:1")
+                logger.info(f"  {symbol} R:R GATE: {rr_ratio:.2f}:1 < {min_rr}:1")
                 return True, "RR_GATE"
 
         return False, ""

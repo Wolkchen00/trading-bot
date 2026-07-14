@@ -72,6 +72,7 @@ from core.gap_scanner import GapScanner
 from core.relative_strength import RelativeStrength
 from core.market_regime import MarketRegimeDetector
 from core.bear_brain import BearBrain
+from core.streak import update_loss_streak
 from core.signal_queue import SignalQueue
 from core.options_engine import OptionsEngine
 from core.options_analyzer import OptionsAnalyzer
@@ -904,16 +905,21 @@ class StockBot:
             if (decision["signal"] == "BUY"
                     and BOT_MODE in ("long_only", "both")
                     and decision["confidence"] >= effective_buy_conf):
+                # v4.12.1: kapılar koordinatör güvenini görmeli — eskiden gate'ler
+                # analysis'teki TEKNİK güveni (çoğu zaman 0) okuyordu → KAYIP
+                # KORUYUCU "guven 0% < 70%" ile her girişi kilitliyordu (13 Tem:
+                # "Coordinator GOOGL: BUY guven:52%" aynı saniyede reddedildi).
+                analysis["confidence"] = decision["confidence"]
+                analysis["reasons"] = [decision["reasoning"]]
+
                 # Sektör rotasyonu kontrolü (VIX bazlı)
                 if not self.sector_rotator.should_buy(symbol):
-                    logger.debug(f"  {symbol} SEKTÖR ROTASYON BLOK: {self.sector_rotator.current_regime} rejiminde kaçınılıyor")
+                    logger.info(f"  {symbol} SEKTÖR ROTASYON BLOK: {self.sector_rotator.current_regime} rejiminde kaçınılıyor")
                     return
 
                 # Gate kontrolü
                 passed, block_reason = self.trade_gates.check_all_gates(symbol, analysis, config)
                 if passed:
-                    analysis["confidence"] = decision["confidence"]
-                    analysis["reasons"] = [decision["reasoning"]]
                     analysis["sector_weight"] = self.sector_rotator.get_weight_multiplier(symbol)
 
                     # v4.8: UZAMIŞ girişte hemen alma → SignalQueue'ya koy, %1.5
@@ -1648,23 +1654,19 @@ class StockBot:
             "reason": reason, "time": datetime.now().isoformat(),
         })
 
-        # Kayıp/kazanç serisi (execute_sell ile aynı semantik)
-        is_loss_exit = "STOP_LOSS" in reason or (reason == "EXTERNAL_CLOSE" and pnl_usd < 0)
-        if is_loss_exit:
-            self._consecutive_losses += 1
-            self._symbol_consecutive_losses[symbol] = (
-                self._symbol_consecutive_losses.get(symbol, 0) + 1
-            )
-            if side == "LONG" and pnl_usd < 0:
-                try:
-                    self.wash_sale_tracker.record_loss_sale(
-                        symbol, pnl_usd, datetime.now().isoformat()[:10]
-                    )
-                except Exception:
-                    pass
-        elif pnl_usd > 0:
-            self._consecutive_losses = 0
-            self._symbol_consecutive_losses[symbol] = 0
+        # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti (v4.12.1,
+        # core/streak.py). Eski etiket-bazlı sayaç kârlı bracket stop-out'u
+        # zarar sayıyordu (13 Tem: AMZN +$0.12 → seri 1→2 → KAYIP KORUYUCU
+        # canlı long hunisini kilitledi). Bear/hedge kapanışı seriye girmez.
+        if not pos.get("bear_brain"):
+            update_loss_streak(self, symbol, pnl_usd)
+        if side == "LONG" and pnl_usd < 0:
+            try:
+                self.wash_sale_tracker.record_loss_sale(
+                    symbol, pnl_usd, datetime.now().isoformat()[:10]
+                )
+            except Exception:
+                pass
 
         # PDT: aynı gün açılıp kapandıysa day-trade say
         try:

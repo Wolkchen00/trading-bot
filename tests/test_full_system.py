@@ -1740,6 +1740,93 @@ test("v4.12 bear paper cooldown", test_v412_bear_paper_cooldown)
 
 
 # ============================================================
+# v4.12.1 — 13 TEM CANLI GÜN BULGULARI (kayıp serisi + kapı güveni)
+# ============================================================
+section("v4.12.1 KAYIP SERİSİ + KAPI GÜVENİ")
+
+def test_v4121_streak_pnl_semantics():
+    """Seri artık YALNIZ gerçekleşen PnL işaretiyle güncellenir.
+    13 Tem vakası: AMZN +$0.12 kârlı bracket stop-out seri 1→2 yapmıştı;
+    doğru davranış 1→0 (kâr = reset)."""
+    from core.streak import update_loss_streak
+
+    class _B:
+        pass
+
+    b = _B()
+    b._consecutive_losses = 1
+    b._symbol_consecutive_losses = {"AMZN": 1}
+    update_loss_streak(b, "AMZN", +0.12)  # kârlı stop-out
+    assert b._consecutive_losses == 0, "Kârlı çıkış seriyi sıfırlamadı!"
+    assert b._symbol_consecutive_losses["AMZN"] == 0, "Sembol serisi sıfırlanmadı!"
+    update_loss_streak(b, "NVDA", -5.0)
+    update_loss_streak(b, "NVDA", -3.0)
+    assert b._consecutive_losses == 2, "Zararlar seriyi arttırmadı!"
+    assert b._symbol_consecutive_losses["NVDA"] == 2, "Sembol serisi artmadı!"
+    update_loss_streak(b, "NVDA", 0.0)  # başabaş → değişmez
+    assert b._consecutive_losses == 2, "Sıfır PnL seriyi değiştirdi!"
+    print("     Kâr=reset, zarar=+1, başabaş=nötr ✓")
+test("v4.12.1 seri PnL semantiği", test_v4121_streak_pnl_semantics)
+
+def test_v4121_streak_single_source():
+    """Etiket-bazlı kopya sayaçlar silindi — üç kapanış yolu da core/streak
+    helper'ını kullanır; bear/hedge kapanışı seriden muaf."""
+    sb = open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8").read()
+    ex = open(os.path.join(PROJECT_ROOT, "core", "executor.py"), encoding="utf-8").read()
+    sx = open(os.path.join(PROJECT_ROOT, "core", "short_executor.py"), encoding="utf-8").read()
+    assert "is_loss_exit" not in sb, "stock_bot eski etiket-bazlı sayacı hâlâ içeriyor!"
+    old_inc = "bot._consecutive_losses = getattr(bot, '_consecutive_losses', 0) + 1"
+    assert old_inc not in ex, "executor eski kopya sayacı hâlâ içeriyor!"
+    assert old_inc not in sx, "short_executor eski kopya sayacı hâlâ içeriyor!"
+    for src, name in ((sb, "stock_bot"), (ex, "executor"), (sx, "short_executor")):
+        assert "update_loss_streak" in src, f"{name} streak helper kullanmıyor!"
+    assert 'if not pos.get("bear_brain")' in ex, "executor bear-muafiyeti yok!"
+    assert 'if not pos.get("bear_brain")' in sb, "dış-kapanış bear-muafiyeti yok!"
+    print("     Tek kaynak: core/streak + bear muafiyeti ✓")
+test("v4.12.1 seri tek-kaynak", test_v4121_streak_single_source)
+
+def test_v4121_gates_see_coordinator_conf():
+    """KAYIP KORUYUCU koordinatör güvenini okur (13 Tem: GOOGL BUY 52%
+    'guven 0% < 70%' ile reddedilmişti — teknik güven 0 okunuyordu)."""
+    from core.trade_gates import TradeGates
+
+    class _B:
+        pass
+
+    b = _B()
+    b._consecutive_losses = 2
+    tg = TradeGates(b)
+    cfg = {"loss_streak_enabled": True, "loss_streak_warn": 2,
+           "loss_streak_halt": 4, "loss_streak_elevated_conf": 70}
+    blocked, reason = tg._check_loss_streak("GOOGL", {"confidence": 75}, cfg)
+    assert not blocked, "Yüksek güven (75) seri-2'de bloklandı!"
+    blocked, reason = tg._check_loss_streak("GOOGL", {"confidence": 52}, cfg)
+    assert blocked and reason == "LOSS_STREAK_WARN", "Düşük güven (52) bloklanmadı!"
+    # Kaynak-sıra: BUY hunisinde koordinatör güveni gate çağrısından ÖNCE yazılır
+    src = open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8").read()
+    blk = src.index(">= effective_buy_conf")
+    i_conf = src.index('analysis["confidence"] = decision["confidence"]', blk)
+    i_gate = src.index("check_all_gates", blk)
+    assert i_conf < i_gate, "Koordinatör güveni gate'lerden SONRA yazılıyor!"
+    print("     Gate koordinatör güvenini görüyor + kaynak-sıra doğru ✓")
+test("v4.12.1 kapı koordinatör güveni", test_v4121_gates_see_coordinator_conf)
+
+def test_v4121_gate_blocks_visible():
+    """Sinyal→giriş hunisi artık INFO'da okunur: MARKET/EMA200/VOL/R:R blok
+    satırları logger.info (13 Tem: NIO'nun ~72 eşik-üstü sinyalinin neden
+    düştüğü loglardan görülemiyordu)."""
+    src = open(os.path.join(PROJECT_ROOT, "core", "trade_gates.py"), encoding="utf-8").read()
+    for marker in ("MARKET GATE", "EMA200 GATE", "VOL GATE", "R:R GATE"):
+        i = src.index(marker)
+        assert "logger.info" in src[max(0, i - 120):i], f"{marker} hâlâ DEBUG loglıyor!"
+    sb = open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8").read()
+    i = sb.index("SEKTÖR ROTASYON BLOK")
+    assert "logger.info" in sb[max(0, i - 120):i], "Sektör blok hâlâ DEBUG!"
+    print("     5 sessiz kapı INFO'ya terfi ✓")
+test("v4.12.1 kapı blokları görünür", test_v4121_gate_blocks_visible)
+
+
+# ============================================================
 # SONUÇ RAPORU
 # ============================================================
 print("\n" + "=" * 60)

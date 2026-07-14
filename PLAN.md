@@ -368,6 +368,52 @@ hızla dolar. Geri alma: v4.12 değerlerini önceki değerlere çek (git diff
 config.py) — mekanizma değişiklikleri (merge sırası, bant yolu, paper cooldown
 anahtarı) geri almasız kalabilir, davranışları config'e bağlı.
 
+## v4.12.1 — Kayıp serisi + kapı güveni (2026-07-13, ilk canlı gün denetimi; İhsan: "önerini uygulayalım")
+13 Tem ilk-canlı-gün denetimi (6-ajan workflow) deploy'u temiz buldu ama canlı
+long hunisini fiilen donduran İKİ onaylı bug çıkardı; ikisi de fail-safe yönlüydü
+(kötü alım yaptırmaz, alımı engeller) ama İhsan'ın "iki taraftan kazanırız"
+direktifinin long ayağını kilitliyordu. Gün içi kanıt: ~72 eşik-üstü BUY sinyali
+(NIO 68'e kadar, GOOGL 52) → 0 canlı giriş.
+
+1. **BUG A — kârlı stop-out zarar sayılıyordu:** üç kopya sayaç (executor,
+   short_executor, dış-kapanış) etiket-bazlıydı — `"STOP_LOSS" in reason` PnL
+   işaretine bakmadan seriyi arttırıyordu; AMZN +$0.12 kârlı bracket stop-out'u
+   "Zarar serisi" 1→2 yaptı ve reset dalı stop-etiketli çıkışta erişilmezdi.
+   Ayrıca kopyalar sapmıştı (zararlı TRAILING seriyi SIFIRLIYORDU). Çözüm:
+   **`core/streak.py` tek kaynak** — seri YALNIZ gerçekleşen PnL işaretiyle
+   güncellenir (zarar +1, kâr reset, başabaş nötr); bear/hedge kapanışları
+   seriden MUAF (`pos["bear_brain"]` etiketi; hedge zararı long hunisini
+   kilitlemesin — BEAR_* etiketlerinin eski davranışıyla uyumlu); wash-sale
+   kaydı etiketten bağımsız gerçek zarara bağlandı.
+2. **BUG B — KAYIP KORUYUCU güveni 0 okuyordu:** `check_all_gates` çağrısı
+   koordinatör güveni `analysis`'e yazılmadan yapılıyordu → kapı teknik güveni
+   (çoğu zaman 0) okuyup "guven 0% < 70%" ile her girişi reddediyordu (log
+   kanıtı: aynı saniyede `Coordinator GOOGL: BUY guven:52%` + red). Çözüm:
+   BUY hunisinde `analysis["confidence"]=decision["confidence"]` artık sektör
+   rotasyonu + gate çağrısından ÖNCE yazılır (testte kaynak-sıra denetimi).
+   Yan kazanım: MARKET GATE'in extended-hours güven eşiği de artık gerçek
+   güveni görüyor.
+3. **Huni görünürlüğü:** v4.10 dersinin devamı — sessiz kapılar INFO'ya terfi:
+   MARKET/EMA200/VOL/R:R (trade_gates) + SEKTÖR ROTASYON BLOK (stock_bot).
+   Bu satırlar yalnız koordinatör-BUY sinyalinde basılır → spam yok; artık
+   "sinyal vardı, neden girmedi" sorusu canlı INFO logundan okunur.
+4. **Durum düzeltmesi (deploy sonrası):** state_live/bot_positions.json'daki
+   yanlış `consecutive_losses: 2` → 0 (AMZN kârlı kapanışının doğru semantiği
+   reset'ti) + canlı konteyner restart'ı ile yükletildi.
+
+Testler: **115/115** (4 yeni v4.12.1 testi: PnL semantiği + AMZN regresyonu,
+tek-kaynak/bear-muafiyet kaynak denetimi, kapı koordinatör-güveni +
+kaynak-sıra, kapı bloklarının INFO görünürlüğü; 2 uyarı lokal-ortam aynen).
+
+Denetimin diğer bulguları (bu sürümde DOKUNULMADI): paper earnings takvimi
+boş dönüyor (fail-open; muhtemel AV kota yarışı live 08:00:41 vs paper
+08:00:40 — izlemede), VPS RAM sıkı (922MB müsait, swap yok), NVDA defter
+fiyatı $207.37 vs fill $207.11 (kozmetik).
+
+**İzleme (14 Tem+):** canlıda ilk gerçek giriş — `KAYIP KORUYUCU` artık gerçek
+güven yüzdesi loglar; blok olursa sebep INFO'da (EMA200/VOL/MARKET/R:R/SEKTÖR).
+Kârlı stop-out sonrası heartbeat'te "Zarar serisi" DÜŞMELİ (artmamalı).
+
 ## FAZ 1 — v4.7 canlıda (deploy sonrası ilk hafta)
 - İlk alımların güven bandına uyduğunu doğrula (log: `PositionSizer [LONG-KADEMELI]: $... | GÜVEN x → $y`).
 - Beklenen davranış değişimi: min_confidence 30→60 → **daha az ama daha büyük ve seçici işlem**

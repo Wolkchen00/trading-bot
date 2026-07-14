@@ -14,6 +14,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
+from core.streak import update_loss_streak
 from utils.logger import logger
 
 
@@ -274,17 +275,9 @@ class ShortExecutor:
                 "pnl": pnl_usd, "reason": reason, "time": datetime.now().isoformat(),
             })
 
-            # Kayıp/kazanç serisi takibi (long taraflı execute_sell ile simetrik)
-            if "STOP_LOSS" in reason:
-                bot._consecutive_losses = getattr(bot, '_consecutive_losses', 0) + 1
-                sym_losses = getattr(bot, '_symbol_consecutive_losses', {})
-                sym_losses[symbol] = sym_losses.get(symbol, 0) + 1
-                bot._symbol_consecutive_losses = sym_losses
-            elif "TAKE_PROFIT" in reason or "TRAILING" in reason:
-                bot._consecutive_losses = 0
-                sym_losses = getattr(bot, '_symbol_consecutive_losses', {})
-                sym_losses[symbol] = 0
-                bot._symbol_consecutive_losses = sym_losses
+            # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti
+            # (v4.12.1, core/streak.py; long taraflı execute_sell ile simetrik)
+            update_loss_streak(bot, symbol, pnl_usd)
 
             # Performans kaydı — short'lar da Kelly istatistiğine girsin
             if hasattr(bot, 'performance'):

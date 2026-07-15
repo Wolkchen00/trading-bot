@@ -471,9 +471,17 @@ INTERNALERROR verir — koşum şekli `py tests/test_full_system.py` (belgelendi
 - Bot ölürse bildirim kanalı hâlâ yok (health cron yalnız /var/log'a yazar;
   Telegram İhsan kararıyla rafta). Öneri: cron script'ine 🔴 durumunda
   Coolify/e-posta uyarısı eklemek.
-- Bu düzeltmeler canlıya ANCAK deploy ile gider (push otomatik deploy DEĞİL).
-  Şu an bear mode OFF → 2-4 no'lu buglar uyuyan cinsten; acil restart gerekmez,
-  piyasa kapanışı sonrası deploy önerilir.
+- ~~Bu düzeltmeler canlıya ANCAK deploy ile gider~~ → **DEPLOY EDİLDİ**
+  (15 Tem 22:43 UTC, kapanış sonrası, İhsan "devam"): iki konteyner b48f9e0
+  ile yeniden yaratıldı, md5 doğrulandı, açılış hatasız, state volume korundu,
+  heartbeat canlı. Gün içi not: NVDA breakeven-stop ile kapandı (16:14 UTC,
+  ≈-$0.30 — kâr kilidi seviyesi altına sarkınca tasarım gereği çıkış).
+- **Bildirim kanalı KURULDU** (15 Tem, İhsan "devam"): ntfy.sh push —
+  abonelik `https://ntfy.sh/trading-ihsan-b697f59b` (telefonda ntfy uygulaması
+  veya tarayıcı). VPS tarafı: `/root/trading_liveness_check.sh` cron */20dk
+  (konteyner ayakta mı + heartbeat <30dk; sorunda push, 4h cooldown —
+  `/root/trading_alert.sh`); günlük 21:30 UTC sağlık raporu da 🔴 durumda
+  push atar. Log: /var/log/trading_liveness.log.
 
 ## FAZ 1 — v4.7 canlıda (deploy sonrası ilk hafta)
 - İlk alımların güven bandına uyduğunu doğrula (log: `PositionSizer [LONG-KADEMELI]: $... | GÜVEN x → $y`).

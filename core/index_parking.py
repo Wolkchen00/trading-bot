@@ -19,12 +19,13 @@ Rebalance mantığı (günde 1): hedef = boştaki nakit index'te, rezerv likit k
     delta > 0 → fazla nakdi SPY'ye park et (BUY notional)
     delta < 0 → rezerv ihlali, SPY'den çöz (SELL) → trade buying-power tamamlanır
 """
+import json
 from datetime import date
 
 from alpaca.trading.requests import ClosePositionRequest, MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
-from config import TRADING_MODE
+from config import TRADING_MODE, state_path
 from utils.logger import logger
 
 
@@ -41,6 +42,10 @@ class IndexParkingManager:
         # günü izlenir; ATTACK çözülmesi günde 1 kez denenir
         self._last_buy_date = None
         self._bear_unwind_date = None
+        # v4.12.2: gün-bazlı korumalar restart'ta kaybolmasın — gün içi restart
+        # _last_buy_date'i sıfırlayıp aynı-gün AL-SAT (PDT) engelini deliyordu
+        self._state_file = state_path("index_parking.json")
+        self._load_dates()
 
         enabled = bool(config.get("index_parking_enabled", False))
         # paper-first: LIVE'da çalışması için ekstra açık onay şart
@@ -57,6 +62,39 @@ class IndexParkingManager:
     def is_parking_symbol(self, symbol: str) -> bool:
         """Bu sembol parking sleeve'i mi? (enabled değilse her zaman False)"""
         return self.enabled and symbol == self.symbol
+
+    def _load_dates(self):
+        """v4.12.2: yalnız BUGÜNE ait korumalar geri yüklenir (dünün kaydı anlamsız)."""
+        try:
+            with open(self._state_file, encoding="utf-8") as f:
+                saved = json.load(f)
+            today = date.today()
+            for attr, key in (
+                ("_last_rebalance", "last_rebalance"),
+                ("_last_buy_date", "last_buy_date"),
+                ("_bear_unwind_date", "bear_unwind_date"),
+            ):
+                raw = saved.get(key) or ""
+                try:
+                    parsed = date.fromisoformat(raw)
+                except (ValueError, TypeError):
+                    continue
+                if parsed == today:
+                    setattr(self, attr, parsed)
+        except Exception:
+            pass  # dosya yok/bozuk → temiz başlangıç (eski davranış)
+
+    def _save_dates(self):
+        """Gün-bazlı korumaları diske yaz — hata ana döngüyü asla bozmaz."""
+        try:
+            with open(self._state_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "last_rebalance": self._last_rebalance.isoformat() if self._last_rebalance else "",
+                    "last_buy_date": self._last_buy_date.isoformat() if self._last_buy_date else "",
+                    "bear_unwind_date": self._bear_unwind_date.isoformat() if self._bear_unwind_date else "",
+                }, f)
+        except Exception:
+            pass
 
     def _get_park_position(self):
         """Mevcut parking pozisyonu → (qty, current_price, market_value)."""
@@ -121,12 +159,18 @@ class IndexParkingManager:
                 if qty > 0 and mval > 0:
                     try:
                         self.bot.client.close_position(self.symbol)
+                        # v4.12.2: çözülen sleeve AYNI GÜN geri alınmasın —
+                        # mod gün içinde WATCH'a düşerse (histerezis yok)
+                        # normal rebalance tüm nakdi tekrar SPY'ye basıyordu
+                        # (sat-al churn + PDT). Bugünün rebalance hakkı yakıldı.
+                        self._last_rebalance = today
                         logger.info(
                             f"  🅿️🐻 PARK BEAR-UNWIND: {self.symbol} sleeve çözüldü "
                             f"({qty} pay ≈ ${mval:,.2f}) — düşüş modunda beta tutulmaz"
                         )
                     except Exception as e:
                         logger.debug(f"  Park bear-unwind hatası: {e}")
+                self._save_dates()
             return  # ATTACK sürerken normal rebalance (yeni park) yok
 
         if self._last_rebalance == today:
@@ -141,6 +185,7 @@ class IndexParkingManager:
             reserve = self.reserve_pct * equity
             delta = cash - reserve  # +: park et, -: çöz
             self._last_rebalance = today  # günde tek deneme (hata olsa da yarın tekrar)
+            self._save_dates()
 
             if abs(delta) < self.min_trade:
                 return
@@ -166,6 +211,7 @@ class IndexParkingManager:
             )
             self.bot.client.submit_order(req)
             self._last_buy_date = date.today()  # v4.11: aynı-gün unwind engeli (PDT)
+            self._save_dates()
             logger.info(f"  🅿️ PARK BUY {self.symbol}: ${notional:,.2f} (boş nakit → beta)")
         except Exception as e:
             logger.debug(f"  Park buy hatası: {e}")

@@ -1,5 +1,5 @@
 # Trading Bot — Geliştirme Planı (v4.6 sonrası)
-_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-12 v4.12 paper agresif+ (stres gözlemi; LIVE kilitleri aynen)_
+_Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-15 v4.12.2 3. canlı gün bakımı (test izolasyonu + bear/parking restart yamaları; deploy BEKLİYOR)_
 
 ## Mevcut durum (özet)
 - **LIVE** ($487 gerçek): **v4.8 CANLI** — `GÜVENE GÖRE $100-300` (yön-farkında yeni güven ölçeği: 50-59→$100, 60-69→$150, 70-79→$200, 80+→$300), kill %5, floor $414.
@@ -413,6 +413,67 @@ fiyatı $207.37 vs fill $207.11 (kozmetik).
 **İzleme (14 Tem+):** canlıda ilk gerçek giriş — `KAYIP KORUYUCU` artık gerçek
 güven yüzdesi loglar; blok olursa sebep INFO'da (EMA200/VOL/MARKET/R:R/SEKTÖR).
 Kârlı stop-out sonrası heartbeat'te "Zarar serisi" DÜŞMELİ (artmamalı).
+
+## v4.12.2 — 3. canlı gün bakımı (2026-07-15, İhsan: "logları kontrol et, bakım yap")
+
+**Canlı sağlık (VPS, 72h):** İki konteyner 37h kesintisiz; deploy = v4.12.1
+birebir (md5). 1 ERROR (geçici Alpaca bağlantı kopması, kendini toparladı).
+Canlı işlem akışı SAĞLIKLI: 14 Tem NVDA $97.76 girişi (bracket + breakeven +
+trailing izlendi), 15 Tem açılışta park rezerv satışı + RIVN girişi (güven 54
+≥ eşik 50, SL %4 / TP %8, R:R 2:1 bracket'li — kapı zinciri kanıtlı çalışıyor).
+Kill switch hiç tetiklenmedi. 14 Tem 14:23-15:00 arası "ceasefire collapse"
+BREAKING GEO kilidi ~40dk alım blokladı (aşağıda açık konu). Paper: $64k→$61.97k
+(-%3.2, AGRESİF+ stres gözlemi beklenen bandda), 2 geçici API timeout.
+
+**Yerel keşif:** logs/bot_07-04..07-13 dosyalarının TAMAMI pytest çıktısıymış
+(423 ERROR'un 421'i mock). Testler import anında gerçek state/log'a yazıyordu —
+2 Tem'de kurtarılan 145KB paper agent_performance.json 11 Tem test koşusunda
+EZİLDİ (gitignore'lu, git'te yok → kalıcı kayıp; VPS volume'ü kendi verisini
+biriktiriyor, canlı etki yok). wash_sale_tracker.json'daki sahte AAPL kaydı
+temizlendi.
+
+**Düzeltmeler (bu commit):**
+1. **Test izolasyonu:** `tests/conftest.py` (yeni) + test dosyası başlığı —
+   STATE_VOLUME_PATH ve yeni `BOT_LOG_DIR` env'i tmp'e yönlenir (pytest VE
+   doğrudan koşu); test_kill.json tmp'e taşındı + gitignore. Doğrulandı: 3 test
+   koşusu sonrası gerçek logs/ ve state_paper/ tertemiz.
+2. **BearBrain restart-unwind (workflow doğrulamalı):** `parking_directive()`
+   bayatlık kapısı yoktu — restore edilmiş DEFENSE/ATTACK ile restart sonrası
+   taze skor ölçülmeden TÜM SPY sleeve satılabiliyordu. Artık `_last_update`
+   bu süreçte yoksa en fazla "pause" (giriş/rotasyondaki kapının aynısı).
+3. **Rotasyon hedge'siz penceresi:** `_maybe_rotate` SH'yi satıp SONRA
+   cooldown/gün-tavanı kapısına takılıyordu (canlıda max_entries_per_day=1 →
+   gün sonuna kadar hedge'siz). Deterministik kapılar artık satıştan ÖNCE
+   denetlenir; geçilmiyorsa 1x elde kalır, rotasyon ertesi güne.
+4. **Parking churn + PDT kalıcılığı:** BEAR-UNWIND `_last_rebalance`'ı
+   yakmıyordu → mod aynı gün WATCH'a düşerse sleeve komple GERİ alınıyordu
+   (sat-al churn). Unwind artık günün rebalance hakkını yakar; ayrıca üç
+   gün-bazlı tarih (`index_parking.json`) diske yazılır — gün içi restart
+   aynı-gün AL-SAT (PDT) korumasını artık sıfırlayamaz.
+5. **Executor PnL fallback ölü koddu:** `current_price=entry` ile manuel PnL
+   HEP 0 → kayıp serisi sessiz atlanıyordu. Önce snapshot fiyatı denenir
+   (gap_scanner.fetch_latest_price); o da yoksa görünür WARNING.
+6. **health_check.py Windows'ta çöküyordu:** cp1252 konsolda emoji satırı
+   UnicodeEncodeError → bot sağlıklıyken exit 1 (15 Tem'de bizzat yaşandı).
+   stdout UTF-8'e zorlanır.
+7. **`--live` bayrağı ölüydü:** stock_bot argv okumaz; run_bot artık çocuk
+   sürecin env'ine TRADING_MODE=live yazar (bat env'i ayrıca set ettiği için
+   bugüne dek maskelenmişti).
+
+Testler: **115/115** (bayat-mod "pause" ve taze-mod direktif ayrımı test
+altına alındı). NOT: pytest ile koşunca script-stili sys.exit hâlâ
+INTERNALERROR verir — koşum şekli `py tests/test_full_system.py` (belgelendi).
+
+**Açık konular (dokunulmadı, karar İhsan'ın):**
+- BREAKING GEO kilidi kaba anahtar-kelime yolundan Risk:80 basarken akıllı
+  jeopolitik ajan aynı anda skor 16/ELEVATED diyordu ("bombing"/"blockade"
+  dismiss edilmişti) — iki yolun uzlaştırılması davranış değişikliği ister.
+- Bot ölürse bildirim kanalı hâlâ yok (health cron yalnız /var/log'a yazar;
+  Telegram İhsan kararıyla rafta). Öneri: cron script'ine 🔴 durumunda
+  Coolify/e-posta uyarısı eklemek.
+- Bu düzeltmeler canlıya ANCAK deploy ile gider (push otomatik deploy DEĞİL).
+  Şu an bear mode OFF → 2-4 no'lu buglar uyuyan cinsten; acil restart gerekmez,
+  piyasa kapanışı sonrası deploy önerilir.
 
 ## FAZ 1 — v4.7 canlıda (deploy sonrası ilk hafta)
 - İlk alımların güven bandına uyduğunu doğrula (log: `PositionSizer [LONG-KADEMELI]: $... | GÜVEN x → $y`).

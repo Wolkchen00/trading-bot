@@ -278,6 +278,19 @@ class BearBrain:
         """
         if not self.enabled:
             return None
+        # v4.12.2: Restore edilmiş BAYAT modla sleeve ASLA çözülmez — giriş ve
+        # rotasyondaki bayatlık kapısının aynısı (skor bu süreçte ölçülmeden
+        # restart sonrası tüm SPY sleeve'i satılabiliyordu). Taze ölçüm gelene
+        # dek en fazla "pause": yeni park da yok, satış da yok.
+        if self._last_update == datetime.min:
+            if self.mode in ("DEFENSE", "ATTACK"):
+                return "pause"
+            try:
+                if self.open_bear_positions():
+                    return "pause"
+            except Exception:
+                pass
+            return None
         if self.mode == "ATTACK":
             return "unwind"
         if self.mode == "DEFENSE":
@@ -423,6 +436,25 @@ class BearBrain:
             return
         now = datetime.now()
         if (now - self._last_exit_attempt.get(d_sym, datetime.min)).total_seconds() < 1800:
+            return
+        # v4.12.2: satmadan ÖNCE SQQQ girişinin deterministik kapıları denetlenir.
+        # Eski akış 1x'i satıp SONRA _maybe_enter'ın cooldown/gün-tavanı/fren
+        # kapılarına takılıyordu → hedge'siz pencere (canlıda gün sonuna kadar:
+        # SH girişi max_entries_per_day=1 kotasını zaten tüketmiş oluyordu).
+        # Kapı geçilemeyecekse 1x SH elde tutulur, rotasyon sonraki güne kalır.
+        if not self._cooldown_ok(now):
+            return
+        max_daily = (
+            self.cfg.get("paper_max_entries_per_day", 2)
+            if self.is_paper
+            else self.cfg.get("max_entries_per_day", 1)
+        )
+        if self._entries_today() >= max_daily:
+            return
+        if getattr(self.bot, "_floor_block", False):
+            return
+        ks = getattr(self.bot, "kill_switch", None)
+        if ks is not None and getattr(ks, "is_active", False):
             return
         self._last_exit_attempt[d_sym] = now
         logger.info(

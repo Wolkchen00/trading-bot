@@ -260,9 +260,24 @@ class OrderExecutor:
                 current_price = float(alpaca_pos.current_price)
                 pnl_usd = float(alpaca_pos.unrealized_pl)
             except Exception:
-                # Alpaca'dan alınamazsa manuel hesapla
-                if entry > 0 and qty > 0:
+                # v4.12.2: eski "manuel hesap" ölü koddu — current_price=entry
+                # ile PnL matematiksel olarak HEP 0 çıkıyor, kayıp serisi
+                # (streak) sessizce atlanıyordu. Önce snapshot fiyatı dene;
+                # o da yoksa PnL bilinmiyor: 0 bırak ama GÖRÜNÜR uyarı bas.
+                snap_price = None
+                try:
+                    from core.gap_scanner import fetch_latest_price
+                    snap_price = fetch_latest_price(bot.data_client, symbol)
+                except Exception:
+                    snap_price = None
+                if snap_price and entry > 0 and qty > 0:
+                    current_price = float(snap_price)
                     pnl_usd = (current_price - entry) * qty
+                else:
+                    logger.warning(
+                        f"  {symbol} kapanış PnL'i hesaplanamadı (pozisyon+snapshot "
+                        f"erişilemedi) — kayıp serisi bu çıkışta güncellenmeyecek"
+                    )
 
             # Bekleyen stop-loss emirlerini iptal et
             try:

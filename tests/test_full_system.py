@@ -19,8 +19,18 @@ Test Kategorileri:
 
 import os
 import sys
+import tempfile
 import traceback
 from datetime import datetime, date, timedelta
+
+# İZOLASYON (v4.12.2): bu dosya import anında koşar ve config/logger üzerinden
+# GERÇEK state/log dosyalarına yazabilir (11-13 Tem: kurtarılmış 145KB
+# agent_performance.json ezildi). pytest'te tests/conftest.py bunu zaten yapar
+# (setdefault → no-op); doğrudan `python tests/test_full_system.py` koşusunda
+# da aynı koruma burada devreye girer. Repo modülü import edilmeden ÖNCE olmalı.
+_TEST_TMP = tempfile.mkdtemp(prefix="trading_bot_test_")
+os.environ.setdefault("STATE_VOLUME_PATH", _TEST_TMP)
+os.environ.setdefault("BOT_LOG_DIR", os.path.join(_TEST_TMP, "logs"))
 
 # Proje kökünü path'e ekle
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -429,7 +439,9 @@ section("7. RİSK YÖNETİMİ")
 
 def test_kill_switch():
     from core.kill_switch import KillSwitch
-    ks = KillSwitch(max_consecutive_errors=3, max_daily_loss_pct=0.05, kill_file="test_kill.json")
+    # v4.12.2: göreli yol repo köküne test_kill.json bırakıyordu — tmp'e izole
+    _kill_path = os.path.join(_TEST_TMP, "test_kill.json")
+    ks = KillSwitch(max_consecutive_errors=3, max_daily_loss_pct=0.05, kill_file=_kill_path)
     assert not ks.is_active, "KillSwitch başlangıçta aktif olmamalı"
     
     # API hatası simülasyonu
@@ -448,8 +460,8 @@ def test_kill_switch():
     
     # Temizlik
     ks.reset()
-    if os.path.exists("test_kill.json"):
-        os.remove("test_kill.json")
+    if os.path.exists(_kill_path):
+        os.remove(_kill_path)
 test("KillSwitch mantığı", test_kill_switch)
 
 def test_pdt_tracker():
@@ -1405,6 +1417,17 @@ def test_v411_parking_directive_and_scan_exclusion():
     tarama evreninden çıktı (BearBrain tekeli)."""
     import types
     bb = _make_bear_brain()
+
+    # v4.12.2 bayatlık kapısı: restore edilmiş modla (bu süreçte skor
+    # ölçülmeden, _last_update==datetime.min) sleeve ASLA çözülmez — en
+    # fazla "pause" (restart sonrası bayat ATTACK tüm SPY'yi satıyordu)
+    bb.mode = "DEFENSE"
+    assert bb.parking_directive() == "pause", "Bayat DEFENSE unwind döndürdü (restart bug'ı)!"
+    bb.mode = "ATTACK"
+    assert bb.parking_directive() == "pause", "Bayat ATTACK unwind döndürdü (restart bug'ı)!"
+
+    # Taze ölçüm simülasyonu → normal direktifler
+    bb._last_update = datetime.now()
     bb.mode = "OFF";     assert bb.parking_directive() is None
     bb.mode = "WATCH";   assert bb.parking_directive() is None
     # v4.11.2: DEFENSE de unwind (İhsan "iki taraftan kazanırız"); bayrak

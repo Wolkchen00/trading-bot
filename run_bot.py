@@ -108,12 +108,21 @@ def run_bot(live_mode=False):
     if live_mode:
         args.append("--live")
 
+    # v4.12.2: --live bayrağı ÖLÜYDÜ — stock_bot.py argv okumaz, modu yalnız
+    # TRADING_MODE env'inden alır (bat dosyası env'i ayrıca set ettiği için fark
+    # edilmemişti). Bayrak artık çocuk sürecin env'ine gerçekten yansıtılır;
+    # argv'deki '--live' süreç listesinde görünürlük için tutuluyor.
+    child_env = os.environ.copy()
+    if live_mode:
+        child_env["TRADING_MODE"] = "live"
+
     log(f"Bot baslatiliyor: {' '.join(args)}")
 
     try:
         process = subprocess.Popen(
             args,
             cwd=SCRIPT_DIR,
+            env=child_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

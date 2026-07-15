@@ -11,6 +11,14 @@ import sys
 import argparse
 from datetime import datetime, timedelta
 
+# Windows konsolu cp1252 açılınca emoji satırları UnicodeEncodeError ile script'i
+# çökertiyordu (15 Tem: bot sağlıklıyken exit 1 döndü) — stdout'u UTF-8'e zorla.
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dotenv import load_dotenv
 load_dotenv()

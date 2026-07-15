@@ -605,7 +605,9 @@ SCHEDULE_CONFIG = {
 # LOGLAMA AYARLARI
 # ============================================================
 LOG_CONFIG = {
-    "log_dir": "logs",
+    # BOT_LOG_DIR env override'ı test izolasyonu içindir (tests/conftest.py):
+    # pytest importları gerçek logs/bot_*.log dosyalarını kirletmesin.
+    "log_dir": os.getenv("BOT_LOG_DIR", "logs"),
     "log_level": "INFO",
     "trade_history_file": "trade_history.json",
     "max_log_files": 30,

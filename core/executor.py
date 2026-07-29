@@ -70,16 +70,15 @@ class OrderExecutor:
             sl_pct = pos.get("stop_loss_pct")
             if sl_pct is None:
                 sl_pct = STOCK_CONFIG["stop_loss_pct"]
-            if pos.get("breakeven_set"):
+            target = float(pos.get("stop_loss_price", 0) or 0)
+            if target <= 0:
+                target = float(pos.get("last_server_sl", 0) or 0)
+            if target <= 0 and pos.get("breakeven_set"):
                 target = entry * (
                     1 + STOCK_CONFIG.get("breakeven_offset_pct", 0.001)
                 )
-            else:
-                target = float(pos.get("last_server_sl", 0) or 0)
-                if target <= 0:
-                    target = float(pos.get("stop_loss_price", 0) or 0)
-                if target <= 0:
-                    target = entry * (1 - float(sl_pct))
+            if target <= 0:
+                target = entry * (1 - float(sl_pct))
             qty = float(pos.get("qty", 0) or 0)
             result = bot.position_manager._update_server_stop_loss(
                 symbol, round(target, 2), qty, side="LONG"

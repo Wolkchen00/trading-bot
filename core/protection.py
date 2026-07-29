@@ -134,6 +134,32 @@ TERMINAL_STATUSES = frozenset({
 STOP_TYPES = frozenset({"stop", "stop_limit", "trailing_stop"})
 
 
+def should_exit_locally(
+    current_price: Any, stop_loss_price: Any, side: str
+) -> bool:
+    """Return whether an absolute stop trigger has been reached locally.
+
+    ``stop_loss_price`` is the canonical local trigger. Percentage fields are
+    planning distances only and must not participate in the exit comparison.
+    Missing/invalid persisted values are treated as not armed until migration
+    derives a valid absolute price.
+    """
+    try:
+        current = float(current_price)
+        trigger = float(stop_loss_price)
+    except (TypeError, ValueError):
+        return False
+    if current <= 0 or trigger <= 0:
+        return False
+
+    normalized_side = str(side or "").upper()
+    if normalized_side == "LONG":
+        return current <= trigger
+    if normalized_side == "SHORT":
+        return current >= trigger
+    raise ValueError(f"Unsupported position side: {side}")
+
+
 def enum_value(value: Any) -> str:
     raw = getattr(value, "value", value)
     return str(raw or "").strip().lower()

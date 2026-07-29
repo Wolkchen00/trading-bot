@@ -36,6 +36,7 @@ from core.protection import (
     order_limit_price,
     order_stop_price,
     protection_alarm,
+    should_exit_locally,
 )
 from utils.logger import logger
 
@@ -66,6 +67,24 @@ class PositionManager:
         if result.verified:
             pos_data["server_stop_verified"] = True
             pos_data["server_stop_order_id"] = result.order_id
+            if result.stop_price is not None and float(result.stop_price) > 0:
+                # Broker'dan yeniden okunup doğrulanan mutlak fiyat, yerel stop
+                # kararının da tek kanonik tetiğidir. Başarısız bir update'in
+                # sonunda bulunan eski (daha gevşek) stop yerel korumayı
+                # geriye götüremez.
+                verified_trigger = float(result.stop_price)
+                try:
+                    existing_trigger = float(
+                        pos_data.get("stop_loss_price", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    existing_trigger = 0.0
+                if (
+                    existing_trigger <= 0
+                    or (side == "LONG" and verified_trigger >= existing_trigger)
+                    or (side == "SHORT" and verified_trigger <= existing_trigger)
+                ):
+                    pos_data["stop_loss_price"] = verified_trigger
             clear_protection_alarm(self.bot, f"{symbol}:{side}")
         elif result.outcome not in {
             ProtectionOutcome.ALREADY_FLAT,
@@ -112,6 +131,55 @@ class PositionManager:
             and enum_value(getattr(order, "side", None)) == enum_value(wanted)
             and is_stop_order(order)
         ]
+
+    def _ensure_canonical_trigger(
+        self, symbol: str, pos_data: Dict, entry_price: float,
+        side: str, config: Dict,
+    ) -> float | None:
+        """Migrate a legacy position to its absolute local stop trigger."""
+        existing = pos_data.get("stop_loss_price")
+        try:
+            trigger = float(existing)
+        except (TypeError, ValueError):
+            trigger = 0.0
+        if trigger > 0:
+            return trigger
+
+        side = side.upper()
+        if pos_data.get("breakeven_set", False):
+            if side == "LONG":
+                offset = float(config.get("breakeven_offset_pct", 0.001))
+                trigger = entry_price * (1 + offset)
+            else:
+                offset = float(config.get("short_breakeven_offset_pct", 0.003))
+                # SHORT'un mevcut BE sözleşmesi P&L uzayında -offset'tir:
+                # fiyat entry'nin offset kadar ÜSTÜNE gelince cover eder.
+                trigger = entry_price * (1 + offset)
+        else:
+            distance = pos_data.get("stop_loss_pct")
+            if distance is None:
+                key = "stop_loss_pct" if side == "LONG" else "short_stop_loss_pct"
+                distance = config.get(key)
+            try:
+                distance = float(distance)
+            except (TypeError, ValueError):
+                return None
+            if distance < 0:
+                logger.error(
+                    f"  {symbol}: stop_loss_pct imzasız olmalı, değer={distance}"
+                )
+                return None
+            trigger = entry_price * (
+                1 - distance if side == "LONG" else 1 + distance
+            )
+
+        if trigger <= 0:
+            return None
+        trigger = round(trigger, 2)
+        pos_data["stop_loss_price"] = trigger
+        if hasattr(self.bot, "_stash_exit_flags"):
+            self.bot._stash_exit_flags(symbol, pos_data)
+        return trigger
 
     def manage_positions(self, config: Dict):
         """Gelişmiş pozisyon yönetimi: trailing stop + kademeli kâr alma."""
@@ -178,11 +246,16 @@ class PositionManager:
                 }
                 if cached.get("stop_loss_pct") is not None:
                     bot.positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
+                if cached.get("stop_loss_price") is not None:
+                    bot.positions[symbol]["stop_loss_price"] = cached["stop_loss_price"]
                 if cached.get("take_profit_pct") is not None:
                     bot.positions[symbol]["take_profit_pct"] = cached["take_profit_pct"]
 
             # Trailing stop güncelleme
             pos_data = bot.positions.get(symbol, {})
+            stop_trigger = self._ensure_canonical_trigger(
+                symbol, pos_data, entry_price, "LONG", config
+            )
             highest = pos_data.get("highest_price", entry_price)
             if current_price > highest:
                 highest = current_price
@@ -191,7 +264,6 @@ class PositionManager:
             trailing_drop = (highest - current_price) / highest if highest > 0 else 0
 
             # === BREAK-EVEN STOP ===
-            pos_sl_pct_override = None
             if config.get("breakeven_enabled", True):
                 be_trigger = config.get("breakeven_trigger_pct", 0.015)
                 be_offset = config.get("breakeven_offset_pct", 0.001)
@@ -207,7 +279,8 @@ class PositionManager:
                         and abs(result.stop_price - breakeven_price) <= 0.011
                     )
                     if target_verified:
-                        bot.positions[symbol]["stop_loss_pct"] = be_offset
+                        stop_trigger = float(result.stop_price)
+                        bot.positions[symbol]["stop_loss_price"] = stop_trigger
                         bot.positions[symbol]["breakeven_set"] = True
                         if hasattr(bot, "_stash_exit_flags"):
                             bot._stash_exit_flags(symbol, bot.positions[symbol])  # A6
@@ -215,32 +288,25 @@ class PositionManager:
                             f"  BREAK-EVEN {symbol}: +{pnl_pct:.1%} -> "
                             f"SL giris fiyatina cekildi (${breakeven_price:.2f})"
                         )
-                        pos_sl_pct_override = be_offset
 
             # === SATIŞ KARARLARI (ÖNCELİK SIRASINA GÖRE) ===
 
             # 1. KESİN STOP-LOSS
-            # None-güvenli okuma: eski metadata stop_loss_pct=null taşıyabiliyor;
-            # .get(key, default) key VARSA None döner → "-None" TypeError ile tüm
-            # pozisyon yönetimi çöküyordu (canlıda 2 Tem 2026'da yaşandı).
-            if pos_sl_pct_override is not None:
-                pos_sl_pct = pos_sl_pct_override
-            else:
-                pos_sl_pct = pos_data.get("stop_loss_pct")
-                if pos_sl_pct is None:
-                    pos_sl_pct = config["stop_loss_pct"]
-
             # v4.8: pozisyon-başına dinamik TP (girişte SL×min_rr planlandı);
             # yoksa config tabanı. None-güvenli okuma (null-metadata dersi).
             pos_tp_pct = pos_data.get("take_profit_pct")
             if pos_tp_pct is None:
                 pos_tp_pct = config["take_profit_pct"]
 
-            if pnl_pct <= -pos_sl_pct:
+            if should_exit_locally(current_price, stop_trigger, "LONG"):
                 logger.info(
-                    f"  🛑 STOP LOSS {symbol}: {pnl_pct:.1%} (limit: -{pos_sl_pct:.1%}) (${pnl_usd:+.2f})"
+                    f"  🛑 STOP LOSS {symbol}: {pnl_pct:.1%} "
+                    f"(trigger: ${stop_trigger:.2f}) (${pnl_usd:+.2f})"
                 )
-                bot.executor.execute_sell(symbol, f"STOP_LOSS ({pnl_pct:.1%} / limit -{pos_sl_pct:.1%})")
+                bot.executor.execute_sell(
+                    symbol,
+                    f"STOP_LOSS ({pnl_pct:.1%} / trigger ${stop_trigger:.2f})",
+                )
 
             # 2. TAKE PROFIT
             elif pnl_pct >= pos_tp_pct:
@@ -306,12 +372,14 @@ class PositionManager:
                         # A5: Kalan pozisyon için koruyucu stop'u yeniden kur (korumasız kalmasın)
                         remaining_qty = round(qty - half_qty, 4)
                         if remaining_qty > 0:
-                            sl_pct = bot.positions[symbol].get("stop_loss_pct", config["stop_loss_pct"])
-                            if pos_data.get("breakeven_set", False):
-                                prot_price = entry_price * (1 + config.get("breakeven_offset_pct", 0.001))
-                            else:
-                                prot_price = entry_price * (1 - sl_pct)
-                            self._update_server_stop_loss(symbol, round(prot_price, 2), remaining_qty, side="LONG")
+                            prot_price = self._ensure_canonical_trigger(
+                                symbol, bot.positions[symbol], entry_price,
+                                "LONG", config,
+                            )
+                            if prot_price is not None:
+                                self._update_server_stop_loss(
+                                    symbol, prot_price, remaining_qty, side="LONG"
+                                )
                 except Exception as e:
                     logger.error(f"Kademeli satış hatası {symbol}: {e}")
 
@@ -393,8 +461,13 @@ class PositionManager:
                 }
                 if cached.get("stop_loss_pct") is not None:
                     bot.short_positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
+                if cached.get("stop_loss_price") is not None:
+                    bot.short_positions[symbol]["stop_loss_price"] = cached["stop_loss_price"]
 
             pos_data = bot.short_positions.get(symbol, {})
+            stop_trigger = self._ensure_canonical_trigger(
+                symbol, pos_data, entry_price, "SHORT", short_config
+            )
 
             # Trailing: en dusuk fiyat takibi (ters trailing)
             lowest = pos_data.get("lowest_price", entry_price)
@@ -410,7 +483,8 @@ class PositionManager:
                 be_trigger = short_config.get("short_breakeven_trigger_pct", 0.025)
                 be_offset = short_config.get("short_breakeven_offset_pct", 0.003)
                 if pnl_pct >= be_trigger and not pos_data.get("breakeven_set", False):
-                    # Short break-even: fiyat giris fiyatinin biraz USTUNE SL koy
+                    # Mevcut SHORT BE semantiği P&L'de -be_offset'tir: stop
+                    # entry'nin biraz üstündedir ve o küçük zararda cover eder.
                     be_price = round(entry_price * (1 + be_offset), 2)
                     result = self._update_server_stop_loss(
                         symbol, be_price, abs_qty, side="SHORT"
@@ -421,7 +495,8 @@ class PositionManager:
                         and abs(result.stop_price - be_price) <= 0.011
                     )
                     if target_verified:
-                        bot.short_positions[symbol]["stop_loss_pct"] = be_offset
+                        stop_trigger = float(result.stop_price)
+                        bot.short_positions[symbol]["stop_loss_price"] = stop_trigger
                         bot.short_positions[symbol]["breakeven_set"] = True
                         if hasattr(bot, "_stash_exit_flags"):
                             bot._stash_exit_flags(
@@ -434,15 +509,16 @@ class PositionManager:
 
             # === SATIS KARARLARI ===
 
-            # 1. STOP-LOSS (fiyat YUKARI gitti = zarar) — None-güvenli okuma
-            pos_sl = pos_data.get("stop_loss_pct")
-            if pos_sl is None:
-                pos_sl = short_config["short_stop_loss_pct"]
-            if pnl_pct <= -pos_sl:
+            # 1. STOP-LOSS (fiyat YUKARI gitti = zarar)
+            if should_exit_locally(current_price, stop_trigger, "SHORT"):
                 logger.info(
-                    f"  🛑 SHORT STOP {symbol}: {pnl_pct:.1%} (limit: -{pos_sl:.1%}) (${pnl_usd:+.2f})"
+                    f"  🛑 SHORT STOP {symbol}: {pnl_pct:.1%} "
+                    f"(trigger: ${stop_trigger:.2f}) (${pnl_usd:+.2f})"
                 )
-                bot.short_executor.execute_cover(symbol, f"SHORT_STOP_LOSS ({pnl_pct:.1%})")
+                bot.short_executor.execute_cover(
+                    symbol,
+                    f"SHORT_STOP_LOSS ({pnl_pct:.1%} / trigger ${stop_trigger:.2f})",
+                )
 
             # 2. TAKE PROFIT (fiyat ASAGI gitti = kar)
             elif pnl_pct >= short_config["short_take_profit_pct"]:
@@ -488,12 +564,14 @@ class PositionManager:
                         # A5: Kalan short için koruyucu stop'u (BUY-stop) yeniden kur
                         remaining_qty = round(abs_qty - half_qty, 4)
                         if remaining_qty > 0:
-                            sl_pct = bot.short_positions[symbol].get("stop_loss_pct", short_config["short_stop_loss_pct"])
-                            if pos_data.get("breakeven_set", False):
-                                prot_price = entry_price * (1 + short_config.get("short_breakeven_offset_pct", 0.003))
-                            else:
-                                prot_price = entry_price * (1 + sl_pct)
-                            self._update_server_stop_loss(symbol, round(prot_price, 2), remaining_qty, side="SHORT")
+                            prot_price = self._ensure_canonical_trigger(
+                                symbol, bot.short_positions[symbol], entry_price,
+                                "SHORT", short_config,
+                            )
+                            if prot_price is not None:
+                                self._update_server_stop_loss(
+                                    symbol, prot_price, remaining_qty, side="SHORT"
+                                )
                 except Exception as e:
                     logger.error(f"Short partial cover hatasi {symbol}: {e}")
 
@@ -629,26 +707,14 @@ class PositionManager:
                         )
                     continue
 
-                if side == "LONG":
-                    sl_pct = pos_data.get("stop_loss_pct")
-                    if sl_pct is None:
-                        sl_pct = config["stop_loss_pct"]
-                    if pos_data.get("breakeven_set"):
-                        target = entry * (
-                            1 + config.get("breakeven_offset_pct", 0.001)
-                        )
-                    else:
-                        target = entry * (1 - float(sl_pct))
-                else:
-                    sl_pct = pos_data.get("stop_loss_pct")
-                    if sl_pct is None:
-                        sl_pct = SHORT_CONFIG["short_stop_loss_pct"]
-                    if pos_data.get("breakeven_set"):
-                        target = entry * (
-                            1 + SHORT_CONFIG.get("short_breakeven_offset_pct", 0.003)
-                        )
-                    else:
-                        target = entry * (1 + float(sl_pct))
+                side_config = config if side == "LONG" else SHORT_CONFIG
+                target = self._ensure_canonical_trigger(
+                    symbol, pos_data, entry, side, side_config
+                )
+                if target is None:
+                    raise ValueError(
+                        f"{symbol}: kanonik stop_loss_price türetilemedi"
+                    )
 
                 logger.warning(
                     f"  Koruma kapsama eksiği: {symbol} -> "

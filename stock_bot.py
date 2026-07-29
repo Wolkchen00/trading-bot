@@ -1547,6 +1547,8 @@ class StockBot:
                         }
                         if cached.get("stop_loss_pct") is not None:
                             self.positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
+                        if cached.get("stop_loss_price") is not None:
+                            self.positions[symbol]["stop_loss_price"] = cached["stop_loss_price"]
                         if cached.get("take_profit_pct") is not None:
                             self.positions[symbol]["take_profit_pct"] = cached["take_profit_pct"]
                         synced_long += 1
@@ -1575,6 +1577,8 @@ class StockBot:
                         }
                         if cached.get("stop_loss_pct") is not None:
                             self.short_positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
+                        if cached.get("stop_loss_price") is not None:
+                            self.short_positions[symbol]["stop_loss_price"] = cached["stop_loss_price"]
                         synced_short += 1
                         logger.info(
                             f"  🔄 SHORT sync: {symbol} | "
@@ -1740,7 +1744,8 @@ class StockBot:
         keep = {}
         for k in ("highest_price", "lowest_price", "breakeven_set",
                   "partial_sold", "partial_covered", "stop_loss_pct",
-                  "take_profit_pct", "entry_time", "server_stop_verified",
+                  "stop_loss_price", "take_profit_pct", "entry_time",
+                  "server_stop_verified",
                   "server_stop_order_id", "close_in_progress"):
             v = pos_data.get(k)
             if v is not None:
@@ -1752,7 +1757,10 @@ class StockBot:
         """Pozisyon metadata'sını dosyaya kaydet (restart-safe)."""
         try:
             # Koruma/close alanları her kayıtta açıkça ve None-güvenli yazılır.
-            for book in (self.positions, self.short_positions):
+            for book, side in (
+                (self.positions, "LONG"),
+                (self.short_positions, "SHORT"),
+            ):
                 for pos in book.values():
                     if not isinstance(pos, dict):
                         continue
@@ -1765,6 +1773,34 @@ class StockBot:
                     pos["close_in_progress"] = bool(
                         pos.get("close_in_progress", False)
                     )
+                    trigger = pos.get("stop_loss_price")
+                    try:
+                        trigger = float(trigger)
+                    except (TypeError, ValueError):
+                        trigger = 0.0
+                    if trigger <= 0:
+                        entry = float(pos.get("entry_price", 0) or 0)
+                        if pos.get("breakeven_set", False):
+                            offset = (
+                                STOCK_CONFIG.get("breakeven_offset_pct", 0.001)
+                                if side == "LONG"
+                                else SHORT_CONFIG.get(
+                                    "short_breakeven_offset_pct", 0.003
+                                )
+                            )
+                            trigger = entry * (1 + float(offset))
+                        else:
+                            distance = pos.get("stop_loss_pct")
+                            if distance is not None and float(distance) >= 0:
+                                trigger = entry * (
+                                    1 - float(distance)
+                                    if side == "LONG"
+                                    else 1 + float(distance)
+                                )
+                    if trigger > 0:
+                        pos["stop_loss_price"] = round(trigger, 2)
+                    else:
+                        pos.pop("stop_loss_price", None)
             data = {
                 "positions": self.positions,
                 "short_positions": self.short_positions,
@@ -1810,6 +1846,29 @@ class StockBot:
                         # "-None" TypeError'a yol açıp TÜM pozisyon yönetimini durduruyordu
                         if meta.get("stop_loss_pct") is not None:
                             self.positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
+                        try:
+                            saved_trigger = float(
+                                meta.get("stop_loss_price", 0) or 0
+                            )
+                        except (TypeError, ValueError):
+                            saved_trigger = 0.0
+                        if saved_trigger > 0:
+                            self.positions[sym]["stop_loss_price"] = saved_trigger
+                        elif self.positions[sym].get("stop_loss_price") is None:
+                            entry = float(self.positions[sym].get("entry_price", 0) or 0)
+                            if meta.get("breakeven_set", False):
+                                offset = STOCK_CONFIG.get(
+                                    "breakeven_offset_pct", 0.001
+                                )
+                                self.positions[sym]["stop_loss_price"] = round(
+                                    entry * (1 + float(offset)), 2
+                                )
+                            else:
+                                distance = self.positions[sym].get("stop_loss_pct")
+                                if distance is not None and float(distance) >= 0:
+                                    self.positions[sym]["stop_loss_price"] = round(
+                                        entry * (1 - float(distance)), 2
+                                    )
                         if meta.get("take_profit_pct") is not None:  # None enjekte etme
                             self.positions[sym]["take_profit_pct"] = meta["take_profit_pct"]
                         # v4.11 BearBrain etiketi restart'ta korunur (sahiplik zaten
@@ -1833,6 +1892,33 @@ class StockBot:
                         })
                         if meta.get("stop_loss_pct") is not None:  # None enjekte etme
                             self.short_positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
+                        try:
+                            saved_trigger = float(
+                                meta.get("stop_loss_price", 0) or 0
+                            )
+                        except (TypeError, ValueError):
+                            saved_trigger = 0.0
+                        if saved_trigger > 0:
+                            self.short_positions[sym]["stop_loss_price"] = saved_trigger
+                        elif self.short_positions[sym].get("stop_loss_price") is None:
+                            entry = float(
+                                self.short_positions[sym].get("entry_price", 0) or 0
+                            )
+                            if meta.get("breakeven_set", False):
+                                offset = SHORT_CONFIG.get(
+                                    "short_breakeven_offset_pct", 0.003
+                                )
+                                self.short_positions[sym]["stop_loss_price"] = round(
+                                    entry * (1 + float(offset)), 2
+                                )
+                            else:
+                                distance = self.short_positions[sym].get(
+                                    "stop_loss_pct"
+                                )
+                                if distance is not None and float(distance) >= 0:
+                                    self.short_positions[sym]["stop_loss_price"] = round(
+                                        entry * (1 + float(distance)), 2
+                                    )
                 # Options pozisyon metadata'sını yükle
                 saved_options = data.get("options_positions", {})
                 if saved_options:

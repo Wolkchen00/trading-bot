@@ -6,6 +6,7 @@ Order Executor — Hisse Senedi Alım/Satım Emir Yönetimi
 - Alpaca hisse senedi: komisyon $0, fractional shares destekli
 """
 from datetime import datetime, timedelta
+import time
 from typing import Dict
 
 from alpaca.trading.requests import (
@@ -15,6 +16,10 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from core.streak import update_loss_streak
 from core.trade_gates import plan_exit_pcts
+from core.protection import (
+    ProtectionOutcome,
+    protection_alarm,
+)
 from utils.logger import logger
 
 
@@ -23,6 +28,85 @@ class OrderExecutor:
 
     def __init__(self, bot):
         self.bot = bot
+
+    def _position_is_flat(self, symbol: str) -> tuple[bool, object | None, str]:
+        """Başarılı pozisyon sorgusuyla flat'i ayır; sorgu hatasını flat sayma."""
+        errors = []
+        attempts = int(getattr(self.bot.position_manager, "_verify_attempts", 6))
+        for attempt in range(attempts):
+            try:
+                positions = self.bot.client.get_all_positions()
+                position = next(
+                    (
+                        item for item in positions
+                        if str(getattr(item, "symbol", "") or "") == symbol
+                        and float(getattr(item, "qty", 0) or 0) != 0
+                    ),
+                    None,
+                )
+                if position is None:
+                    return True, None, ""
+                if attempt == attempts - 1:
+                    return False, position, ""
+            except Exception as exc:
+                errors.append(str(exc))
+            if attempt < attempts - 1:
+                delay = float(
+                    getattr(self.bot, "_protection_poll_seconds", 0.25) or 0
+                )
+                if delay > 0:
+                    time.sleep(delay)
+        return False, None, "; ".join(errors[-3:])
+
+    def _restore_after_failed_close(
+        self, symbol: str, pos: Dict, close_detail: str
+    ) -> None:
+        """Kapanmayan LONG pozisyonda yerel marker'ı koru ve stop'u geri kur."""
+        bot = self.bot
+        pos["close_in_progress"] = True
+        try:
+            from config import STOCK_CONFIG
+            entry = float(pos.get("entry_price", 0) or 0)
+            sl_pct = pos.get("stop_loss_pct")
+            if sl_pct is None:
+                sl_pct = STOCK_CONFIG["stop_loss_pct"]
+            if pos.get("breakeven_set"):
+                target = entry * (
+                    1 + STOCK_CONFIG.get("breakeven_offset_pct", 0.001)
+                )
+            else:
+                target = float(pos.get("last_server_sl", 0) or 0)
+                if target <= 0:
+                    target = float(pos.get("stop_loss_price", 0) or 0)
+                if target <= 0:
+                    target = entry * (1 - float(sl_pct))
+            qty = float(pos.get("qty", 0) or 0)
+            result = bot.position_manager._update_server_stop_loss(
+                symbol, round(target, 2), qty, side="LONG"
+            )
+            pos["server_stop_verified"] = result.verified
+            pos["server_stop_order_id"] = result.order_id if result.verified else None
+            detail = (
+                f"{symbol}: close_position sonrası pozisyon açık kaldı; "
+                f"koruma={result.outcome.value}. {close_detail}"
+            )
+            protection_alarm(bot, f"{symbol}:CLOSE_FAILED", detail)
+        except Exception as exc:
+            pos["server_stop_verified"] = False
+            pos["server_stop_order_id"] = None
+            protection_alarm(
+                bot, f"{symbol}:CLOSE_FAILED",
+                f"{symbol}: kapanış başarısız ve koruma geri kurulamadı: "
+                f"{close_detail}; {exc}",
+            )
+        if hasattr(bot, "_stash_exit_flags"):
+            bot._stash_exit_flags(symbol, pos)
+        if hasattr(bot, "_save_position_metadata"):
+            saved = bot._save_position_metadata()
+            if saved is not True:
+                logger.error(
+                    f"  {symbol} kapanış-failure marker kaydı doğrulanamadı"
+                )
 
     def execute_buy(self, symbol: str, analysis: Dict, config: Dict) -> bool:
         """Hisse alım emri — PDT-aware, fractional shares destekli."""
@@ -118,9 +202,11 @@ class OrderExecutor:
             stop_price = round(price * (1 - adaptive_sl), 2)
             tp_price = round(price * (1 + adaptive_tp), 2)
 
-            # BRACKET ORDER — BUY + TP + SL tek atomik emirle
-            # Boylece SL basarisiz olursa korumasiz pozisyon kalmaz
+            # BRACKET ORDER — BUY + TP + SL tek atomik emirle.
+            # LIVE'da bracket reddi pozisyon açmama sebebidir; iki-adımlı fallback yok.
             bracket_success = False
+            paper_fallback = False
+            order = None
             try:
                 # Tam payda GTC: TP/SL bacakları gece de aktif kalır (DAY'de gün
                 # sonunda düşüp pozisyonu emirsiz bırakıyordu). Fractional'da
@@ -142,16 +228,26 @@ class OrderExecutor:
                 )
                 order = bot.client.submit_order(request)
                 bracket_success = True
-                logger.info(
-                    f"  BUY {symbol}: {qty:.4f} @ ${price:,.2f} "
-                    f"(${qty * price:,.2f}) | BRACKET TP=${tp_price} SL=${stop_price} "
-                    f"| {', '.join(analysis.get('reasons', []))}"
-                )
             except Exception as bracket_err:
-                logger.debug(f"  Bracket order desteklenmiyor, fallback: {bracket_err}")
+                try:
+                    from config import TRADING_MODE
+                    default_paper = TRADING_MODE != "live"
+                except Exception:
+                    default_paper = True
+                is_live = not bool(getattr(bot, "is_paper", default_paper))
+                if is_live:
+                    logger.error(
+                        f"  LIVE bracket reddedildi; {symbol} pozisyonu AÇILMADI: "
+                        f"{bracket_err}"
+                    )
+                    return False
+                logger.warning(
+                    f"  PAPER bracket desteklenmiyor, iki-adımlı fallback: {bracket_err}"
+                )
 
-            # FALLBACK: Bracket basarisizsa eski 2-adimli yontem
+            # PAPER-only fallback: canlıda bu kola yukarıda kesinlikle girilmez.
             if not bracket_success:
+                paper_fallback = True
                 request = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
@@ -159,30 +255,6 @@ class OrderExecutor:
                     time_in_force=TimeInForce.DAY,
                 )
                 order = bot.client.submit_order(request)
-                logger.info(
-                    f"  BUY {symbol}: {qty:.4f} @ ${price:,.2f} "
-                    f"(${qty * price:,.2f}) | Komisyon: $0 "
-                    f"| {', '.join(analysis.get('reasons', []))}"
-                )
-                # Ayri SL emri — fractional qty'de Alpaca GTC kabul etmez, DAY kullan
-                # (bot-loop stop'u her durumda devrede; DAY en azından bugünü korur)
-                try:
-                    limit_price = round(stop_price * 0.995, 2)
-                    sl_tif = TimeInForce.GTC if float(qty) == int(qty) else TimeInForce.DAY
-                    sl_request = StopLimitOrderRequest(
-                        symbol=symbol, qty=qty,
-                        side=OrderSide.SELL, time_in_force=sl_tif,
-                        stop_price=stop_price, limit_price=limit_price,
-                    )
-                    bot.client.submit_order(sl_request)
-                except Exception as sl_err:
-                    logger.warning(f"  Stop-loss emri gonderilemedi: {sl_err}")
-
-            logger.info(
-                f"  STOP-LOSS: {symbol} @ ${stop_price:,.2f} ({adaptive_sl:.1%}) | "
-                f"TP: ${tp_price:,.2f} ({adaptive_tp:.1%}, R:R {adaptive_tp/adaptive_sl:.1f}:1) "
-                f"| ATR={atr_value:.4f}"
-            )
 
             # Pozisyon kaydet — take_profit_pct de pozisyon-başına saklanır ki
             # position_manager dinamik hedefi bilsin (sabit config TP'si değil)
@@ -190,11 +262,80 @@ class OrderExecutor:
                 "entry_price": price,
                 "qty": qty,
                 "entry_time": datetime.now().isoformat(),
-                "order_id": str(order.id),
+                "order_id": (
+                    str(getattr(order, "id", ""))
+                    if getattr(order, "id", None) is not None else None
+                ),
                 "stop_loss_price": stop_price,
                 "stop_loss_pct": adaptive_sl,
                 "take_profit_pct": adaptive_tp,
+                "server_stop_verified": False,
+                "server_stop_order_id": None,
+                "close_in_progress": False,
             }
+
+            # Submission/HTTP 200 kanıt değildir. Pozisyonu ve stop bacağını broker'dan
+            # yeniden oku; ancak kapsama doğrulanırsa BUY başarısı raporla.
+            if paper_fallback:
+                protection = bot.position_manager._update_server_stop_loss(
+                    symbol, stop_price, qty, side="LONG"
+                )
+            else:
+                protection = bot.position_manager.verify_protective_stop(
+                    symbol, side="LONG", expected_stop=stop_price
+                )
+
+            target_verified = (
+                protection.verified
+                and protection.stop_price is not None
+                and abs(protection.stop_price - stop_price) <= 0.011
+            )
+            if protection.outcome == ProtectionOutcome.ALREADY_FLAT:
+                bot.positions.pop(symbol, None)
+                logger.warning(
+                    f"  {symbol} bracket kabul edildi fakat bounded sürede entry "
+                    "pozisyonu görülmedi; BUY başarısı raporlanmadı"
+                )
+                return False
+            if not target_verified:
+                bot.positions[symbol]["server_stop_verified"] = False
+                bot.positions[symbol]["server_stop_order_id"] = None
+                if hasattr(bot, "_stash_exit_flags"):
+                    bot._stash_exit_flags(symbol, bot.positions[symbol])
+                if hasattr(bot, "_save_position_metadata"):
+                    bot._save_position_metadata()
+                protection_alarm(
+                    bot, f"{symbol}:LONG:ENTRY",
+                    f"{symbol}: entry doldu/kaydedildi fakat kapsayan stop "
+                    f"doğrulanamadı ({protection.outcome.value}): "
+                    f"{protection.detail}",
+                )
+                return False
+
+            bot.positions[symbol]["server_stop_verified"] = True
+            bot.positions[symbol]["server_stop_order_id"] = protection.order_id
+            if hasattr(bot, "_stash_exit_flags"):
+                bot._stash_exit_flags(symbol, bot.positions[symbol])
+            if hasattr(bot, "_save_position_metadata"):
+                saved = bot._save_position_metadata()
+                if saved is not True:
+                    protection_alarm(
+                        bot, f"{symbol}:LONG:ENTRY_PERSIST",
+                        f"{symbol}: doğrulanmış stop state'i diske yazılamadı",
+                    )
+            logger.info(
+                f"  BUY {symbol}: {qty:.4f} @ ${price:,.2f} "
+                f"(${qty * price:,.2f}) | "
+                f"{'PAPER FALLBACK' if paper_fallback else 'BRACKET'} "
+                f"TP=${tp_price} SL=${stop_price} "
+                f"| {', '.join(analysis.get('reasons', []))}"
+            )
+            logger.info(
+                f"  STOP-LOSS DOĞRULANDI: {symbol} @ ${protection.stop_price:,.2f} "
+                f"({adaptive_sl:.1%}) #{protection.order_id} | "
+                f"TP: ${tp_price:,.2f} ({adaptive_tp:.1%}, "
+                f"R:R {adaptive_tp/adaptive_sl:.1f}:1) | ATR={atr_value:.4f}"
+            )
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({
                 "action": "BUY", "symbol": symbol, "price": price,
@@ -252,6 +393,26 @@ class OrderExecutor:
             entry = pos.get("entry_price", 0)
             qty = pos.get("qty", 0)
 
+            # Crash-safe kapanış niyeti: exit emirlerine dokunmadan ÖNCE diske yaz.
+            pos["close_in_progress"] = True
+            if hasattr(bot, "_stash_exit_flags"):
+                bot._stash_exit_flags(symbol, pos)
+            if not hasattr(bot, "_save_position_metadata"):
+                protection_alarm(
+                    bot, f"{symbol}:CLOSE_MARKER",
+                    f"{symbol}: close-in-progress marker kalıcı yazılamıyor; "
+                    "çıkış başlatılmadı",
+                )
+                return False
+            marker_saved = bot._save_position_metadata()
+            if marker_saved is not True:
+                protection_alarm(
+                    bot, f"{symbol}:CLOSE_MARKER",
+                    f"{symbol}: close-in-progress marker diske yazılamadı; "
+                    "çıkış başlatılmadı",
+                )
+                return False
+
             # Güncel fiyatı al ve PnL hesapla (close_position öncesi)
             pnl_usd = 0.0
             current_price = entry  # fallback
@@ -288,11 +449,41 @@ class OrderExecutor:
                     if o.symbol == symbol and o.side == OrderSide.SELL:
                         bot.client.cancel_order_by_id(o.id)
                         logger.debug(f"  Eski stop-loss iptal: {o.id}")
-            except Exception:
-                pass
+            except Exception as cancel_exc:
+                protection_alarm(
+                    bot, f"{symbol}:CLOSE_CANCEL",
+                    f"{symbol}: kapanış exit emirleri sorgu/iptal hatası: {cancel_exc}",
+                )
 
-            # Pozisyonu kapat
-            bot.client.close_position(symbol)
+            # close_position kabulü execution değildir; broker pozisyonunu poll et.
+            try:
+                bot.client.close_position(symbol)
+            except Exception as close_exc:
+                self._restore_after_failed_close(
+                    symbol, pos, f"close_position reddi/hatası: {close_exc}"
+                )
+                logger.error(f"SELL hatasi {symbol}: {close_exc}")
+                bot.consecutive_errors += 1
+                return False
+
+            is_flat, remaining_position, query_detail = self._position_is_flat(symbol)
+            if not is_flat:
+                if remaining_position is not None:
+                    pos["qty"] = abs(float(
+                        getattr(remaining_position, "qty", qty) or qty
+                    ))
+                self._restore_after_failed_close(
+                    symbol, pos,
+                    query_detail or "close_position kabul edildi fakat pozisyon açık",
+                )
+                logger.error(
+                    f"SELL doğrulanamadı {symbol}: pozisyon hâlâ açık; koruma geri kuruldu"
+                )
+                bot.consecutive_errors += 1
+                return False
+
+            # Marker yalnız broker'dan flat kanıtı alındıktan sonra temizlenir.
+            pos["close_in_progress"] = False
 
             # PDT kaydı (aynı gün alınıp satıldıysa)
             if hasattr(bot, 'pdt_tracker') and entry_time:
@@ -321,6 +512,7 @@ class OrderExecutor:
             # eski partial_sold/breakeven taşınmasın)
             if hasattr(bot, "_exit_flag_cache"):
                 bot._exit_flag_cache.pop(symbol, None)
+            bot._save_position_metadata()
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({
                 "action": "SELL", "symbol": symbol, "price": current_price,

@@ -50,10 +50,10 @@ class TelegramNotifier:
             if response.status_code == 200:
                 return True
             else:
-                logger.debug(f"Telegram hata: {response.status_code}")
+                logger.warning(f"Telegram gonderilemedi: HTTP {response.status_code}")
                 return False
         except Exception as e:
-            logger.debug(f"Telegram gönderim hatası: {e}")
+            logger.warning(f"Telegram gonderim hatasi: {e}")
             return False
 
     # ============================================================
@@ -72,7 +72,7 @@ class TelegramNotifier:
             f"📝 Nedenler: {', '.join(reasons[:3])}\n"
             f"🕒 {datetime.now().strftime('%H:%M:%S')}"
         )
-        self._send(text)
+        return self._send(text)
 
     def notify_sell(self, symbol: str, reason: str,
                     pnl: float = 0, pnl_pct: float = 0):
@@ -87,7 +87,7 @@ class TelegramNotifier:
             f"📝 Sebep: {reason}\n"
             f"🕒 {datetime.now().strftime('%H:%M:%S')}"
         )
-        self._send(text)
+        return self._send(text)
 
     def notify_kill_switch(self, reason: str, equity: float):
         """KillSwitch tetiklenme bildirimi."""
@@ -99,7 +99,7 @@ class TelegramNotifier:
             f"📋 Tüm pozisyonlar kapatılıyor!\n"
             f"🕒 {datetime.now().strftime('%H:%M:%S')}"
         )
-        self._send(text)
+        return self._send(text)
 
     def notify_daily_summary(self, equity: float, pnl: float,
                               trades_count: int, positions: dict,
@@ -127,7 +127,7 @@ class TelegramNotifier:
             f"📌 Açık Pozisyonlar:\n{pos_text}\n"
             f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         )
-        self._send(text)
+        return self._send(text)
 
     def notify_error(self, error_msg: str):
         """Kritik hata bildirimi."""
@@ -137,7 +137,7 @@ class TelegramNotifier:
             f"{error_msg[:500]}\n"
             f"🕒 {datetime.now().strftime('%H:%M:%S')}"
         )
-        self._send(text)
+        return self._send(text)
 
     def notify_pdt_warning(self, remaining: int):
         """PDT limiti uyarısı."""
@@ -147,7 +147,60 @@ class TelegramNotifier:
             f"Kalan day trade hakkı: {remaining}/2\n"
             f"Dikkat: Hakkın dolduğunda gün içi satış engellenecek!"
         )
-        self._send(text)
+        return self._send(text)
+
+    # ============================================================
+    # KRITIK ALARM (R0-E) — teslimat kanaldan BAGIMSIZ kayit altina alinir
+    # ============================================================
+    # NEDEN: Telegram kimlik bilgisi yoksa notifier sessizce devre disi kalir
+    # ve her gonderim False doner. Bir "pozisyon korumasiz" alarmi bu yuzden
+    # hicbir iz birakmadan kaybolabiliyordu. Artik kritik alarm ONCE diske
+    # yazilir (surec olse bile kalir), SONRA teslim edilmeye calisilir;
+    # teslimat basarisizsa ERROR seviyesinde loglanir.
+    #
+    # Diskteki kuyrugu VPS'teki dis nobetci (trading_protection_check.sh /
+    # trading_liveness_check.sh) okuyup ntfy'ye tasiyabilir — bot surecinin
+    # icindeki hicbir kanal, botun kendi olumunu haber veremez.
+
+    def notify_critical(self, kind: str, message: str) -> bool:
+        """Kritik alarm: her kosulda diske yazilir, sonra teslim denenir.
+
+        Returns: teslimatin BASARILI olup olmadigi (diske yazim degil).
+        """
+        import json as _json
+        from datetime import datetime as _dt
+
+        record = {
+            "ts": _dt.now().isoformat(),
+            "kind": kind,
+            "message": message[:2000],
+        }
+
+        # 1) Once kalici kayit — kanal calismasa bile kanit kalir
+        try:
+            from config import state_path
+            path = state_path("alarms.jsonl")
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.error(f"  ALARM KUYRUGA YAZILAMADI ({kind}): {e}")
+
+        # 2) Sonra teslimat
+        text = (
+            f"🚨 <b>{kind}</b>\n"
+            f"---------------\n"
+            f"{message[:1500]}\n"
+            f"🕐 {_dt.now().strftime('%H:%M:%S')}"
+        )
+        delivered = self._send(text)
+        if not delivered:
+            # Sessizce yutma — kanal kapaliysa da bunu gormek gerekir
+            logger.error(
+                f"  KRITIK ALARM TESLIM EDILEMEDI ({kind}): "
+                f"notifier {'acik ama gonderim basarisiz' if self.enabled else 'DEVRE DISI (kimlik yok)'} "
+                f"| icerik diskteki alarms.jsonl'de"
+            )
+        return delivered
 
     def send_message(self, text: str) -> bool:
         """Genel amacli mesaj gonder (short executor, ozel bildirimler vb.)."""

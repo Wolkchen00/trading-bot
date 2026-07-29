@@ -420,9 +420,12 @@ def test_alpaca_resync_restores_cached_canonical_trigger(monkeypatch, tmp_path):
         ]
     )
     bot.index_parking = NeverParking()
+    # entry_price = kimlik: cache yalnizca AYNI girise geri uygulanir.
+    # Kimliksiz kayit bilerek dusuruluyor (capraz-giris tetik enjeksiyonu
+    # onlemi) ,  o davranisin testi test_r1_adversarial.py'de.
     bot._exit_flag_cache = {
-        "AAPL": {"stop_loss_pct": 0.05, "stop_loss_price": 100.30},
-        "TSLA": {"stop_loss_pct": 0.06, "stop_loss_price": 103.02},
+        "AAPL": {"entry_price": 100.0, "stop_loss_pct": 0.05, "stop_loss_price": 100.30},
+        "TSLA": {"entry_price": 100.0, "stop_loss_pct": 0.06, "stop_loss_price": 103.02},
     }
 
     bot._sync_positions_from_alpaca()

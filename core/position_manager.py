@@ -25,6 +25,7 @@ from core.protection import (
     classify_covering_order,
     clear_expected_uncovered,
     clear_protection_alarm,
+    exit_flag_cache_matches_entry,
     note_expected_uncovered,
     deterministic_client_order_id,
     enum_value,
@@ -232,6 +233,10 @@ class PositionManager:
             # cascade satış olmasın)
             if symbol not in bot.positions:
                 cached = getattr(bot, "_exit_flag_cache", {}).get(symbol, {})
+                if cached and not exit_flag_cache_matches_entry(cached, entry_price):
+                    # Farkli girisin bayraklari — dusur (yanlis tetik enjeksiyonu)
+                    getattr(bot, "_exit_flag_cache", {}).pop(symbol, None)
+                    cached = {}
                 bot.positions[symbol] = {
                     "entry_price": entry_price,
                     "qty": float(pos.qty),
@@ -445,6 +450,10 @@ class PositionManager:
             # Short pozisyon senkronizasyonu
             if symbol not in bot.short_positions:
                 cached = getattr(bot, "_exit_flag_cache", {}).get(symbol, {})
+                if cached and not exit_flag_cache_matches_entry(cached, entry_price):
+                    # Farkli girisin bayraklari — dusur (yanlis tetik enjeksiyonu)
+                    getattr(bot, "_exit_flag_cache", {}).pop(symbol, None)
+                    cached = {}
                 bot.short_positions[symbol] = {
                     "entry_price": entry_price,
                     "qty": abs_qty,

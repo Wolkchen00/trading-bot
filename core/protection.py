@@ -365,6 +365,28 @@ def classify_covering_order(
     )
 
 
+def exit_flag_cache_matches_entry(cached: Any, entry_price: Any) -> bool:
+    """A6 cikis-bayragi cache'i yalnizca AYNI girise aittir; kimligi dogrular.
+
+    Cache gecici sync-dususlerinde bayraklari korumak icin var. Ama sembol
+    kapanip AYNI surecte yeniden alinirsa, eski girisin mutlak tetigi
+    (stop_loss_price) yeni pozisyona enjekte olur ve taze pozisyon aninda
+    yanlis STOP_LOSS ile satilabilir (deploy-gate incelemesinde dogrulanmis
+    zincir). Kimlik = stash aninda kaydedilen entry_price; %0.1'den fazla
+    sapan ya da kimliksiz kayit ESLESMEZ ve cagiran cache'i dusurmelidir.
+    """
+    if not isinstance(cached, dict):
+        return False
+    try:
+        cached_entry = float(cached.get("entry_price", 0) or 0)
+        new_entry = float(entry_price or 0)
+    except (TypeError, ValueError):
+        return False
+    if cached_entry <= 0 or new_entry <= 0:
+        return False
+    return abs(new_entry - cached_entry) / cached_entry <= 0.001
+
+
 def protection_alarm(bot: Any, key: str, detail: str, dedupe_seconds: int = 900) -> bool:
     """Yerel CRITICAL alarm + varsa Telegram; ayni alarmi sureli tekillestirir."""
     now = datetime.now().timestamp()

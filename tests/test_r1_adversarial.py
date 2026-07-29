@@ -13,6 +13,7 @@ from core.gap_scanner import GapScanner
 from core.protection import (
     ProtectionOutcome,
     ProtectionResult,
+    exit_flag_cache_matches_entry,
     should_exit_locally,
 )
 
@@ -217,3 +218,47 @@ def test_gap_tighten_does_not_move_local_trigger_when_server_fails():
 
     assert bot.positions["AAPL"]["stop_loss_price"] == 96.00,         "sunucu basarisizken yerel tetik yine de degistirildi"
     assert bot.position_manager.calls, "sunucu guncellemesi hic denenmedi"
+
+
+# ===========================================================================
+# Capraz-giris cache enjeksiyonu (deploy-gate MAJOR bulgusu)
+# ===========================================================================
+
+def test_stale_absolute_trigger_would_kill_a_fresh_position():
+    """Bulgunun kendisi: 100 girisin 100.10 tetigi, 90 girisine tasinirsa
+    yeni pozisyon ANINDA satilir. Kimlik kapisi tam bunu engelliyor."""
+    assert should_exit_locally(90.0, 100.10, "LONG"),         "senaryo gecersizse bulgu da gecersiz olurdu — degil"
+
+
+def test_cache_from_different_entry_does_not_match():
+    """Eski giris 100 @ stop 100.10; yeni giris 90 → cache ESLESMEMELI."""
+    cached = {"entry_price": 100.0, "stop_loss_price": 100.10,
+              "breakeven_set": True}
+    assert not exit_flag_cache_matches_entry(cached, 90.0)
+
+
+def test_cache_from_same_entry_still_matches():
+    """A6 korumasi kirilmasin: ayni pozisyon gecici dusup geri gelirse
+    (ayni avg_entry_price, ufak float sapmasi) bayraklar geri gelmeli."""
+    cached = {"entry_price": 100.0, "stop_loss_price": 100.10}
+    assert exit_flag_cache_matches_entry(cached, 100.0)
+    assert exit_flag_cache_matches_entry(cached, 100.05)  # %0.05 sapma
+
+
+def test_cache_without_identity_does_not_match():
+    """Kimliksiz (eski format) kayit guvenilmez — dusurulur. Yanlis satis
+    riski, bayrak kaybi riskinden agir basar."""
+    assert not exit_flag_cache_matches_entry({"stop_loss_price": 100.10}, 90.0)
+    assert not exit_flag_cache_matches_entry({}, 90.0)
+    assert not exit_flag_cache_matches_entry(None, 90.0)
+    assert not exit_flag_cache_matches_entry({"entry_price": "abc"}, 90.0)
+    assert not exit_flag_cache_matches_entry({"entry_price": 100.0}, 0)
+
+
+def test_stash_now_records_entry_identity():
+    """_stash_exit_flags keep-tuple'i entry_price icermeli — kimlik onsuz
+    dogrulanamaz ve kapi HER cache'i dusurup A6'yi anlamsiz kilar."""
+    import inspect
+    from stock_bot import StockBot
+    src = inspect.getsource(StockBot._stash_exit_flags)
+    assert '"entry_price"' in src, "keep-tuple'da entry_price yok"

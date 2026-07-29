@@ -55,6 +55,7 @@ from core.analyzer import TechnicalAnalyzer
 from core.executor import OrderExecutor
 from core.short_executor import ShortExecutor
 from core.position_manager import PositionManager
+from core.protection import exit_flag_cache_matches_entry
 from core.trade_gates import TradeGates
 from core.news_analyzer import StockNewsAnalyzer
 from core.social_sentiment import SocialSentimentAnalyzer
@@ -1533,6 +1534,10 @@ class StockBot:
                     if symbol not in self.positions and BOT_MODE in ("long_only", "both"):
                         # A6: pozisyon geçici düşüp geri geldiyse yönetim bayraklarını koru
                         cached = self._exit_flag_cache.get(symbol, {})
+                        if cached and not exit_flag_cache_matches_entry(cached, entry_price):
+                            # Farkli girisin bayraklari — dusur (yanlis tetik enjeksiyonu)
+                            self._exit_flag_cache.pop(symbol, None)
+                            cached = {}
                         self.positions[symbol] = {
                             "entry_price": entry_price,
                             "qty": qty,
@@ -1562,6 +1567,10 @@ class StockBot:
                     if symbol not in self.short_positions and BOT_MODE in ("short_only", "both"):
                         # A6: yönetim bayraklarını koru (partial_covered/breakeven)
                         cached = self._exit_flag_cache.get(symbol, {})
+                        if cached and not exit_flag_cache_matches_entry(cached, entry_price):
+                            # Farkli girisin bayraklari — dusur (yanlis tetik enjeksiyonu)
+                            self._exit_flag_cache.pop(symbol, None)
+                            cached = {}
                         lc = cached.get("lowest_price", 0) or 0
                         self.short_positions[symbol] = {
                             "entry_price": entry_price,
@@ -1742,7 +1751,7 @@ class StockBot:
         if not isinstance(pos_data, dict):
             return
         keep = {}
-        for k in ("highest_price", "lowest_price", "breakeven_set",
+        for k in ("entry_price", "highest_price", "lowest_price", "breakeven_set",
                   "partial_sold", "partial_covered", "stop_loss_pct",
                   "stop_loss_price", "take_profit_pct", "entry_time",
                   "server_stop_verified",

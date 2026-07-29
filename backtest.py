@@ -31,6 +31,7 @@ from config import (
     MARKET_REGIME_CONFIG, COMMISSION_CONFIG,
 )
 from core.trade_gates import plan_exit_pcts
+from core.protection import should_exit_locally
 
 
 # ============================================================
@@ -521,6 +522,7 @@ class BacktestEngine:
             "cost": cost,
             "entry_date": day,
             "stop_loss_pct": sl_pct,
+            "stop_loss_price": round(price * (1 - sl_pct), 2),
             "take_profit_pct": tp_pct,
             "highest_price": price,
             "confidence": confidence,
@@ -547,6 +549,10 @@ class BacktestEngine:
             "entry_price": price,
             "qty": qty,
             "entry_date": day,
+            "stop_loss_pct": SHORT_CONFIG.get("short_stop_loss_pct", 0.06),
+            "stop_loss_price": round(
+                price * (1 + SHORT_CONFIG.get("short_stop_loss_pct", 0.06)), 2
+            ),
             "lowest_price": price,
             "confidence": confidence,
             "reasons": analysis.get("reasons", []),
@@ -577,12 +583,13 @@ class BacktestEngine:
 
             # Break-even
             if pnl_pct >= 0.015 and not pos.get("breakeven_set", False):
-                pos["stop_loss_pct"] = 0.001
+                pos["stop_loss_price"] = round(entry * (1 + 0.001), 2)
                 pos["breakeven_set"] = True
 
             # Stop-loss
-            sl_pct = pos["stop_loss_pct"]
-            if pnl_pct <= -sl_pct:
+            if should_exit_locally(
+                current_price, pos.get("stop_loss_price"), "LONG"
+            ):
                 self._close_long(sym, current_price, day, f"STOP_LOSS ({pnl_pct:.1%})")
                 continue
 
@@ -619,8 +626,9 @@ class BacktestEngine:
                 pos["lowest_price"] = current_price
 
             # Stop-loss (fiyat yükseldiyse zarar)
-            short_sl = SHORT_CONFIG.get("short_stop_loss_pct", 0.06)
-            if pnl_pct <= -short_sl:
+            if should_exit_locally(
+                current_price, pos.get("stop_loss_price"), "SHORT"
+            ):
                 self._close_short(sym, current_price, day, f"SHORT_STOP ({pnl_pct:.1%})")
                 continue
 

@@ -11,6 +11,8 @@ Kullanim: Piyasa acilmadan ~30dk once (09:00 ET) cagrilir.
 """
 from datetime import datetime
 from typing import Dict, List, Optional
+from config import STOCK_CONFIG, SHORT_CONFIG
+from core.protection import ProtectionResult
 from utils.logger import logger
 
 
@@ -239,18 +241,93 @@ class GapScanner:
                     )
 
                 elif action == "TIGHTEN_STOP":
-                    # SL'yi mevcut fiyatin %1 altina cek
-                    new_sl_pct = 0.01
-                    if alert["side"] == "LONG" and symbol in bot.positions:
-                        bot.positions[symbol]["stop_loss_pct"] = new_sl_pct
+                    side = alert["side"].upper()
+                    book = bot.positions if side == "LONG" else bot.short_positions
+                    if symbol not in book:
+                        continue
+                    pos_data = book[symbol]
+                    current_price = float(alert["current_price"])
+                    candidate = round(
+                        current_price * (0.99 if side == "LONG" else 1.01), 2
+                    )
+
+                    existing = pos_data.get("stop_loss_price")
+                    try:
+                        existing = float(existing)
+                    except (TypeError, ValueError):
+                        existing = 0.0
+                    if existing <= 0:
+                        entry = float(pos_data.get("entry_price", 0) or 0)
+                        if pos_data.get("breakeven_set", False):
+                            offset = (
+                                STOCK_CONFIG.get("breakeven_offset_pct", 0.001)
+                                if side == "LONG"
+                                else SHORT_CONFIG.get(
+                                    "short_breakeven_offset_pct", 0.003
+                                )
+                            )
+                            existing = round(entry * (1 + float(offset)), 2)
+                        else:
+                            distance = pos_data.get("stop_loss_pct")
+                            if distance is None:
+                                distance = (
+                                    STOCK_CONFIG.get("stop_loss_pct")
+                                    if side == "LONG"
+                                    else SHORT_CONFIG.get("short_stop_loss_pct")
+                                )
+                            if entry > 0 and distance is not None and float(distance) >= 0:
+                                existing = round(
+                                    entry * (
+                                        1 - float(distance)
+                                        if side == "LONG"
+                                        else 1 + float(distance)
+                                    ),
+                                    2,
+                                )
+
+                    more_protective = (
+                        existing <= 0
+                        or (side == "LONG" and candidate > existing)
+                        or (side == "SHORT" and candidate < existing)
+                    )
+                    if not more_protective:
                         logger.info(
-                            f"  GAP SL SIKILASTIRMA: {symbol} SL=%{new_sl_pct:.0%}"
+                            f"  GAP SL DEĞİŞMEDİ: {symbol} ${candidate:.2f}, "
+                            f"mevcut ${existing:.2f} daha koruyucu"
                         )
-                    elif alert["side"] == "SHORT" and symbol in bot.short_positions:
-                        bot.short_positions[symbol]["stop_loss_pct"] = new_sl_pct
-                        logger.info(
-                            f"  GAP SHORT SL SIKILASTIRMA: {symbol} SL=%{new_sl_pct:.0%}"
+                        continue
+
+                    qty = abs(float(pos_data.get("qty", 0) or 0))
+                    result: ProtectionResult = (
+                        bot.position_manager._update_server_stop_loss(
+                            symbol, candidate, qty, side=side
                         )
+                    )
+                    target_verified = (
+                        result.verified
+                        and result.stop_price is not None
+                        and abs(float(result.stop_price) - candidate) <= 0.011
+                    )
+                    if not target_verified:
+                        logger.warning(
+                            f"  GAP SL SIKILAŞTIRMA BAŞARISIZ: {symbol} "
+                            f"hedef ${candidate:.2f}, sonuç={result.outcome.value}"
+                        )
+                        continue
+
+                    pos_data["stop_loss_price"] = float(result.stop_price)
+                    if hasattr(bot, "_stash_exit_flags"):
+                        bot._stash_exit_flags(symbol, pos_data)
+                    if hasattr(bot, "_save_position_metadata"):
+                        saved = bot._save_position_metadata()
+                        if saved is not True:
+                            logger.error(
+                                f"  {symbol} gap stop metadata kaydı doğrulanamadı"
+                            )
+                    logger.info(
+                        f"  GAP SL SIKILAŞTIRMA: {symbol} "
+                        f"trigger=${float(result.stop_price):.2f} ({side})"
+                    )
 
                 elif action == "TIGHTEN_TRAILING":
                     # Trailing stop'u %2'ye sikilastir

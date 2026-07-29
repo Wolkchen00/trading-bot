@@ -134,6 +134,32 @@ TERMINAL_STATUSES = frozenset({
 STOP_TYPES = frozenset({"stop", "stop_limit", "trailing_stop"})
 
 
+def should_exit_locally(
+    current_price: Any, stop_loss_price: Any, side: str
+) -> bool:
+    """Return whether an absolute stop trigger has been reached locally.
+
+    ``stop_loss_price`` is the canonical local trigger. Percentage fields are
+    planning distances only and must not participate in the exit comparison.
+    Missing/invalid persisted values are treated as not armed until migration
+    derives a valid absolute price.
+    """
+    try:
+        current = float(current_price)
+        trigger = float(stop_loss_price)
+    except (TypeError, ValueError):
+        return False
+    if current <= 0 or trigger <= 0:
+        return False
+
+    normalized_side = str(side or "").upper()
+    if normalized_side == "LONG":
+        return current <= trigger
+    if normalized_side == "SHORT":
+        return current >= trigger
+    raise ValueError(f"Unsupported position side: {side}")
+
+
 def enum_value(value: Any) -> str:
     raw = getattr(value, "value", value)
     return str(raw or "").strip().lower()
@@ -337,6 +363,28 @@ def classify_covering_order(
         ProtectionOutcome.VERIFIED, oid, stop, covered,
         f"{symbol}: aktif stop {covered:.4f} adedi kapsiyor",
     )
+
+
+def exit_flag_cache_matches_entry(cached: Any, entry_price: Any) -> bool:
+    """A6 cikis-bayragi cache'i yalnizca AYNI girise aittir; kimligi dogrular.
+
+    Cache gecici sync-dususlerinde bayraklari korumak icin var. Ama sembol
+    kapanip AYNI surecte yeniden alinirsa, eski girisin mutlak tetigi
+    (stop_loss_price) yeni pozisyona enjekte olur ve taze pozisyon aninda
+    yanlis STOP_LOSS ile satilabilir (deploy-gate incelemesinde dogrulanmis
+    zincir). Kimlik = stash aninda kaydedilen entry_price; %0.1'den fazla
+    sapan ya da kimliksiz kayit ESLESMEZ ve cagiran cache'i dusurmelidir.
+    """
+    if not isinstance(cached, dict):
+        return False
+    try:
+        cached_entry = float(cached.get("entry_price", 0) or 0)
+        new_entry = float(entry_price or 0)
+    except (TypeError, ValueError):
+        return False
+    if cached_entry <= 0 or new_entry <= 0:
+        return False
+    return abs(new_entry - cached_entry) / cached_entry <= 0.001
 
 
 def protection_alarm(bot: Any, key: str, detail: str, dedupe_seconds: int = 900) -> bool:

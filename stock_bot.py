@@ -193,6 +193,8 @@ class StockBot:
         self._daily_buys_count = 0
         self._last_status_time = datetime.min
         self._heartbeat_counter = 0
+        self._last_protection_reconcile = datetime.min
+        self._protection_alarm_cache = {}
         self._morning_scan_done = False
         self._morning_scan_date = None
         self._market_regime = "UNKNOWN"   # BULL / BEAR / UNKNOWN
@@ -296,7 +298,13 @@ class StockBot:
         # Sunucu-taraflı koruma emri garantisi: bracket DAY bacakları düşmüş,
         # emirsiz kalmış pozisyonlara stop yerleştir (bot çökse bile korunsun)
         try:
-            self.position_manager.ensure_protective_stops(config)
+            protection_summary = self.position_manager.ensure_protective_stops(config)
+            self._last_protection_reconcile = datetime.now()
+            if not protection_summary.ok:
+                logger.error(
+                    f"  Başlangıç koruma uzlaştırması eksik: "
+                    f"{protection_summary.detail}"
+                )
         except Exception as e:
             logger.warning(f"  Koruma emri garantisi başarısız: {e}")
 
@@ -337,6 +345,18 @@ class StockBot:
     # ANA DÖNGÜ
     # ============================================================
 
+    def _maybe_reconcile_protection(self, config: Dict, now: datetime = None):
+        """Açık piyasada 5 dakikada bir ucuz, alarm-dedup'lı kapsama kontrolü."""
+        now = now or datetime.now()
+        last = getattr(self, "_last_protection_reconcile", datetime.min)
+        if (now - last).total_seconds() < 300:
+            return None
+        self._last_protection_reconcile = now
+        summary = self.position_manager.ensure_protective_stops(config)
+        if not summary.ok:
+            logger.error(f"  Periyodik koruma uzlaştırması eksik: {summary.detail}")
+        return summary
+
     def run(self):
         """Ana trading döngüsü."""
         config = STOCK_CONFIG
@@ -371,10 +391,24 @@ class StockBot:
                 if (market_status["status"] == "OPEN"
                         and getattr(self, "_last_market_status", "") != "OPEN"):
                     try:
-                        self.position_manager.ensure_protective_stops(config)
+                        protection_summary = (
+                            self.position_manager.ensure_protective_stops(config)
+                        )
+                        self._last_protection_reconcile = datetime.now()
+                        if not protection_summary.ok:
+                            logger.error(
+                                f"  Açılış koruma uzlaştırması eksik: "
+                                f"{protection_summary.detail}"
+                            )
                     except Exception as e:
-                        logger.debug(f"  Açılış koruma emri kontrolü hatası: {e}")
+                        logger.error(f"  Açılış koruma emri kontrolü hatası: {e}")
                 self._last_market_status = market_status["status"]
+
+                if market_status["status"] == "OPEN":
+                    try:
+                        self._maybe_reconcile_protection(config)
+                    except Exception as e:
+                        logger.error(f"  Periyodik koruma kontrolü hatası: {e}")
 
                 # Piyasa kapalı → bekle
                 if market_status["status"] == "CLOSED":
@@ -1507,6 +1541,9 @@ class StockBot:
                             "highest_price": max(current_price, cached.get("highest_price", 0) or 0),
                             "breakeven_set": cached.get("breakeven_set", False),
                             "partial_sold": cached.get("partial_sold", False),
+                            "server_stop_verified": bool(cached.get("server_stop_verified", False)),
+                            "server_stop_order_id": cached.get("server_stop_order_id") or None,
+                            "close_in_progress": bool(cached.get("close_in_progress", False)),
                         }
                         if cached.get("stop_loss_pct") is not None:
                             self.positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
@@ -1532,6 +1569,9 @@ class StockBot:
                             "lowest_price": min(current_price, lc) if lc > 0 else current_price,
                             "breakeven_set": cached.get("breakeven_set", False),
                             "partial_covered": cached.get("partial_covered", False),
+                            "server_stop_verified": bool(cached.get("server_stop_verified", False)),
+                            "server_stop_order_id": cached.get("server_stop_order_id") or None,
+                            "close_in_progress": bool(cached.get("close_in_progress", False)),
                         }
                         if cached.get("stop_loss_pct") is not None:
                             self.short_positions[symbol]["stop_loss_pct"] = cached["stop_loss_pct"]
@@ -1700,7 +1740,8 @@ class StockBot:
         keep = {}
         for k in ("highest_price", "lowest_price", "breakeven_set",
                   "partial_sold", "partial_covered", "stop_loss_pct",
-                  "take_profit_pct", "entry_time"):
+                  "take_profit_pct", "entry_time", "server_stop_verified",
+                  "server_stop_order_id", "close_in_progress"):
             v = pos_data.get(k)
             if v is not None:
                 keep[k] = v
@@ -1710,6 +1751,20 @@ class StockBot:
     def _save_position_metadata(self):
         """Pozisyon metadata'sını dosyaya kaydet (restart-safe)."""
         try:
+            # Koruma/close alanları her kayıtta açıkça ve None-güvenli yazılır.
+            for book in (self.positions, self.short_positions):
+                for pos in book.values():
+                    if not isinstance(pos, dict):
+                        continue
+                    pos["server_stop_verified"] = bool(
+                        pos.get("server_stop_verified", False)
+                    )
+                    pos["server_stop_order_id"] = (
+                        pos.get("server_stop_order_id") or None
+                    )
+                    pos["close_in_progress"] = bool(
+                        pos.get("close_in_progress", False)
+                    )
             data = {
                 "positions": self.positions,
                 "short_positions": self.short_positions,
@@ -1726,8 +1781,10 @@ class StockBot:
             }
             with open(self.POSITIONS_FILE, "w") as f:
                 json.dump(data, f, indent=2, default=str)
+            return True
         except Exception as e:
-            logger.debug(f"  Pozisyon kayıt hatası: {e}")
+            logger.error(f"  Pozisyon kayıt hatası: {e}")
+            return False
 
     def _load_position_metadata(self):
         """Kaydedilmiş pozisyon metadata'sını yükle."""
@@ -1744,6 +1801,9 @@ class StockBot:
                             "highest_price": meta.get("highest_price", self.positions[sym].get("highest_price", 0)),
                             "breakeven_set": meta.get("breakeven_set", False),
                             "partial_sold": meta.get("partial_sold", False),
+                            "server_stop_verified": bool(meta.get("server_stop_verified", False)),
+                            "server_stop_order_id": meta.get("server_stop_order_id") or None,
+                            "close_in_progress": bool(meta.get("close_in_progress", False)),
                             "synced_from_alpaca": False,
                         })
                         # stop_loss_pct=null enjekte etme — None değer position_manager'da
@@ -1766,6 +1826,9 @@ class StockBot:
                             "lowest_price": meta.get("lowest_price", self.short_positions[sym].get("lowest_price", 0)),
                             "breakeven_set": meta.get("breakeven_set", False),
                             "partial_covered": meta.get("partial_covered", False),
+                            "server_stop_verified": bool(meta.get("server_stop_verified", False)),
+                            "server_stop_order_id": meta.get("server_stop_order_id") or None,
+                            "close_in_progress": bool(meta.get("close_in_progress", False)),
                             "synced_from_alpaca": False,
                         })
                         if meta.get("stop_loss_pct") is not None:  # None enjekte etme
@@ -1864,7 +1927,7 @@ class StockBot:
         try:
             self.position_manager.ensure_protective_stops(STOCK_CONFIG)
         except Exception as e:
-            logger.debug(f"  Günlük koruma emri kontrolü hatası: {e}")
+            logger.error(f"  Günlük koruma emri kontrolü hatası: {e}")
 
         # Ajan performans dosyası bakımı (v4.10): çözümsüz/eski kayıtları buda —
         # konteyner günlerce restart görmediği için açılış budaması yetmez

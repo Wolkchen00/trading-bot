@@ -15,6 +15,7 @@ from alpaca.trading.requests import (
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from core.streak import update_loss_streak
+from core.protection import protection_alarm
 from utils.logger import logger
 
 
@@ -143,23 +144,25 @@ class ShortExecutor:
 
             # Sunucu tarafli stop-loss (BUY emri — fiyat yukselirse cover)
             stop_price = round(price * (1 + adaptive_sl), 2)
+            stop_submit_error = None
             try:
                 limit_price = round(stop_price * 1.005, 2)  # Ters: limit > stop
+                sl_tif = (
+                    TimeInForce.GTC
+                    if float(qty) == int(qty)
+                    else TimeInForce.DAY
+                )
                 sl_request = StopLimitOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=OrderSide.BUY,  # Short cover = BUY
-                    time_in_force=TimeInForce.GTC,
+                    time_in_force=sl_tif,
                     stop_price=stop_price,
                     limit_price=limit_price,
                 )
                 bot.client.submit_order(sl_request)
-                logger.info(
-                    f"  SHORT STOP-LOSS: {symbol} @ ${stop_price:,.2f} "
-                    f"(+{adaptive_sl:.1%} | ATR={atr_value:.4f})"
-                )
             except Exception as sl_err:
-                logger.warning(f"  Short stop-loss emri gonderilemedi: {sl_err}")
+                stop_submit_error = sl_err
 
             # Pozisyon kaydet
             bot.short_positions[symbol] = {
@@ -171,7 +174,44 @@ class ShortExecutor:
                 "stop_loss_pct": adaptive_sl,
                 "lowest_price": price,  # Trailing stop icin (ters)
                 "partial_covered": False,
+                "server_stop_verified": False,
+                "server_stop_order_id": None,
+                "close_in_progress": False,
             }
+            protection = bot.position_manager.verify_protective_stop(
+                symbol, side="SHORT", expected_stop=stop_price
+            )
+            target_verified = (
+                protection.verified
+                and protection.stop_price is not None
+                and abs(protection.stop_price - stop_price) <= 0.011
+            )
+            if not target_verified:
+                bot.short_positions[symbol]["server_stop_verified"] = False
+                bot.short_positions[symbol]["server_stop_order_id"] = None
+                protection_alarm(
+                    bot, f"{symbol}:SHORT:ENTRY",
+                    f"{symbol}: SHORT entry sonrası stop doğrulanamadı "
+                    f"({protection.outcome.value}); submit={stop_submit_error}; "
+                    f"{protection.detail}",
+                )
+                return False
+            bot.short_positions[symbol]["server_stop_verified"] = True
+            bot.short_positions[symbol]["server_stop_order_id"] = protection.order_id
+            if hasattr(bot, "_stash_exit_flags"):
+                bot._stash_exit_flags(symbol, bot.short_positions[symbol])
+            if hasattr(bot, "_save_position_metadata"):
+                saved = bot._save_position_metadata()
+                if saved is not True:
+                    protection_alarm(
+                        bot, f"{symbol}:SHORT:ENTRY_PERSIST",
+                        f"{symbol}: doğrulanmış SHORT stop state'i diske yazılamadı",
+                    )
+            logger.info(
+                f"  SHORT STOP-LOSS DOĞRULANDI: {symbol} @ ${stop_price:,.2f} "
+                f"(+{adaptive_sl:.1%} | ATR={atr_value:.4f}) "
+                f"#{protection.order_id}"
+            )
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({
                 "action": "SHORT", "symbol": symbol, "price": price,

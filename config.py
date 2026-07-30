@@ -298,6 +298,10 @@ STOCK_CONFIG = {
     # === HİSSE HAVUZU ===
     "symbols": list(STOCK_IDS.keys()),
 
+    # === GOZLEMLENEBILIRLIK (R4) ===
+    "funnel_enabled": True,
+    "no_trade_alert_business_days": 3,
+
     # === Pozisyon ağırlıkları (tier bazlı) ===
     "tier_weights": {
         # Mega cap — %40

@@ -383,6 +383,9 @@ STOCK_CONFIG = {
 
     # === GATE FİLTRELERİ ===
     "ema200_trend_gate": True,
+    # R6 E2 paper-first: canlıda kapalıdır; PAPER_AGGRESSIVE açıkça etkinleştirir.
+    "fundamental_gate_enabled": False,
+    "fundamental_gate_min_score": 0,
     "time_filter_enabled": True,            # Piyasa saatleri kontrolü
     "earnings_gate_enabled": True,          # Earnings koruma
     "volatility_filter_enabled": True,
@@ -747,13 +750,14 @@ PAPER_AGGRESSIVE_CONFIG = {
     "min_confidence_score": 30,
     "scan_interval_seconds": 15,              # 30 → 15 (daha sık tara)
     "stop_loss_pct": 0.05,                    # %4 → %5 (biraz daha geniş)
-    "take_profit_pct": 0.06,                  # %8 → %6 (daha hızlı kar al)
-    # v4.8: paper R:R hedefi 1.5 (dinamik TP = SL×1.5, tavan %10) → TP %7.5-9
-    # bandında kalır, işlemler daha hızlı kapanır = öğrenme döngüsü hızlanır.
-    # ESKİ BUG: TP %6 / SL taban %5 sabitken R:R gate (min 2.0) paper'da HER
-    # alımı blokluyordu (maks oran 1.2) — paper hisse işlemleri aylardır ölüydü.
-    "min_rr_ratio": 1.5,
-    "take_profit_max_pct": 0.10,
+    "partial_profit_pct": 0.03,               # R6 Option B: +%3'te yarısını bankala
+    "take_profit_pct": 0.05,                  # R6 Option B: dinamik TP tabanı
+    # R6 aritmetik (ATR%=0.5,1,1.5,2,2.77,3; çarpan=1.8, SL floor/cap=%5/%6):
+    # SL={%5,%5,%5,%5,%5,%5.4}; TP=SL×1.25={%6.25,%6.25,%6.25,%6.25,%6.25,%6.75}.
+    # Böylece her TP [%5,%7.5] bandında ve TP/SL=1.25 olduğundan
+    # `rr_ratio + 1e-9 < min_rr_ratio` hiçbir sweep noktasında self-block etmez.
+    "min_rr_ratio": 1.25,
+    "take_profit_max_pct": 0.075,
     "sell_cooldown_seconds": 120,             # 5dk → 2dk (daha hızlı geri gir)
 
     # === KAPILAR (v4.12 — paper'da gevşetilen filtreler; LIVE'da hepsi aynen) ===
@@ -790,6 +794,11 @@ PAPER_AGGRESSIVE_CONFIG = {
 
     # === SIGNAL QUEUE (paper'da AÇIK — pullback girişi paper-first denenir) ===
     "pullback_queue_enabled": True,
+
+    # === FUNDAMENTAL GATE (R6 E2, paper-first) ===
+    # Veri yoksa fail-closed; skor 0 kabul, yalnız 0'ın altı negatif sayılır.
+    "fundamental_gate_enabled": True,
+    "fundamental_gate_min_score": 0,
 
     # === KAYIP SERİSİ (v4.10 — paper'da öğrenme akışını dondurmasın) ===
     # 08-10 Tem kanıtı: paper 2 ardışık zarardan sonra her giriş için güven ≥70

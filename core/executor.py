@@ -58,6 +58,32 @@ class OrderExecutor:
                     time.sleep(delay)
         return False, None, "; ".join(errors[-3:])
 
+    def _real_exit_fill(
+        self, symbol: str, close_order: object, expected_qty: float
+    ) -> tuple[float, float, str]:
+        """Flat doğrulandıktan sonra close emrinin gerçek broker fill'ini oku."""
+        order_id = str(getattr(close_order, "id", "") or "")
+        candidates = [close_order]
+        if order_id:
+            try:
+                candidates.insert(0, self.bot.client.get_order_by_id(order_id))
+            except Exception as exc:
+                logger.debug(f"  {symbol} close fill yeniden okunamadı #{order_id}: {exc}")
+
+        for order in candidates:
+            try:
+                fill_price = float(getattr(order, "filled_avg_price", 0) or 0)
+                filled_qty = abs(float(getattr(order, "filled_qty", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+            if fill_price > 0 and filled_qty > 0:
+                # close_position tam kapama niyetidir. Broker'ın gerçek fill qty'si
+                # daha hassas olsa da yerel qty'yi aşan eski/stale bir emri kabul etme.
+                tolerance = max(1e-4, abs(float(expected_qty)) * 1e-4)
+                if filled_qty <= abs(float(expected_qty)) + tolerance:
+                    return fill_price, filled_qty, order_id
+        return 0.0, 0.0, order_id
+
     def _restore_after_failed_close(
         self, symbol: str, pos: Dict, close_detail: str
     ) -> None:
@@ -455,8 +481,9 @@ class OrderExecutor:
                 )
 
             # close_position kabulü execution değildir; broker pozisyonunu poll et.
+            close_order = None
             try:
-                bot.client.close_position(symbol)
+                close_order = bot.client.close_position(symbol)
             except Exception as close_exc:
                 self._restore_after_failed_close(
                     symbol, pos, f"close_position reddi/hatası: {close_exc}"
@@ -481,7 +508,30 @@ class OrderExecutor:
                 bot.consecutive_errors += 1
                 return False
 
-            # Marker yalnız broker'dan flat kanıtı alındıktan sonra temizlenir.
+            # Flat olmak tek başına fiyat/PnL kanıtı değildir. Snapshot/unrealized
+            # değerlerini muhasebeleştirmek phantom kayda yol açar; gerçek close fill
+            # broker'dan yeniden okunamazsa kayıt reconciler'a bırakılır.
+            fill_price, filled_qty, exit_order_id = self._real_exit_fill(
+                symbol, close_order, qty
+            )
+            if fill_price <= 0 or filled_qty <= 0:
+                pos["close_in_progress"] = True
+                if hasattr(bot, "_stash_exit_flags"):
+                    bot._stash_exit_flags(symbol, pos)
+                bot._save_position_metadata()
+                protection_alarm(
+                    bot, f"{symbol}:CLOSE_FILL",
+                    f"{symbol}: broker flat doğrulandı fakat gerçek close fill "
+                    "okunamadı; yerel çıkış kaydedilmedi, reconciler bekleniyor",
+                )
+                bot.consecutive_errors += 1
+                return False
+
+            qty = filled_qty
+            current_price = fill_price
+            pnl_usd = (fill_price - float(entry)) * filled_qty
+
+            # Marker yalnız broker'dan flat + gerçek fill kanıtı alındıktan sonra temizlenir.
             pos["close_in_progress"] = False
 
             # PDT kaydı (aynı gün alınıp satıldıysa)
@@ -511,12 +561,16 @@ class OrderExecutor:
             # eski partial_sold/breakeven taşınmasın)
             if hasattr(bot, "_exit_flag_cache"):
                 bot._exit_flag_cache.pop(symbol, None)
-            bot._save_position_metadata()
             bot.last_trade_time[symbol] = datetime.now()
             bot.trades_today.append({
                 "action": "SELL", "symbol": symbol, "price": current_price,
-                "pnl": pnl_usd, "reason": reason, "time": datetime.now().isoformat(),
+                "qty": qty, "pnl": pnl_usd, "reason": reason,
+                "entry_time": entry_time, "exit_order_id": exit_order_id or None,
+                "time": datetime.now().isoformat(),
             })
+            # Pozisyon kaldırma + gerçekleşmiş exit satırı aynı metadata yazımında
+            # kalıcılaşsın; restart aralığında reconciler phantom üretmesin.
+            bot._save_position_metadata()
 
             # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti
             # (v4.12.1, core/streak.py; kârlı stop-out artık zarar SAYILMAZ).

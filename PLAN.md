@@ -414,6 +414,54 @@ fiyatı $207.37 vs fill $207.11 (kozmetik).
 güven yüzdesi loglar; blok olursa sebep INFO'da (EMA200/VOL/MARKET/R:R/SEKTÖR).
 Kârlı stop-out sonrası heartbeat'te "Zarar serisi" DÜŞMELİ (artmamalı).
 
+## v4.13 — Koruma değişmezi + kanonik tetik + giriş kalitesi (2026-07-29/30, İhsan: "onayladım devam edebiliriz", "canlı+paper birlikte", "B kademeli çıkış, veri yoksa blokla, 20 işlem/30 gün")
+
+**Kriz teşhisi (12 gün alımsızlık + %8.3 kazanma oranı):** Codex 5.6-sol ile 5 turlu
+Same Page Meeting + 15-ajanlık forensik. Defter -$299.52 ŞİŞİKTİ: AMD+META çift
+kayıt (-$145.71 hayalet), gerçek ~-$154. Kökler: (0) korumasız pozisyon bırakan
+4 yol + log tersini söylüyor, (1) break-even işaret hatası (-%0.3'te satış),
+(2) gap tetiği girişten hesaplanıyor, (3) WARN kilidi süresiz, (6-yeni) bracket
+rezervi yüzünden sunucu SL güncellemesi paper'da 42/42 REDDEDİLDİ (40310000).
+
+**R0 (deploy 2026-07-29 18:43 UTC):** `core/protection.py` doğrulanmış koruma
+değişmezi — replace-then-verify (`replace_order_by_id`), HTTP 200 kanıt değil,
+elected-but-unfilled = başarısız koruma, canlıda atomik bracket yoksa giriş yok,
+close-in-progress kalıcı işareti, kapsama-bazlı `ensure_protective_stops`.
+Alarm: `notify_critical` → `state_*/alarms.jsonl` (kanaldan bağımsız) + VPS
+`trading_protection_check.sh` (*/20dk, salt okunur Alpaca kapsama denetimi +
+alarm köprüsü; cooldown artık alarm-türü-başına). ntfy zinciri uçtan uca kanıtlı
+(İhsan abone, test bildirimi telefona ulaştı). Park kolu (SPY) değişmez kapsamı
+DIŞINDA ama raporlanır (SKIPPED_PARKING, alarm değil INFO — alarm yorgunluğu
+düzeltmesi Claude'un düşmanca testiyle yakalandı).
+
+**R1 (deploy 2026-07-29 23:50 UTC):** kanonik mutlak tetik `stop_loss_price` +
+`should_exit_locally` — KÖK-1 ve KÖK-2 kapandı; `stop_loss_pct` işaretsiz kaldı;
+tetik stash+sync+metadata üçlüsünde kalıcı; 4-mercekli taze-göz deploy kapısı
+1 MAJOR yakaladı (A6 cache'i giriş kimliksizdi → çapraz-giriş tetik enjeksiyonu)
+ve merge öncesi kapatıldı (`exit_flag_cache_matches_entry`, %0.1 tolerans).
+
+**R6 (bu deploy):** İhsan kararları — (1) TP mimarisi = B kademeli çıkış,
+(2) temel veri yoksa BLOKLA, (3) ölçüm 20 işlem/30 gün 4-metrik.
+- E1 bugfix (global): pullback kuyruğundaki uzamış giriş artık market BUY'a
+  düşemez (3 asla-yeşil kaybın 2'si bu yoldan, -$92.7).
+- E2 (paper-first): Fundamental Gate — veri yoksa FUND_NO_DATA, skor<0
+  FUND_NEGATIVE; canlıda bayrak KAPALI.
+- Option B (yalnız paper): partial %3'te yarı sat, TP bandı %5-7.5,
+  min_rr 1.25 (üçü birlikte — tavan tek başına düşürülürse R:R self-block).
+- Kayıt bütünlüğü: çıkış yalnız doğrulanmış flat + gerçek broker fill ile
+  yazılır; reconciler `exit_order_id`/qty+giriş dedup'u (hayalet çift kayıt kapandı).
+- `tools/olcum_raporu.py`: 4 metrik PASS/FAIL + n=X/20 ilerleme.
+
+**Ölçüm kapısı:** 20 kapalı paper işlemi VEYA 30 işlem günü → (1) net PnL>0,
+(2) yeşillerin ≥%60'ında +%3 bacağı doldu, (3) asla-yeşil oranı ≤%20 ve zarar
+payı ≤%30, (4) 0 hayalet + 0 stop reddi. Dördü birden sağlanmadan canlıya
+hiçbir kalibrasyon geçmez. Canlı alım kilidi R5 kapısına dek KAPALI.
+
+**Açık konular (Issues List):** dış-kapanış fill'i hiç bulunamazsa defter kaydı
+slot işgal eder (sınırlı, para riski yok); canlı SHORT girişi market-sonra-stop
+(canlı long_only, maruz değil); `trailing_override` ölü kod; PARTIAL_SELL no-op;
+SPY park kolu koruma kapsamı kararı.
+
 ## v4.12.2 — 3. canlı gün bakımı (2026-07-15, İhsan: "logları kontrol et, bakım yap")
 
 **Canlı sağlık (VPS, 72h):** İki konteyner 37h kesintisiz; deploy = v4.12.1

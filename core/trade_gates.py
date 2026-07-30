@@ -4,13 +4,14 @@ Trade Gates — Hisse Senedi Alım Filtre Sistemi
 Gates:
 1. Market Hours Gate (piyasa açık mı?)
 2. EMA200 Trend Gate
-3. Earnings Gate (earnings yakınsa alım yapma)
-4. Kayıp Serisi Koruyucu
-5. Coin/Hisse Filtresi (ardışık zarar)
-6. R:R Gate (Risk/Ödül oranı)
-7. Multi-Timeframe Onay
-8. Volatilite Filtresi
-9. PDT Gate (day trade limiti)
+3. Fundamental Gate (paper-first, veri yoksa blok)
+4. Earnings Gate (earnings yakınsa alım yapma)
+5. Kayıp Serisi Koruyucu
+6. Coin/Hisse Filtresi (ardışık zarar)
+7. R:R Gate (Risk/Ödül oranı)
+8. Multi-Timeframe Onay
+9. Volatilite Filtresi
+10. PDT Gate (day trade limiti)
 """
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Tuple
@@ -80,7 +81,24 @@ class TradeGates:
                 logger.info(f"  {symbol} EMA200 GATE: Fiyat EMA200 altinda, BUY engellendi")
                 return False, "EMA200"
 
-        # 3. Earnings Gate (YENİ)
+        # 3. Fundamental Gate (R6 E2; paper override açar, live no-op)
+        if config.get("fundamental_gate_enabled", False):
+            if not analysis.get("fundamental_data_ok", False):
+                logger.info(f"  {symbol} FUNDAMENTAL GATE: temel veri yok")
+                return False, "FUND_NO_DATA"
+            score = analysis.get("fundamental_score", 0)
+            min_score = config.get("fundamental_gate_min_score", 0)
+            try:
+                below_minimum = float(score) < float(min_score)
+            except (TypeError, ValueError):
+                below_minimum = True
+            if below_minimum:
+                logger.info(
+                    f"  {symbol} FUNDAMENTAL GATE: skor {score} < {min_score}"
+                )
+                return False, "FUND_NEGATIVE"
+
+        # 4. Earnings Gate (YENİ)
         if config.get("earnings_gate_enabled", True):
             if hasattr(self.bot, 'earnings_calendar'):
                 should_avoid, reason = self.bot.earnings_calendar.should_avoid_trading(symbol)
@@ -88,12 +106,12 @@ class TradeGates:
                     logger.info(f"  {symbol} EARNINGS GATE: {reason}")
                     return False, "EARNINGS"
 
-        # 4. Kayıp Serisi Koruyucu
+        # 5. Kayıp Serisi Koruyucu
         blocked, reason = self._check_loss_streak(symbol, analysis, config)
         if blocked:
             return False, reason
 
-        # 5. Hisse Filtresi (ardışık zarar)
+        # 6. Hisse Filtresi (ardışık zarar)
         if config.get("coin_filter_enabled", True):
             losses = getattr(self.bot, '_symbol_consecutive_losses', {}).get(symbol, 0)
             max_losses = config.get("coin_max_consecutive_losses", 3)
@@ -101,19 +119,19 @@ class TradeGates:
                 logger.info(f"  {symbol} HİSSE FİLTRE: {losses} ardisik zarar, devre disi")
                 return False, "STOCK_FILTER"
 
-        # 6. R:R Gate
+        # 7. R:R Gate
         if config.get("rr_gate_enabled", True):
             blocked, reason = self._check_rr_gate(symbol, analysis, config)
             if blocked:
                 return False, reason
 
-        # 7. Multi-Timeframe Onay
+        # 8. Multi-Timeframe Onay
         if config.get("multi_tf_enabled", True):
             blocked, reason = self._check_mtf(symbol, config)
             if blocked:
                 return False, reason
 
-        # 8. Volatilite Filtresi
+        # 9. Volatilite Filtresi
         if config.get("volatility_filter_enabled", True):
             atr_val = analysis.get("atr", 0)
             cur_price = analysis.get("price", 1)
@@ -124,7 +142,7 @@ class TradeGates:
                     logger.info(f"  {symbol} VOL GATE: ATR={atr_pct:.1%} > {max_atr:.0%}")
                     return False, "VOLATILITY"
 
-        # 9. PDT Gate (YENİ)
+        # 10. PDT Gate (YENİ)
         if hasattr(self.bot, 'pdt_tracker'):
             can_dt, reason = self.bot.pdt_tracker.can_day_trade()
             if not can_dt:

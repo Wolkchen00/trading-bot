@@ -45,7 +45,7 @@ warnings = []
 
 
 def test(name, func):
-    """Test wrapper — hataları yakalar ve raporlar."""
+    """Test wrapper ,  hataları yakalar ve raporlar."""
     try:
         result = func()
         if result is True or result is None:
@@ -123,12 +123,12 @@ test("vaderSentiment", test_vader)
 
 def test_onnx_finbert():
     # FinBERT artık ONNX ile çalışıyor (transformers/PyTorch Railway OOM nedeniyle
-    # kaldırıldı — c9800c5). Lokalde onnxruntime olmayabilir → VADER fallback tasarımı.
+    # kaldırıldı ,  c9800c5). Lokalde onnxruntime olmayabilir → VADER fallback tasarımı.
     try:
         import onnxruntime  # noqa: F401
         return True
     except ImportError:
-        return "onnxruntime yok — FinBERT yerine VADER fallback (Docker'da ONNX aktif)"
+        return "onnxruntime yok ,  FinBERT yerine VADER fallback (Docker'da ONNX aktif)"
 test("onnxruntime (FinBERT)", test_onnx_finbert)
 
 def test_ntscraper():
@@ -136,7 +136,7 @@ def test_ntscraper():
         from ntscraper import Nitter
         return True
     except ImportError:
-        return "ntscraper import başarısız — X/Twitter devre dışı (opsiyonel)"
+        return "ntscraper import başarısız ,  X/Twitter devre dışı (opsiyonel)"
 test("ntscraper (X scraper)", test_ntscraper)
 
 def test_yfinance():
@@ -176,7 +176,7 @@ def test_trading_mode():
     assert TRADING_MODE in ("paper", "live"), f"Geçersiz TRADING_MODE: {TRADING_MODE}"
     assert BOT_MODE in ("long_only", "short_only", "both"), f"Geçersiz BOT_MODE: {BOT_MODE}"
     if TRADING_MODE == "live":
-        return f"⚠️ TRADING_MODE='live' — Gerçek para riski!"
+        return f"⚠️ TRADING_MODE='live' ,  Gerçek para riski!"
 test("TRADING_MODE & BOT_MODE", test_trading_mode)
 
 def test_stock_ids():
@@ -204,15 +204,15 @@ def test_geopolitical_keywords():
     assert "bearish_elevated" in GEOPOLITICAL_KEYWORDS
     assert "bullish" in GEOPOLITICAL_KEYWORDS
     total = sum(len(v) for v in GEOPOLITICAL_KEYWORDS.values())
-    assert total > 30, f"Sadece {total} jeopolitik keyword — çok az"
+    assert total > 30, f"Sadece {total} jeopolitik keyword ,  çok az"
 test("Jeopolitik keyword'ler", test_geopolitical_keywords)
 
 def test_data_api_keys():
     from config import ALPHA_VANTAGE_KEY, MARKETAUX_TOKEN
     if not ALPHA_VANTAGE_KEY:
-        return "ALPHA_VANTAGE_KEY boş — temel analiz çalışmayacak"
+        return "ALPHA_VANTAGE_KEY boş ,  temel analiz çalışmayacak"
     if not MARKETAUX_TOKEN:
-        return "MARKETAUX_TOKEN boş — haber analizi çalışmayacak"
+        return "MARKETAUX_TOKEN boş ,  haber analizi çalışmayacak"
 test("Veri API anahtarları", test_data_api_keys)
 
 
@@ -268,12 +268,12 @@ def test_finbert():
         from core.finbert_analyzer import FinBERTAnalyzer
         return True
     except ImportError as e:
-        return f"FinBERT import başarısız (torch eksik?) — {e}"
+        return f"FinBERT import başarısız (torch eksik?) ,  {e}"
 test("core.finbert_analyzer (opsiyonel)", test_finbert)
 
 def test_logger():
     from utils.logger import logger
-    logger.info("Test log mesaji — sistem testi")
+    logger.info("Test log mesaji ,  sistem testi")
 test("utils.logger", test_logger)
 
 
@@ -439,7 +439,7 @@ section("7. RİSK YÖNETİMİ")
 
 def test_kill_switch():
     from core.kill_switch import KillSwitch
-    # v4.12.2: göreli yol repo köküne test_kill.json bırakıyordu — tmp'e izole
+    # v4.12.2: göreli yol repo köküne test_kill.json bırakıyordu ,  tmp'e izole
     _kill_path = os.path.join(_TEST_TMP, "test_kill.json")
     ks = KillSwitch(max_consecutive_errors=3, max_daily_loss_pct=0.05, kill_file=_kill_path)
     assert not ks.is_active, "KillSwitch başlangıçta aktif olmamalı"
@@ -482,7 +482,7 @@ def test_wash_sale():
     # 30 gün içinde aynı hisseyi kontrol et
     is_wash, reason = wst.check_wash_sale("AAPL")
     # Not: Tarihe bağlı olabilir, mantığın çalıştığını doğruluyoruz
-    print(f"     Wash sale check: {is_wash} — {reason}")
+    print(f"     Wash sale check: {is_wash} ,  {reason}")
 test("Wash Sale Tracker", test_wash_sale)
 
 
@@ -537,7 +537,7 @@ def test_market_hours():
     now = mh.now_et()
     if now.weekday() >= 5:
         assert status["status"] == "CLOSED", "Hafta sonu açık?"
-        print(f"     (Şu an hafta sonu — CLOSED bekleniyor ✓)")
+        print(f"     (Şu an hafta sonu ,  CLOSED bekleniyor ✓)")
 test("Market Hours durumu", test_market_hours)
 
 def test_market_holidays():
@@ -688,7 +688,7 @@ def test_requirements():
     assert os.path.exists(req)
     with open(req) as f:
         content = f.read()
-    # transformers bilinçli yok (Railway OOM — c9800c5); FinBERT = onnxruntime yolu
+    # transformers bilinçli yok (Railway OOM ,  c9800c5); FinBERT = onnxruntime yolu
     required = ["alpaca-py", "pandas", "numpy", "ta", "python-dotenv", "pytz", "onnxruntime"]
     missing = [r for r in required if r not in content]
     assert len(missing) == 0, f"Eksik bağımlılıklar: {missing}"
@@ -864,7 +864,7 @@ test("Pullback kuyruğu uzamış-giriş sezgisi", test_extended_entry_heuristic)
 section("15. v4.9 DÜZELTMELERİ")
 
 def test_v49_confidence_remap():
-    """v4.9: kaynak-remap ×2.0 — güçlü mutabakat canlı eşiğe (50) ulaşabilmeli,
+    """v4.9: kaynak-remap ×2.0 ,  güçlü mutabakat canlı eşiğe (50) ulaşabilmeli,
     nötr piyasa 0'a yakın kalmalı. 06-07 Tem: remap'siz |ws| max 15'te kaldı,
     hisse motoru live+paper fiilen kapalıydı."""
     from core.agent_coordinator import AgentCoordinator
@@ -1135,7 +1135,7 @@ section("16. v4.10 DÜZELTMELERİ")
 def test_v410_sector_rotation_reduced():
     """v4.10: normal rejimde EV/CryptoMining hard-veto DEĞİL, ×0.7 kısıtlı.
     08-10 Tem: MARA guven 50-62 (canlının en güçlü sinyali) 'normal rejiminde
-    kaçınılıyor' bloğuyla öldü — 4 günde 0 canlı giriş."""
+    kaçınılıyor' bloğuyla öldü ,  4 günde 0 canlı giriş."""
     from core.sector_rotation import SectorRotator
     sr = SectorRotator()
     sr.update_vix(18)  # normal rejim
@@ -1155,14 +1155,14 @@ def test_v410_sector_rotation_reduced():
 test("v4.10 sektör rotasyonu reduced katmanı", test_v410_sector_rotation_reduced)
 
 def test_v410_vix_key_fix():
-    """v4.10: stock_bot VIX değerini 'vix' anahtarından okumalı — 'value' anahtarı
+    """v4.10: stock_bot VIX değerini 'vix' anahtarından okumalı ,  'value' anahtarı
     hiç var olmadı, her gün varsayılan 20 okunup rejim 'normal'e çivileniyordu."""
     src_path = os.path.join(PROJECT_ROOT, "stock_bot.py")
     with open(src_path, encoding="utf-8") as f:
         src = f.read()
     assert 'vix_data.get("value"' not in src, "VIX hâlâ olmayan 'value' anahtarından okunuyor!"
     assert 'vix_data.get("vix")' in src, "VIX 'vix' anahtarından okunmuyor!"
-    # macro_data'nın gerçekten bu anahtarla döndüğünü doğrula (statik — ağ çağrısı yok)
+    # macro_data'nın gerçekten bu anahtarla döndüğünü doğrula (statik ,  ağ çağrısı yok)
     with open(os.path.join(PROJECT_ROOT, "core", "macro_data.py"), encoding="utf-8") as f:
         macro_src = f.read()
     assert '"vix": round(current_vix' in macro_src, "macro vix dict'i 'vix' anahtarıyla dönmüyor!"
@@ -1170,7 +1170,7 @@ def test_v410_vix_key_fix():
 test("v4.10 VIX anahtar bug fix", test_v410_vix_key_fix)
 
 def test_v410_band_sector_weight():
-    """v4.10: bant (LIVE) boyut yolu sector_weight'i uygular — kısıtlı sektör
+    """v4.10: bant (LIVE) boyut yolu sector_weight'i uygular ,  kısıtlı sektör
     $150 bandını $105'e indirir; boost bandı YUKARI esnetemez; avoid=0 boş sonuç."""
     from core.position_sizer import PositionSizer
     ps = PositionSizer()
@@ -1200,7 +1200,7 @@ def test_v410_band_sector_weight():
 test("v4.10 bant yolunda sektör ağırlığı", test_v410_band_sector_weight)
 
 def test_v410_earnings_empty_csv_guard():
-    """v4.10: boş CSV (AV kota) dolu takvimi EZEMEZ — 09-10 Tem'de {} yazılıp
+    """v4.10: boş CSV (AV kota) dolu takvimi EZEMEZ ,  09-10 Tem'de {} yazılıp
     temmuz kazanç sezonu öncesi gate kör kalmıştı."""
     from core import earnings_calendar as ec_mod
     from datetime import datetime as _dt, timedelta as _td
@@ -1266,7 +1266,7 @@ def test_v410_agent_perf_prune():
 test("v4.10 agent perf budama + outcome", test_v410_agent_perf_prune)
 
 def test_v410_paper_loss_streak_and_logging():
-    """v4.10: paper'da loss-streak warn kapalı (999) — 2 zarar sonrası conf-70
+    """v4.10: paper'da loss-streak warn kapalı (999) ,  2 zarar sonrası conf-70
     şartı paper'ı donduruyordu (META ~96 blok); LIVE değerleri DEĞİŞMEDİ.
     + TradingBot logger'ı root'a propagate ETMEZ (log üçlemesi fix)."""
     import importlib, sys as _sys
@@ -1298,7 +1298,7 @@ test("v4.10 paper loss-streak + log üçlemesi", test_v410_paper_loss_streak_and
 section("17. v4.11 BEAR BRAIN (düşüş-kazanç beyni)")
 
 def _make_bear_brain(paper=True):
-    """Test için hafif BearBrain — sahte bot + disk yazımı kapalı."""
+    """Test için hafif BearBrain ,  sahte bot + disk yazımı kapalı."""
     import types
     from config import BEAR_BRAIN_CONFIG
     from core.bear_brain import BearBrain
@@ -1308,7 +1308,7 @@ def _make_bear_brain(paper=True):
     return bb
 
 def test_v411_bear_config_sanity():
-    """v4.11: BEAR_BRAIN_CONFIG tutarlılığı — eşik sırası, bantlar, semboller."""
+    """v4.11: BEAR_BRAIN_CONFIG tutarlılığı ,  eşik sırası, bantlar, semboller."""
     from config import BEAR_BRAIN_CONFIG as bc, STOCK_IDS
     assert bc["score_watch"] < bc["score_defense"] < bc["score_attack"], "Eşik sırası bozuk!"
     assert bc["score_exit"] < bc["score_defense"], "Çıkış histerezisi yok (exit >= defense)!"
@@ -1424,7 +1424,7 @@ def test_v411_parking_directive_and_scan_exclusion():
     bb = _make_bear_brain()
 
     # v4.12.2 bayatlık kapısı: restore edilmiş modla (bu süreçte skor
-    # ölçülmeden, _last_update==datetime.min) sleeve ASLA çözülmez — en
+    # ölçülmeden, _last_update==datetime.min) sleeve ASLA çözülmez ,  en
     # fazla "pause" (restart sonrası bayat ATTACK tüm SPY'yi satıyordu)
     bb.mode = "DEFENSE"
     assert bb.parking_directive() == "pause", "Bayat DEFENSE unwind döndürdü (restart bug'ı)!"
@@ -1467,7 +1467,7 @@ def test_v411_parking_directive_and_scan_exclusion():
     fake2 = types.SimpleNamespace(_bear_breadth={
         "A": (now, -10.0), "B": (now, -8.0), "C": (now, -6.0),
         "D": (now, -20.0), "E": (now, 4.0), "F": (now, 12.0),
-        "G": (now - _td(hours=2), -30.0),  # bayat — sayılmaz
+        "G": (now - _td(hours=2), -30.0),  # bayat ,  sayılmaz
     })
     ratio = StockBot._bear_breadth_ratio(fake2)
     assert abs(ratio - 4 / 6) < 1e-9, f"Genişlik oranı yanlış: {ratio}"
@@ -1477,7 +1477,7 @@ def test_v411_parking_directive_and_scan_exclusion():
 test("v4.11 parking direktifi + tarama dışlaması", test_v411_parking_directive_and_scan_exclusion)
 
 def test_v4111_vix_cache_override():
-    """v4.11.1: VIX makro-cache'ten ayrıştı — 6h TTL seans boyunca tek okuma
+    """v4.11.1: VIX makro-cache'ten ayrıştı ,  6h TTL seans boyunca tek okuma
     demekti, bear skorunun vix bileşeni (25p) gün-içi çöküşe kör kalıyordu.
     Anahtar-bazlı override: vix ≤ 1h, diğer makro anahtarlar 6h kalır."""
     from datetime import datetime as _dt, timedelta as _td
@@ -1498,7 +1498,7 @@ def test_v4111_vix_cache_override():
 test("v4.11.1 VIX cache TTL override", test_v4111_vix_cache_override)
 
 def test_v4111_bear_cycle_error_visibility():
-    """v4.11.1: run_cycle hataları artık görünür — 30dk'da bir WARNING (arası
+    """v4.11.1: run_cycle hataları artık görünür ,  30dk'da bir WARNING (arası
     debug), hata döngüyü ASLA kırmaz (v4.10 dersi: debug'a gömülü arıza =
     günlerce sessiz ölü sistem)."""
     from datetime import datetime as _dt, timedelta as _td
@@ -1518,10 +1518,16 @@ def test_v4111_bear_cycle_error_visibility():
     assert bb._last_error_log["çıkış yönetimi"] == first_ts, \
         "Rate-limit çalışmıyor (her hata warning basacak = spam)!"
 
-    bb._last_error_log["çıkış yönetimi"] = _dt.now() - _td(minutes=31)
+    stale_ts = _dt.now() - _td(minutes=31)
+    bb._last_error_log["çıkış yönetimi"] = stale_ts
     bb.run_cycle({})  # 30dk geçti → yeniden warning + timestamp ilerler
-    assert bb._last_error_log["çıkış yönetimi"] > first_ts, \
+    # '> first_ts' DEĞİL: Windows saat tıkı kaba olabilir ,  1. ve 3. çağrının
+    # datetime.now()'ı aynı tıka düşerse eşitlik yüzünden flake üretir (30 Tem
+    # ölçüldü: aradaki fark ~500µs). Yenilenme kanıtı = bayat değer değişti.
+    assert bb._last_error_log["çıkış yönetimi"] >= first_ts, \
         "30dk sonrası warning yenilenmedi!"
+    assert bb._last_error_log["çıkış yönetimi"] != stale_ts, \
+        "30dk sonrası warning yenilenmedi (bayat timestamp yerinde duruyor)!"
     print("     Hata döngüyü kırmıyor + 30dk rate-limitli warning ✓")
 test("v4.11.1 bear döngü hata görünürlüğü", test_v4111_bear_cycle_error_visibility)
 
@@ -1589,7 +1595,7 @@ def test_v4112_attack_rotation():
 test("v4.11.2 ATTACK rotasyonu (SH→SQQQ)", test_v4112_attack_rotation)
 
 def test_v4112_exposure_headroom():
-    """v4.11.2: maruziyet tavanı artık kırpar, komple bloklamaz — $150 hedef
+    """v4.11.2: maruziyet tavanı artık kırpar, komple bloklamaz ,  $150 hedef
     $147 tavanı aştı diye kriz girişi iptal edilmez; tavan AYNEN korunur."""
     import types
     from datetime import datetime as _dt, timedelta as _td
@@ -1710,7 +1716,7 @@ def test_v412_paper_aggressive_config():
 test("v4.12 paper agresif+ config + LIVE kilit koruması", test_v412_paper_aggressive_config)
 
 def test_v412_merge_order():
-    """v4.12: PAPER_AGGRESSIVE merge'i KillSwitch/floor kurulumundan ÖNCE olmalı —
+    """v4.12: PAPER_AGGRESSIVE merge'i KillSwitch/floor kurulumundan ÖNCE olmalı , 
     eski yerinde (KillSwitch'ten sonra) paper'ın kill/floor override'ları
     sessizce uygulanmıyordu."""
     with open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8") as f:
@@ -1719,14 +1725,14 @@ def test_v412_merge_order():
     kill_idx = src.index("self.kill_switch = KillSwitch(")
     floor_idx = src.index("self.equity_floor = equity *")
     maxpos_idx = src.index('config.get("live_max_position_usd"')
-    assert merge_idx < kill_idx, "Merge KillSwitch'ten SONRA — kill override işlemez!"
-    assert merge_idx < floor_idx, "Merge floor'dan SONRA — floor override işlemez!"
+    assert merge_idx < kill_idx, "Merge KillSwitch'ten SONRA ,  kill override işlemez!"
+    assert merge_idx < floor_idx, "Merge floor'dan SONRA ,  floor override işlemez!"
     assert merge_idx < maxpos_idx, "Merge max_pos_usd atamasından SONRA!"
     print("     Merge → max_pos/floor/kill sıralaması doğru ✓")
 test("v4.12 merge sırası (kill/floor override'ı işler)", test_v412_merge_order)
 
 def test_v412_paper_band_sizing():
-    """v4.12: paper bant modunda — Kelly-negatif ~$3.1k sabit boyut yerine
+    """v4.12: paper bant modunda ,  Kelly-negatif ~$3.1k sabit boyut yerine
     güvene göre $2.5k-9k; bant altı güven → giriş yok."""
     from core.position_sizer import PositionSizer
     import importlib, sys as _sys
@@ -1768,7 +1774,7 @@ test("v4.12 bear paper cooldown", test_v412_bear_paper_cooldown)
 
 
 # ============================================================
-# v4.12.1 — 13 TEM CANLI GÜN BULGULARI (kayıp serisi + kapı güveni)
+# v4.12.1 ,  13 TEM CANLI GÜN BULGULARI (kayıp serisi + kapı güveni)
 # ============================================================
 section("v4.12.1 KAYIP SERİSİ + KAPI GÜVENİ")
 
@@ -1797,7 +1803,7 @@ def test_v4121_streak_pnl_semantics():
 test("v4.12.1 seri PnL semantiği", test_v4121_streak_pnl_semantics)
 
 def test_v4121_streak_single_source():
-    """Etiket-bazlı kopya sayaçlar silindi — üç kapanış yolu da core/streak
+    """Etiket-bazlı kopya sayaçlar silindi ,  üç kapanış yolu da core/streak
     helper'ını kullanır; bear/hedge kapanışı seriden muaf."""
     sb = open(os.path.join(PROJECT_ROOT, "stock_bot.py"), encoding="utf-8").read()
     ex = open(os.path.join(PROJECT_ROOT, "core", "executor.py"), encoding="utf-8").read()
@@ -1815,7 +1821,7 @@ test("v4.12.1 seri tek-kaynak", test_v4121_streak_single_source)
 
 def test_v4121_gates_see_coordinator_conf():
     """KAYIP KORUYUCU koordinatör güvenini okur (13 Tem: GOOGL BUY 52%
-    'guven 0% < 70%' ile reddedilmişti — teknik güven 0 okunuyordu)."""
+    'guven 0% < 70%' ile reddedilmişti ,  teknik güven 0 okunuyordu)."""
     from core.trade_gates import TradeGates
 
     class _B:
@@ -1891,7 +1897,7 @@ print("=" * 60)
 if fail_count == 0:
     print(f"\n  🎉 TÜM TESTLER GEÇTİ! Pazartesi hazırsın! 🚀\n")
 else:
-    print(f"\n  ⚠️ {fail_count} TEST BAŞARISIZ — Düzeltme gerekiyor!\n")
+    print(f"\n  ⚠️ {fail_count} TEST BAŞARISIZ ,  Düzeltme gerekiyor!\n")
 
 # Exit code
 sys.exit(fail_count)

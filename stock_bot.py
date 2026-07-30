@@ -75,6 +75,7 @@ from core.market_regime import MarketRegimeDetector
 from core.bear_brain import BearBrain
 from core.streak import update_loss_streak
 from core.signal_queue import SignalQueue
+from core.funnel import DailyFunnel
 from core.options_engine import OptionsEngine
 from core.options_analyzer import OptionsAnalyzer
 from core.options_executor import OptionsExecutor
@@ -101,6 +102,22 @@ from utils.logger import logger
 # ============================================================
 
 
+class _FunnelTradeRows(list):
+    """List-compatible trade rows that observe successful exit appends."""
+
+    def __init__(self, funnel):
+        super().__init__()
+        self._funnel = funnel
+
+    def append(self, row):
+        super().append(row)
+        try:
+            if isinstance(row, dict) and row.get("action") in ("SELL", "COVER"):
+                self._funnel.bump("exits")
+        except Exception as exc:
+            logger.debug(f"  Funnel exit bump hatasi: {exc}")
+
+
 class StockBot:
     """
     Hisse Senedi Trading Bot — Swing + Sınırlı Day Trade.
@@ -121,6 +138,9 @@ class StockBot:
         # State dosyaları live/paper için izole (A1)
         self.POSITIONS_FILE = state_path("bot_positions.json")
         self._daily_baseline_file = state_path("daily_baseline.json")
+        self.funnel = DailyFunnel(
+            enabled=config.get("funnel_enabled", True)
+        )
         # Yönetim bayrakları (partial_sold/breakeven_set/highest_price) pozisyon
         # geçici olarak sync'ten düşse bile kaybolmasın diye cache (A6 — cascade önleme)
         self._exit_flag_cache = {}
@@ -186,7 +206,7 @@ class StockBot:
         self.positions = {}
         self.short_positions = {}  # SHORT pozisyonlar
         self.last_trade_time = {}
-        self.trades_today = []
+        self.trades_today = _FunnelTradeRows(self.funnel)
         self.sell_cooldown = {}
         self.consecutive_errors = 0
         self._consecutive_losses = 0
@@ -543,6 +563,7 @@ class StockBot:
                         if sig["signal"] == "BUY" and BOT_MODE in ("long_only", "both"):
                             q_bought = self.executor.execute_buy(sym, sig_analysis, config)
                             if q_bought:
+                                self._funnel_bump("entries")
                                 self._record_trade_votes(sym, sig.get("decision") or {})
                             # Kuyruk BUY'ında opsiyon — v4.9: yalnız hisse alımı gerçekleştiyse
                             if q_bought and self._options_enabled and sig.get("confidence", 0) >= 60:
@@ -559,6 +580,7 @@ class StockBot:
                         elif sig["signal"] == "SHORT" and BOT_MODE in ("short_only", "both"):
                             q_shorted = self.short_executor.execute_short(sym, sig_analysis, config, SHORT_CONFIG)
                             if q_shorted:
+                                self._funnel_bump("entries")
                                 self._record_trade_votes(sym, sig.get("decision") or {})
                             # Kuyruk SHORT'unda PUT — v4.9: yalnız short gerçekten açıldıysa
                             if q_shorted and self._options_enabled and sig.get("confidence", 0) >= 60:
@@ -836,6 +858,15 @@ class StockBot:
     # HİSSE ANALİZİ VE İŞLEM
     # ============================================================
 
+    def _funnel_bump(self, stage: str, reason: Optional[str] = None):
+        """Best-effort telemetry hook; trading flow must never observe errors."""
+        try:
+            funnel = getattr(self, "funnel", None)
+            if funnel is not None:
+                funnel.bump(stage, reason=reason)
+        except Exception as exc:
+            logger.debug(f"  Funnel bump hatasi ({stage}): {exc}")
+
     def _analyze_and_trade(self, symbol: str, config: Dict):
         """Tek bir hisseyi analiz et ve gerekirse islem yap (LONG veya SHORT).
         BOT_MODE: 'long_only' | 'short_only' | 'both'
@@ -852,6 +883,15 @@ class StockBot:
 
             # Multi-agent karar
             decision = self._get_agent_decision(symbol, analysis, config)
+            self._funnel_bump("scanned")
+            signal_stage = {
+                "BUY": "signal_buy",
+                "SELL": "signal_sell",
+                "SHORT": "signal_sell",
+                "HOLD": "signal_hold",
+            }.get(str(decision.get("signal", "")).upper())
+            if signal_stage:
+                self._funnel_bump(signal_stage)
 
             # 🐻 Genişlik verisi (v4.11): koordinatör ws'i BearBrain'in piyasa-
             # genişliği bileşenini besler (evrenin % kaçı bearish mutabakatta)
@@ -911,6 +951,17 @@ class StockBot:
             except Exception:
                 pass
 
+            if (
+                decision["signal"] == "BUY"
+                and decision["confidence"] < effective_buy_conf
+            ):
+                self._funnel_bump("conf_below_min")
+            elif (
+                decision["signal"] == "SHORT"
+                and decision["confidence"] < effective_short_conf
+            ):
+                self._funnel_bump("conf_below_min")
+
             # === OPTIONS DEĞERLENDİRMESİ (v4.0) ===
             # Güçlü sinyalde hisse yerine opsiyon tercih et
             if self._options_enabled:
@@ -949,6 +1000,7 @@ class StockBot:
 
                 # Sektör rotasyonu kontrolü (VIX bazlı)
                 if not self.sector_rotator.should_buy(symbol):
+                    self._funnel_bump("sector_block")
                     logger.info(f"  {symbol} SEKTÖR ROTASYON BLOK: {self.sector_rotator.current_regime} rejiminde kaçınılıyor")
                     return
 
@@ -964,11 +1016,13 @@ class StockBot:
                     if (config.get("pullback_queue_enabled", False)
                             and self._is_extended_entry(analysis)):
                         if self.signal_queue.add_signal(symbol, "BUY", analysis, decision):
+                            self._funnel_bump("queued_pullback")
                             logger.info(
                                 f"  ⏳ {symbol} girişi uzamış (RSI/BB/VWAP) — "
                                 f"pullback kuyruğuna alındı"
                             )
                         else:
+                            self._funnel_bump("queue_dup")
                             logger.info(
                                 f"  ⏳ {symbol} uzamış girişi zaten pullback "
                                 "kuyruğunda — market BUY yapılmadı"
@@ -979,6 +1033,7 @@ class StockBot:
 
                     bought = self.executor.execute_buy(symbol, analysis, config)
                     if bought:
+                        self._funnel_bump("entries")
                         # v4.10: ajan oyları yalnız GERÇEKLEŞEN işlemde kaydedilir —
                         # record_outcome kapanışta bu kaydı çözümler (meta_labeler beslenir)
                         self._record_trade_votes(symbol, decision)
@@ -998,6 +1053,7 @@ class StockBot:
                         except Exception:
                             pass
                 else:
+                    self._funnel_bump("gate_block", reason=block_reason)
                     logger.debug(f"  {symbol} GATE BLOK: {block_reason}")
                     # v4.9: "gate'den geçemese bile opsiyon dene" KALDIRILDI.
                     # R:R/earnings/rejim kapısının blokladığı işlemi kaldıraçlı
@@ -1025,6 +1081,7 @@ class StockBot:
                     analysis["reasons"].append("🐻 BEAR_MODE")
                 shorted = self.short_executor.execute_short(symbol, analysis, config, SHORT_CONFIG)
                 if shorted:
+                    self._funnel_bump("entries")
                     self._record_trade_votes(symbol, decision)
 
                 # SHORT sinyalinde PUT opsiyon da ekle — v4.9: yalnız short
@@ -2062,9 +2119,48 @@ class StockBot:
                 positions=self.positions,
                 wins=wins, losses=losses,
             )
+            try:
+                closed_day = (
+                    self._daily_reset_date.isoformat()
+                    if hasattr(self._daily_reset_date, "isoformat")
+                    else str(self._daily_reset_date)
+                )
+                funnel = getattr(self, "funnel", None)
+                if funnel is not None and funnel.enabled:
+                    funnel_dict = funnel.snapshot(closed_day)
+                    for line in funnel.report_lines(closed_day):
+                        logger.info(line)
+                    try:
+                        delivered = self.notifier.notify_funnel_summary(
+                            closed_day, funnel_dict
+                        )
+                    except Exception as notify_exc:
+                        delivered = False
+                        logger.debug(
+                            f"  Funnel bildirim hatasi: {notify_exc}"
+                        )
+                    if delivered is not True:
+                        logger.warning(
+                            f"  Funnel ozeti teslim edilemedi: {closed_day}"
+                        )
+                    funnel.maybe_notify_no_trade(
+                        closed_day=closed_day,
+                        today=today,
+                        threshold=STOCK_CONFIG.get(
+                            "no_trade_alert_business_days", 3
+                        ),
+                        is_paper=self.is_paper,
+                        notifier=self.notifier,
+                        history_path=state_path("trade_history.json"),
+                    )
+            except Exception as exc:
+                logger.debug(f"  Gunluk funnel rollover hatasi: {exc}")
 
         self._daily_reset_date = today
-        self.trades_today = []
+        funnel = getattr(self, "funnel", None)
+        self.trades_today = (
+            _FunnelTradeRows(funnel) if funnel is not None else []
+        )
         self._daily_buys_count = 0
         self._morning_scan_done = False
         # Yeni günün baz çizgisi: gün-başı (SOD) equity, kalıcı yazılır (A2)

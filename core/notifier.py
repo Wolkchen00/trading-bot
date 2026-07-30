@@ -129,6 +129,38 @@ class TelegramNotifier:
         )
         return self._send(text)
 
+    def notify_funnel_summary(self, date_str: str, funnel_dict: dict) -> bool:
+        """Kapali ET gununun giris hunisini kritik olmayan kanaldan gonder."""
+        try:
+            data = funnel_dict or {}
+            reasons = data.get("gate_block_reasons", {})
+            reason_text = ", ".join(
+                f"{reason}={count}"
+                for reason, count in sorted(
+                    reasons.items(), key=lambda item: (-item[1], item[0])
+                )
+            ) or "yok"
+            text = (
+                f"<b>GIRIS HUNISI {date_str}</b>\n"
+                f"---------------\n"
+                f"Taranan: {data.get('scanned', 0)} | "
+                f"BUY: {data.get('signal_buy', 0)} | "
+                f"SELL: {data.get('signal_sell', 0)} | "
+                f"HOLD: {data.get('signal_hold', 0)}\n"
+                f"Dusuk guven: {data.get('conf_below_min', 0)} | "
+                f"Sektor blok: {data.get('sector_block', 0)} | "
+                f"Gate blok: {data.get('gate_block', 0)}\n"
+                f"Pullback: {data.get('queued_pullback', 0)} | "
+                f"Kuyruk tekrari: {data.get('queue_dup', 0)} | "
+                f"Giris: {data.get('entries', 0)} | "
+                f"Cikis: {data.get('exits', 0)}\n"
+                f"Gate nedenleri: {reason_text}"
+            )
+            return self._send(text)
+        except Exception as exc:
+            logger.debug(f"  Funnel bildirim hatasi: {exc}")
+            return False
+
     def notify_error(self, error_msg: str):
         """Kritik hata bildirimi."""
         text = (

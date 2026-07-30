@@ -728,7 +728,7 @@ def test_rr_gate_not_atr_filter():
     gates = TradeGates(_FakeBot())
     paper_cfg = {
         "atr_stop_multiplier": 1.8, "stop_loss_pct": 0.05, "stop_loss_max_pct": 0.06,
-        "take_profit_pct": 0.06, "take_profit_max_pct": 0.10, "min_rr_ratio": 1.5,
+        "take_profit_pct": 0.05, "take_profit_max_pct": 0.075, "min_rr_ratio": 1.25,
     }
     # Eski matematikle bloklanan senaryo: ATR %3 → SL %5.4 → eski TP %6 → 1.1:1 BLOK
     blocked, reason = gates._check_rr_gate("TEST", {"atr": 3.0, "price": 100.0}, paper_cfg)
@@ -831,9 +831,14 @@ def test_paper_learning_config():
         fresh = importlib.import_module("config")
         # v4.9: 45 → 30 (remap'li ölçekte ws≥15; 45 gerçek dağılımda ulaşılamıyordu)
         assert fresh.PAPER_AGGRESSIVE_CONFIG["min_confidence_score"] == 30, "Paper min_conf 30 değil!"
-        assert fresh.PAPER_AGGRESSIVE_CONFIG["min_rr_ratio"] == 1.5, "Paper min_rr 1.5 değil!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG["min_rr_ratio"] == 1.25, "Paper min_rr 1.25 değil!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG["partial_profit_pct"] == 0.03, "Paper partial %3 değil!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG["take_profit_pct"] == 0.05, "Paper TP floor %5 değil!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG["take_profit_max_pct"] == 0.075, "Paper TP cap %7.5 değil!"
+        assert fresh.PAPER_AGGRESSIVE_CONFIG.get("fundamental_gate_enabled") is True, "Paper fundamental gate kapalı!"
         assert fresh.PAPER_AGGRESSIVE_CONFIG.get("pullback_queue_enabled") is True, "Paper pullback queue kapalı!"
         assert fresh.STOCK_CONFIG.get("pullback_queue_enabled") is False, "Canlıda pullback queue AÇIK kalmış!"
+        assert fresh.STOCK_CONFIG.get("fundamental_gate_enabled") is False, "Canlıda fundamental gate AÇIK kalmış!"
         assert fresh.STOCK_CONFIG["min_confidence_score"] == 50, "Canlı min_conf 50 değil!"
         bands = fresh.STOCK_CONFIG["live_conf_position_bands"]
         assert bands[0][0] == 50 and bands[-1][0] == 80, f"Bantlar yeniden haritalanmamış: {bands}"
@@ -841,7 +846,7 @@ def test_paper_learning_config():
         _sys.modules.pop("config", None)
         if saved is not None:
             _sys.modules["config"] = saved  # diğer testler kirli-ama-tutarlı objeyi görsün
-    print("     Paper: conf 30 + R:R 1.5 + kuyruk açık | Canlı: conf 50, bant 50-80 ✓")
+    print("     Paper: conf 30 + R:R 1.25 + partial %3 + fund gate | Canlı kapıları değişmedi ✓")
 test("Paper öğrenme + canlı eşik konfigürasyonu", test_paper_learning_config)
 
 def test_extended_entry_heuristic():

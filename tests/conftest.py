@@ -15,6 +15,10 @@ setdefault kullanılır: bilinçli olarak dışarıdan verilen override'lar koru
 import os
 import tempfile
 
+# test_full_system.py bağımsız 115-test harness'idir ve import sonunda sys.exit
+# eder; pytest koruma/trigger birim suite'inde ayrıca toplanmamalıdır.
+collect_ignore = ["test_full_system.py"]
+
 _tmp = tempfile.mkdtemp(prefix="trading_bot_test_")
 os.environ.setdefault("STATE_VOLUME_PATH", _tmp)
 os.environ.setdefault("BOT_LOG_DIR", os.path.join(_tmp, "logs"))

@@ -968,7 +968,14 @@ class StockBot:
                                 f"  ⏳ {symbol} girişi uzamış (RSI/BB/VWAP) — "
                                 f"pullback kuyruğuna alındı"
                             )
-                            return
+                        else:
+                            logger.info(
+                                f"  ⏳ {symbol} uzamış girişi zaten pullback "
+                                "kuyruğunda — market BUY yapılmadı"
+                            )
+                        # Uzamış giriş hiçbir koşulda market BUY'a düşmez. Kuyruk
+                        # tüketicisi (_main_loop/check_entries) tek dönüşüm yoludur.
+                        return
 
                     bought = self.executor.execute_buy(symbol, analysis, config)
                     if bought:
@@ -1112,9 +1119,19 @@ class StockBot:
             # Fund data
             fund_data = {"fundamental_score": 0, "metrics": {}}
             try:
-                fund_data = self.fundamental_analyzer.analyze_fundamentals(symbol)
+                candidate = self.fundamental_analyzer.analyze_fundamentals(symbol)
+                if isinstance(candidate, dict):
+                    fund_data = candidate
             except Exception:
                 pass
+            # FundamentalAnalyzer başarıda her zaman dolu bir metrics sözlüğü,
+            # veri/API başarısızlığında ise score=0 + metrics={} döndürür.
+            # Skor 0 bu iki durumu ayıramadığı için gate'e açık bir veri bayrağı taşı.
+            metrics = fund_data.get("metrics")
+            analysis["fundamental_score"] = fund_data.get("fundamental_score", 0)
+            analysis["fundamental_data_ok"] = bool(
+                isinstance(metrics, dict) and metrics
+            )
 
             # Sentiment data
             sent_data = {"news_score": 0}
@@ -1657,11 +1674,8 @@ class StockBot:
         qty = float(pos.get("qty", 0) or 0)
         entry_time = pos.get("entry_time", "")
 
-        self._stash_exit_flags(symbol, pos)  # A6: bayrakları koru
-        book.pop(symbol, None)
-
         # Son dolan çıkış emrini bul (CLOSED emirler en yeniden eskiye gelir)
-        fill_price, order_type = 0.0, ""
+        fill_price, order_type, exit_order_id = 0.0, "", ""
         try:
             exit_side = OrderSide.SELL if side == "LONG" else OrderSide.BUY
             req = GetOrdersRequest(
@@ -1674,13 +1688,34 @@ class StockBot:
                     continue
                 fill_price = float(o.filled_avg_price)
                 order_type = str(getattr(o, "order_type", "") or getattr(o, "type", ""))
+                exit_order_id = str(getattr(o, "id", "") or "")
                 break
         except Exception as e:
             logger.debug(f"  {symbol} dış kapanış emri sorgulanamadı: {e}")
 
         if fill_price <= 0 or entry <= 0 or qty <= 0:
-            logger.warning(f"  🗑️ {side} temizlendi (Alpaca'da yok, fill bulunamadı): {symbol}")
+            logger.warning(
+                f"  {side} dış kapanış fill'i bulunamadı; muhasebe için yerel "
+                f"kayıt saklandı: {symbol}"
+            )
             return
+
+        exit_action = "SELL" if side == "LONG" else "COVER"
+        if self._exit_already_recorded(
+            symbol, exit_action, qty, entry_time, exit_order_id
+        ):
+            book.pop(symbol, None)
+            if hasattr(self, "_exit_flag_cache"):
+                self._exit_flag_cache.pop(symbol, None)
+            self._save_position_metadata()
+            logger.info(
+                f"  {symbol} dış kapanış zaten bu oturumda kaydedilmiş — "
+                "çift muhasebe atlandı"
+            )
+            return
+
+        self._stash_exit_flags(symbol, pos)  # A6: bayrakları kayıt tamamlanana dek koru
+        book.pop(symbol, None)
 
         if side == "LONG":
             pnl_usd = (fill_price - entry) * qty
@@ -1702,10 +1737,12 @@ class StockBot:
         )
 
         self.trades_today.append({
-            "action": "SELL" if side == "LONG" else "COVER",
-            "symbol": symbol, "price": fill_price, "pnl": pnl_usd,
-            "reason": reason, "time": datetime.now().isoformat(),
+            "action": exit_action, "symbol": symbol, "price": fill_price,
+            "qty": qty, "pnl": pnl_usd, "reason": reason,
+            "entry_time": entry_time, "exit_order_id": exit_order_id or None,
+            "time": datetime.now().isoformat(),
         })
+        self._save_position_metadata()
 
         # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti (v4.12.1,
         # core/streak.py). Eski etiket-bazlı sayaç kârlı bracket stop-out'u
@@ -1744,6 +1781,29 @@ class StockBot:
             self.agent_perf.record_outcome(symbol, outcome, pnl_usd)
         except Exception:
             pass
+
+    def _exit_already_recorded(
+        self, symbol: str, action: str, qty: float, entry_time: str = "",
+        exit_order_id: str = "",
+    ) -> bool:
+        """Aynı pozisyonun execute_sell + reconciler tarafından iki kez yazılmasını önle."""
+        tolerance = max(1e-4, abs(float(qty)) * 1e-4)
+        for trade in getattr(self, "trades_today", []):
+            if trade.get("symbol") != symbol or trade.get("action") != action:
+                continue
+            recorded_order_id = str(trade.get("exit_order_id") or "")
+            if exit_order_id and recorded_order_id == exit_order_id:
+                return True
+            try:
+                same_qty = abs(float(trade.get("qty", -1)) - float(qty)) <= tolerance
+            except (TypeError, ValueError):
+                same_qty = False
+            if not same_qty:
+                continue
+            recorded_entry = str(trade.get("entry_time") or "")
+            if entry_time and recorded_entry == str(entry_time):
+                return True
+        return False
 
     def _stash_exit_flags(self, symbol: str, pos_data: Dict):
         """Pozisyon geçici olarak sync'ten düşerse yönetim bayraklarını sakla (A6).

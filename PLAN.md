@@ -599,3 +599,64 @@ INTERNALERROR verir ,  koşum şekli `py tests/test_full_system.py` (belgelendi)
   satışları zaten blokluyor (stop hariç) → risk düşük, izlemede kalsın.
 - Fraksiyonel pozisyonlarda gece server-side stop yok (Alpaca DAY-only) → gap riski
   bot-loop stop'una kalıyor; tam-pay tercihi bunu kısmen çözüyor.
+
+## v4.15 ,  R7 cikis zinciri + koruma kimligi + olcum durustlugu + bot-ici ntfy (2026-08-09, /codex Clarity Break; Ihsan: "loglari kontrol et, hatalari gor, gelistir ve duzelt")
+
+**Tetik:** VPS log denetimi (2026-08-09). PLTR 2026-08-07 vakasi tek islemde uc
+kusuru birden gosterdi + olcum raporunun kendisi de olculemez cikti. Plan
+`RF-PLAN-2.md` (5 turlu Codex Same Page Meeting, 52 bulgu islendi, SAME PAGE);
+bulgu envanteri `RF-ISSUES.md`; toplanti logu `RF-SAME-PAGE-LOG-2.md`.
+
+**Olcum donemi ilk basarisi:** PLTR 15 adet, TAKE_PROFIT +6.3% (+$149.85) ,
+sistem tarihinin ILK TP cikisi; v4.13 TP bandinin (%5-7.5) erisilebilirligi kanitlandi.
+
+**Kapatilan koke gore dort rock (commit sirasi R7a-R7d):**
+
+1. **R7a cikis karar zinciri (`1dbf722`):** 3b trailing-bakim dali if/elif zincirini
+   tuketiyordu , BE (+%2.5) kurulunca kademeli satis (+%3) MATEMATIKSEL erisilemezdi
+   (PLTR +3.01..3.62% arasi hic partial yok; metrik-2 yapisal FAIL). Bakim artik karar
+   zinciri disinda ve yalniz exit denenmeyen dongude. Monotonluk klampi
+   `_update_server_stop_loss` SINIRINDA (PLTR'de BE $159.50 -> 1 sn sonra $156.56
+   regresyonu bir daha olamaz; `NOOP_BETTER_PROTECTED`); `last_server_sl` SILINDI
+   (kanonik tek-yazar). Partial: submit-oncesi kalici intent (cid'li), dolum-dogrulamali
+   (kabul != dolum), kalan adet brokerdan, gunde 3 deneme butcesi, iptal-sirasinda-
+   TP-doldu net-SHORT korumasi. `state_*/telemetry.jsonl` dogdu.
+2. **R7b koruma kimligi (`fb1568c`):** `deterministic_client_order_id` zaman bilesensizdi
+   , ayni (sembol,yon,fiyat,adet) tarihsel emirle EBEDIYEN cakisiyordu; PLTR'de basarisiz
+   replace aktif stopu YOK ETTI (125a0a0e CANCELED, replaced_by=null) ve pozisyon ~80 sn
+   GERCEKTEN ciplak kaldi (CRITICAL dogruydu). Cagri-basi uuid tuzu; 40010001'de kesin
+   cid yeniden-okumasi; replace-yikimi bounded uzlastirma + taze cid acil stop (ciplak
+   pencere saniyeler + alarm metninde sure); `DEGRADED_PROTECTED` yon-bilincli siddet
+   (`protection_drift_critical_pct` 0.01); mutabakat sorgusunda tek-500 toleransi
+   (08-05 nginx 500 vakasi). Mutabakatci artik sapmis-ama-kapsayan stopu PATCH'lemez
+   (savas bitti); onarim tek yoldan.
+3. **R7c olcum raporu (`403dad7`):** `--since` varsayilani bugundu (bayraksiz kosum
+   "n=0" yaniltiyordu) -> `MEASUREMENT_START=2026-07-30`; baslik "Olcum donemi ... 
+   (gun=X/30, n=Y/20)" + tempo projeksiyonu + TEMPO UYARISI. Metrik-2 paydasi bot
+   partial telemetrisinden (PLTR legacy-miss KORUNDU: 0/1; +%3 kaniti var ama event yok
+   ise veri-butunlugu FAIL); metrik-4 otoriter kaynak = broker closed-orders + kalici
+   state (ham log yalniz yardimci; eksik otoriter kaynak = UNKNOWN/FAIL); pre-telemetry
+   backfill `tools/olcum_backfill.json` (UTC); "sistem invariant" bilgi bolumu.
+   4-metrik kapi TANIMI degismedi.
+4. **R7d bot-ici ntfy (`cfdd16c`):** `CriticalAlarmPublisher` , once alarms.jsonl
+   (benzersiz id), sonra `NTFY_TOPIC` (YALNIZ env; repoda topic yok, PLAN.md redakte)
+   ile dogrudan POST; basarida DELIVERY marker (at-least-once + best-effort dedup,
+   kopru yamasi `tools/vps_bridge_patch.md`); cooldown tur+sembol+durum ve YALNIZ
+   basarida; kill-switch + ana-dongu ardisik-hata yolu ayni publisher'dan; per-alarm
+   "TESLIM EDILEMEDI" ERROR gurultusu -> gunde 1 WARNING (backstop notuyla).
+
+**Testler:** pytest 90 -> **132** (+42: exit-chain 12, collision 11, olcum 11,
+ntfy 8) + tam sistem 115/115 + Fable dusmanca 13/13 (4 ayri set: TP-dongusu-bakim,
+tarihsel-cid brokeri, esik siniri, unicode/ag-kesik ntfy). Tum kanitlar Fable
+tarafindan bagimsiz kosuldu.
+
+**Deploy ONCESI el adimlari (Ihsan kapisi):**
+1. `git push` (Coolify main'den kurar; push otomatik deploy TETIKLEMEZ).
+2. Coolify uygulama env'ine `NTFY_TOPIC=<mevcut topic>` ekle (iki konteyner ayni app).
+3. Deploy API cagrisi (piyasa kapaliyken onerilir; Pazar ideal).
+4. VPS koprusune `tools/vps_bridge_patch.md` uygula.
+5. Konteynerden canary alarmi kostur, telefonda dogrula.
+
+**Acik kalanlar:** R5 kilit acma (olcum 4/4 PASS on kosul), Telegram token (rafta),
+ntfy topic rotasyonu/auth (Ihsan karar maddesi, RF-ISSUES), olcum temposu I-8
+(7 gunde n=1 -> projeksiyon ~4.3/20; donem sonunda strateji karari).

@@ -35,10 +35,14 @@
   mutabakatci 13:35'te ayni hedefe donmek isteyince Alpaca 40010000/40010001 "unique" reddi verdi ve
   `_update_server_stop_loss` AYNI id ile 5 kez daha denedi (deneme 2..6 birebir ayni hata).
   Cagri ici korelasyon dogru amac, cagrilar-arasi ebedi sabitlik yanlis.
-- **I-5 Yanlis CRITICAL.** PLTR tum olay boyunca aktif, tam-qty kapsayan bir stopa ($157.63) sahipti ,
-  "koruma kurulamadi" CRITICAL'i ciplaklik ima ediyor ama pozisyon ciplak degildi; deadline-sonu eski-stop
-  fallback'i (`position_manager.py:1070-1097`) bu vakada VERIFIED donmedi (kok neden Rock 2'de testle bulunacak).
-  Ayrica 2026-08-05 tek bir gecici nginx 500'u dogrudan KORUMA CRITICAL'i uretti (retry yok).
+- **I-5 (rev-2, broker kanitiyla) Replace-yikimi + GERCEK ciplak pencere.** Broker emir dokumu
+  gosterdi ki basarisiz replace denemesi aktif stopu ($157.63, `125a0a0e`) CANCELED birakti
+  (replaced_by=null) ve sonraki 5 deneme ayni cakisan cid ile no-leg submit olarak reddedildi:
+  pozisyon ~13:34:20-13:35:39 arasi GERCEKTEN ciplakti, CRITICAL alarm DOGRUYDU; 13:35:39'da trail
+  dongusu farkli fiyat/cid ile tesadufen yeniden kapatti. Onarim: cakisma kokten cozulur (I-4),
+  replace sonrasi akibet dogrulanir, ciplak pencere saniyelere iner; kapsama-var-ama-hedeften-sapmis
+  durumlar icin ayri `DEGRADED_PROTECTED` siddet modeli gelir. Ayrica 2026-08-05 tek bir gecici
+  nginx 500'u dogrudan KORUMA CRITICAL'i uretti (retry yok).
 
 ## ORTA etki
 
@@ -55,8 +59,8 @@
 ## DUSUK etki
 
 - **I-9** Funnel ozeti teslim WARNING'i , I-7 ile ayni kok (notifier kapali), ayri is degil.
-- **I-10** Short tarafinda ayni if/elif kalibi var (`position_manager.py:465-585`) , Rock 1 icinde kontrol
-  edilip ayni onarim uygulanmali (canli long-only; maruziyet yalniz paper).
+- **I-10 (KAPALI, Codex round-1 bulgusu)** Short zincirinde 3b muadili bakim dali YOK , ayna onarim
+  gerekmez; Rock 1 yalniz short icin monotonluk invariant testi yazar.
 - **I-11** 3b guncellemesi `_stash_exit_flags` cagirmiyor gorunumde , restart'ta `last_server_sl` kaybi
   tekrar-ayrisma uretebilir; Rock 1 kapsaminda dogrula/duzelt.
 
@@ -65,3 +69,7 @@
 - R5 kilit acma (ayri Ihsan kapisi; olcum 4/4 PASS on kosul , I-1 duzelmeden imkansizdi).
 - Telegram token karari (rafta; I-7'nin ntfy yolu bundan bagimsiz).
 - Strateji/doktrin isleri (TP bandi ayari, EMA200 gate gevsetme, giris temposu) , olcum donemi sonunda.
+- **[IHSAN KARAR, kayit 2026-08-09] ntfy topic rotasyonu + auth'lu ozel topic:** topic adi repoda
+  (PLAN.md) ve VPS scriptlerinde gectigi icin "sir" sayilamaz; anonim topic'e herkes push atabilir.
+  Rotasyon telefonda yeniden abonelik ister (kullanici islemi). Build yalniz dokuman redaksiyonu +
+  env-only okuma yapar; rotasyon/auth karari Ihsan'in.

@@ -29,13 +29,23 @@ from alpaca.trading.requests import GetCalendarRequest, GetOrdersRequest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MEASUREMENT_START = "2026-07-30"
 ET = ZoneInfo("America/New_York")
 EXIT_ACTIONS = {"SELL", "COVER"}
-STOP_REJECTION_RE = re.compile(
-    r"(FAILED_NAKED|ELECTED_UNFILLED|"
-    r"(?:stop|stop-loss).{0,80}(?:redded|reject)|"
-    r"(?:redded|reject).{0,80}(?:stop|stop-loss))",
-    re.IGNORECASE,
+# Yalniz immutable backfill kapsamasinin bitisini dogrular. Metrik-2'nin gercek
+# telemetri erasi asagida dosyadaki ilk kaydin zamanindan turetilir.
+TELEMETRY_START = datetime(2026, 8, 9, 18, 3, 27, tzinfo=timezone.utc)
+BACKFILL_PATH = ROOT / "tools" / "olcum_backfill.json"
+AUTHORITATIVE_STATE_FILES = (
+    "telemetry.jsonl", "alarms.jsonl", "trade_history.json",
+)
+PARTIAL_EVENT_KINDS = {
+    "PARTIAL_THRESHOLD", "PARTIAL_INTENT", "PARTIAL_STATE",
+    "PARTIAL_RETRY_EXHAUSTED", "PARTIAL_ERROR",
+    "PARTIAL_ABORTED_FLAT", "PARTIAL_ABORTED_POSITION_CHANGED",
+}
+LOG_PEAK_RE = re.compile(
+    r"\b([A-Z][A-Z0-9.]{0,14})\s*:\s*\+?(\d+(?:\.\d+)?)%"
 )
 
 
@@ -69,6 +79,7 @@ class ClosedTrade:
     pnl: float
     exits: list[ExitFill] = field(default_factory=list)
     peak_pct: float | None = None
+    peak_at: datetime | None = None
 
     def profitable_partial_at_three(self) -> bool:
         for item in self.exits:
@@ -82,6 +93,46 @@ class ClosedTrade:
             if gain + 1e-9 >= 0.03:
                 return True
         return False
+
+
+@dataclass
+class PartialMetric:
+    hits: int = 0
+    opportunities: int = 0
+    legacy_misses: int = 0
+    event_completeness_misses: int = 0
+
+    @property
+    def rate(self) -> float | None:
+        return self.hits / self.opportunities if self.opportunities else None
+
+    @property
+    def passed(self) -> bool:
+        return (
+            self.rate is not None
+            and self.rate >= 0.60
+            and self.event_completeness_misses == 0
+        )
+
+
+@dataclass
+class AuthoritativeState:
+    available: bool
+    telemetry: list[dict] = field(default_factory=list)
+    telemetry_start: datetime | None = None
+    alarms: list[dict] = field(default_factory=list)
+    trade_rows: list[dict] = field(default_factory=list)
+    files: list[Path] = field(default_factory=list)
+    backfill: list[dict] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+    backfill_label: str = ""
+
+
+@dataclass
+class InvariantCounts:
+    protection_alarms: int = 0
+    stop_regressions: int = 0
+    unique_collisions: int = 0
 
 
 def _as_datetime(value) -> datetime | None:
@@ -275,14 +326,140 @@ def attach_peaks(trades: list[ClosedTrade], data_client) -> int:
                 unknown += 1
                 continue
             if trade.side == "LONG":
-                best = max(float(bar.high) for bar in inside)
+                best_bar = max(inside, key=lambda bar: float(bar.high))
+                best = float(best_bar.high)
                 trade.peak_pct = best / trade.entry_price - 1
             else:
-                best = min(float(bar.low) for bar in inside)
+                best_bar = min(inside, key=lambda bar: float(bar.low))
+                best = float(best_bar.low)
                 trade.peak_pct = trade.entry_price / best - 1 if best > 0 else None
                 if trade.peak_pct is None:
                     unknown += 1
+            trade.peak_at = _as_datetime(getattr(best_bar, "timestamp", None))
     return unknown
+
+
+def _read_jsonl(path: Path) -> tuple[list[dict], str | None]:
+    records: list[dict] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for number, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    return records, f"{path.name}:{number} okunamadi ({exc})"
+                if not isinstance(record, dict):
+                    return records, f"{path.name}:{number} JSON nesnesi degil"
+                records.append(record)
+    except (OSError, UnicodeError) as exc:
+        return [], f"{path.name} okunamadi ({exc})"
+    return records, None
+
+
+def _in_period(record: dict, since: datetime, until: datetime) -> bool:
+    stamp = _as_datetime(
+        record.get("ts") or record.get("time")
+        or record.get("timestamp") or record.get("date")
+    )
+    return stamp is not None and since <= stamp <= until
+
+
+def _load_backfill(path: Path, since: datetime) -> tuple[list[dict], str, list[str]]:
+    if since >= TELEMETRY_START:
+        return [], "", []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return [], "", [f"backfill okunamadi ({exc})"]
+    if not isinstance(payload, dict) or payload.get("label") != "backfill":
+        return [], "", ["backfill etiketi/gecerli snapshot yok"]
+    coverage_start = _as_datetime(payload.get("period_start"))
+    coverage_end = _as_datetime(payload.get("period_end"))
+    sources = set(payload.get("sources") or [])
+    if (
+        coverage_start is None or coverage_start > since
+        or coverage_end is None or coverage_end < TELEMETRY_START
+    ):
+        return [], "", ["backfill olcum/telemetri-oncesi araligini kapsamiyor"]
+    if not {"alarms.jsonl", "broker_closed_orders"}.issubset(sources):
+        return [], "", ["backfill otoriter kaynak etiketi eksik"]
+    records = [item for item in payload.get("events", []) if isinstance(item, dict)]
+    return records, str(payload.get("label")), []
+
+
+def load_authoritative_state(
+    state_dir: Path, since: datetime, until: datetime,
+    backfill_path: Path = BACKFILL_PATH,
+) -> AuthoritativeState:
+    """Kalici state'in tamamini oku; eksik/bozuk otoriter kaynak FAIL'dir."""
+    result = AuthoritativeState(available=True)
+    if not state_dir.is_dir():
+        result.available = False
+        result.problems.append(f"state dizini eksik: {state_dir}")
+    else:
+        for name in AUTHORITATIVE_STATE_FILES:
+            path = state_dir / name
+            if not path.is_file():
+                result.problems.append(f"{name} eksik")
+                continue
+            result.files.append(path)
+            if name.endswith(".jsonl"):
+                records, problem = _read_jsonl(path)
+                if problem:
+                    result.problems.append(problem)
+                if name == "telemetry.jsonl":
+                    result.telemetry = records
+                    telemetry_stamps = [
+                        stamp for row in records
+                        if (stamp := _as_datetime(row.get("ts"))) is not None
+                    ]
+                    result.telemetry_start = (
+                        min(telemetry_stamps) if telemetry_stamps else None
+                    )
+                    if not records and problem is None:
+                        result.problems.append(
+                            "telemetry.jsonl bos; kapsama dogrulanamadi"
+                        )
+                    elif records and result.telemetry_start is None:
+                        result.problems.append(
+                            "telemetry.jsonl kayit zamanlari okunamadi"
+                        )
+                else:
+                    result.alarms = records
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                result.problems.append(f"{name} okunamadi ({exc})")
+                continue
+            if not isinstance(payload, list) or not all(
+                isinstance(row, dict) for row in payload
+            ):
+                result.problems.append(f"{name} beklenen JSON listesi degil")
+            else:
+                result.trade_rows = [
+                    row for row in payload
+                    if (_row_time(row) is None or _row_time(row) >= since)
+                    and str(row.get("action", "")).upper() in EXIT_ACTIONS
+                ]
+
+    backfill, label, backfill_problems = _load_backfill(backfill_path, since)
+    result.backfill = backfill
+    result.backfill_label = label
+    result.problems.extend(backfill_problems)
+    result.available = result.available and not result.problems
+    result.telemetry = [
+        row for row in result.telemetry if _in_period(row, since, until)
+    ]
+    result.alarms = [
+        row for row in result.alarms if _in_period(row, since, until)
+    ]
+    result.backfill = [
+        row for row in result.backfill if _in_period(row, since, until)
+    ]
+    return result
 
 
 def _row_time(row: dict) -> datetime | None:
@@ -361,23 +538,203 @@ def phantom_count(
     return max(duplicates, unmatched), duplicates, unmatched
 
 
-def count_stop_rejections(log_dir: Path, since_date: date) -> int:
-    if not log_dir.exists():
-        return 0
-    count = 0
-    date_prefix = since_date.isoformat()
-    for path in log_dir.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in {".log", ".txt", ".jsonl"}:
+def _same_partial_trade(event: dict, trade: ClosedTrade) -> bool:
+    if str(event.get("symbol", "")).upper() != trade.symbol.upper():
+        return False
+    side = str(event.get("side", "LONG")).upper()
+    if side and side != trade.side:
+        return False
+    stamp = _as_datetime(event.get("ts"))
+    if stamp is None or not (
+        trade.entry_at - timedelta(minutes=1)
+        <= stamp
+        <= trade.closed_at + timedelta(minutes=5)
+    ):
+        return False
+    try:
+        event_entry = float(event.get("entry_price") or 0)
+    except (TypeError, ValueError):
+        event_entry = 0.0
+    return event_entry <= 0 or abs(event_entry - trade.entry_price) <= max(
+        0.01, trade.entry_price * 0.001,
+    )
+
+
+def _partial_episode_hit(events: list[dict], fills_by_id: dict[str, Fill]) -> bool:
+    for event in events:
+        order_id = str(event.get("order_id") or "")
+        fill = fills_by_id.get(order_id)
+        if fill is None:
+            continue
+        side = str(event.get("side") or "LONG").upper()
+        expected_fill_side = "SELL" if side == "LONG" else "BUY"
+        if (
+            fill.side != expected_fill_side
+            or fill.symbol.upper() != str(event.get("symbol") or "").upper()
+        ):
             continue
         try:
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if STOP_REJECTION_RE.search(line):
-                    line_date = re.search(r"\d{4}-\d{2}-\d{2}", line)
-                    if not line_date or line_date.group(0) >= date_prefix:
-                        count += 1
+            target = abs(float(event.get("target_qty") or 0))
+            observed = abs(float(event.get("filled_qty") or 0))
+        except (TypeError, ValueError):
+            target = observed = 0.0
+        tolerance = max(1e-4, target * 1e-4)
+        status = str(event.get("intent_status") or "").upper()
+        if target <= 0 or fill.qty + tolerance >= target:
+            return True
+        if status == "FILLED" and observed + tolerance >= target:
+            return True
+    return False
+
+
+def evaluate_partial_metric(
+    trades: list[ClosedTrade], telemetry: list[dict], fills: list[Fill],
+    since: datetime, auxiliary_peaks: set[tuple[str, date]] | None = None,
+    telemetry_start: datetime | None = None,
+) -> PartialMetric:
+    """Metrik-2'yi bot event'lerinden kur, broker fill ID'siyle doğrula."""
+    period = [trade for trade in trades if trade.closed_at >= since]
+    if telemetry_start is None:
+        telemetry_stamps = [
+            stamp for event in telemetry
+            if (stamp := _as_datetime(event.get("ts"))) is not None
+        ]
+        telemetry_start = min(telemetry_stamps) if telemetry_stamps else None
+    events = []
+    for event in telemetry:
+        kind = str(event.get("kind", "")).upper()
+        stamp = _as_datetime(event.get("ts"))
+        if (
+            (kind in PARTIAL_EVENT_KINDS or kind.startswith("PARTIAL_ABORTED_"))
+            and stamp is not None and stamp >= since
+        ):
+            events.append(event)
+    fills_by_id = {fill.order_id: fill for fill in fills if fill.order_id}
+    result = PartialMetric()
+    consumed: set[int] = set()
+
+    for trade in period:
+        matched = [
+            event for event in events if _same_partial_trade(event, trade)
+        ]
+        if matched:
+            consumed.update(id(event) for event in matched)
+            result.opportunities += 1
+            result.hits += int(_partial_episode_hit(matched, fills_by_id))
+            continue
+        log_dates = sorted(
+            stamp for symbol, stamp in (auxiliary_peaks or set())
+            if symbol == trade.symbol.upper()
+            and trade.entry_at.astimezone(ET).date()
+            <= stamp <= trade.closed_at.astimezone(ET).date()
+        )
+        bar_evidence = trade.peak_pct is not None and trade.peak_pct + 1e-9 >= 0.03
+        if not bar_evidence and not log_dates:
+            continue
+        evidence_at = (
+            trade.peak_at
+            or (
+                datetime.combine(log_dates[0], time.min, ET).astimezone(timezone.utc)
+                if log_dates else trade.closed_at
+            )
+        )
+        if telemetry_start is None or evidence_at < telemetry_start:
+            result.legacy_misses += 1
+            result.opportunities += 1
+        else:
+            result.event_completeness_misses += 1
+
+    unmatched: dict[tuple, list[dict]] = defaultdict(list)
+    for event in events:
+        if id(event) in consumed:
+            continue
+        try:
+            entry = round(float(event.get("entry_price") or 0), 4)
+        except (TypeError, ValueError):
+            entry = 0.0
+        key = (
+            str(event.get("symbol", "")).upper(),
+            str(event.get("side", "LONG")).upper(),
+            entry,
+        )
+        unmatched[key].append(event)
+    for episode in unmatched.values():
+        result.opportunities += 1
+        result.hits += int(_partial_episode_hit(episode, fills_by_id))
+    return result
+
+
+def load_auxiliary_peak_evidence(
+    log_dir: Path, since_date: date,
+) -> set[tuple[str, date]]:
+    """Rotating loglardan yalnız Metrik-2 için yardımcı +%3 kanıtı oku."""
+    evidence: set[tuple[str, date]] = set()
+    if not log_dir.is_dir():
+        return evidence
+    for path in log_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".log", ".txt"}:
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
+        for line in lines:
+            day_match = re.search(r"\d{4}-\d{2}-\d{2}", line)
+            peak_match = LOG_PEAK_RE.search(line)
+            if not day_match or not peak_match:
+                continue
+            try:
+                day = date.fromisoformat(day_match.group(0))
+                pnl_pct = float(peak_match.group(2)) / 100
+            except ValueError:
+                continue
+            if day >= since_date and pnl_pct + 1e-9 >= 0.03:
+                evidence.add((peak_match.group(1).upper(), day))
+    return evidence
+
+
+def count_broker_stop_rejections(orders: Iterable, since: datetime) -> int:
+    """Broker closed-orders içindeki rejected stop emirlerini doğrudan say."""
+    count = 0
+    for order in flatten_orders(orders):
+        status = _enum_text(getattr(order, "status", ""))
+        order_type = _enum_text(
+            getattr(order, "type", None) or getattr(order, "order_type", "")
+        )
+        stamp = _as_datetime(
+            getattr(order, "updated_at", None)
+            or getattr(order, "submitted_at", None)
+            or getattr(order, "created_at", None)
+        )
+        if (
+            status == "REJECTED"
+            and order_type in {"STOP", "STOP_LIMIT"}
+            and stamp is not None and stamp >= since
+        ):
+            count += 1
     return count
+
+
+def invariant_counts(
+    alarms: list[dict], telemetry: list[dict], backfill: list[dict],
+) -> InvariantCounts:
+    result = InvariantCounts()
+    for record in [*alarms, *telemetry, *backfill]:
+        kind = str(record.get("kind", "")).upper()
+        text = " ".join(str(record.get(field, "")) for field in (
+            "kind", "message", "detail", "outcome", "code",
+        )).upper()
+        try:
+            amount = max(int(record.get("count", 1) or 1), 0)
+        except (TypeError, ValueError):
+            amount = 1
+        if kind in {"KORUMA", "PROTECTION_ALARM"}:
+            result.protection_alarms += amount
+        if kind == "STOP_REGRESSION" or "REGRES" in text:
+            result.stop_regressions += amount
+        if kind == "UNIQUE_COLLISION" or "40010001" in text:
+            result.unique_collisions += amount
+    return result
 
 
 def trading_days(start: date, end: date) -> int:
@@ -408,26 +765,55 @@ def _metric(label: str, passed: bool, detail: str) -> None:
 def print_report(
     trades: list[ClosedTrade], since: datetime, unknown_peaks: int,
     phantom: int, duplicate_rows: int, unmatched_rows: int,
-    stop_rejections: int, local_files: list[Path], elapsed_days: int,
+    partial: PartialMetric, stop_rejections: int,
+    state: AuthoritativeState, broker_available: bool,
+    elapsed_days: int, today: date,
 ) -> bool:
     period = [trade for trade in trades if trade.closed_at >= since]
-    net_pnl = sum(trade.pnl for trade in period)
-    _metric("1 PnL", net_pnl > 0, f"{len(period)} kapalı işlem, net ${net_pnl:+.2f}")
+    since_day = since.astimezone(ET).date()
+    print(
+        f"Olcum donemi: {since_day.isoformat()} -> {today.isoformat()} "
+        f"(gun={elapsed_days}/30, n={len(period)}/20)"
+    )
+    projected = len(period) * 30 / elapsed_days if elapsed_days > 0 else 0.0
+    print(f"Tempo projeksiyonu: 30 gun sonunda n={projected:.1f}")
+    if projected + 1e-9 < 20:
+        print(f"TEMPO UYARISI: mevcut tempoyla hedef 20'nin altinda ({projected:.1f})")
 
-    eligible = [
-        trade for trade in period
-        if trade.peak_pct is not None and trade.peak_pct >= 0.025
-    ]
-    partial_hits = sum(trade.profitable_partial_at_three() for trade in eligible)
-    partial_rate = partial_hits / len(eligible) if eligible else None
+    net_pnl = sum(trade.pnl for trade in period)
+    metric1_ok = broker_available and net_pnl > 0
+    _metric(
+        "1 PnL", metric1_ok,
+        f"{len(period)} kapalı işlem, net ${net_pnl:+.2f}"
+        if broker_available else "UNKNOWN (broker closed-orders okunamadi)",
+    )
+
+    partial_rate = partial.rate
+    partial_detail = (
+        f"{partial.hits}/{partial.opportunities} = {partial_rate:.1%}"
+        if partial_rate is not None
+        else "UNKNOWN (bot partial telemetrisinde firsat yok)"
+    )
+    completeness = (
+        f"FAIL={partial.event_completeness_misses}"
+        if partial.event_completeness_misses else "PASS"
+    )
+    partial_detail += (
+        f"; legacy miss={partial.legacy_misses}; "
+        f"event-completeness {completeness}"
+        f"; peak UNKNOWN={unknown_peaks}"
+    )
     _metric(
         "2 +%3 kademeli satış",
-        partial_rate is not None and partial_rate >= 0.60,
-        (
-            f"{partial_hits}/{len(eligible)} = {partial_rate:.1%}"
-            if partial_rate is not None else "UNKNOWN (uygun, barı bilinen işlem yok)"
-        ) + f"; peak UNKNOWN={unknown_peaks}",
+        partial.passed,
+        partial_detail,
     )
+    if partial.event_completeness_misses:
+        print(
+            "[FAIL] Metrik-2 veri bütünlüğü: bar/log +%3 kaniti olan "
+            f"{partial.event_completeness_misses} telemetri-era isleminde "
+            "partial event yok"
+        )
 
     known = [trade for trade in period if trade.peak_pct is not None]
     never_green = [trade for trade in known if trade.peak_pct <= 0]
@@ -447,16 +833,35 @@ def print_report(
         ) + f"; toplam zarar payı {loss_share:.1%}",
     )
 
+    metric4_known = broker_available and state.available
+    metric4_ok = metric4_known and phantom == 0 and stop_rejections == 0
+    source_detail = "broker closed-orders + persistent state"
+    if state.backfill_label:
+        source_detail += f" + {state.backfill_label}"
+    if not metric4_known:
+        problems = list(state.problems)
+        if not broker_available:
+            problems.insert(0, "broker closed-orders okunamadi")
+        metric4_detail = "UNKNOWN; " + "; ".join(problems)
+    else:
+        metric4_detail = (
+            f"phantom={phantom} (yakın tekrar={duplicate_rows}, "
+            f"broker eşleşmeyen={unmatched_rows}), "
+            f"server-stop rejection={stop_rejections}, "
+            f"otoriter kaynak={source_detail}, state dosyasi={len(state.files)}"
+        )
     _metric(
         "4 kayıt/stop bütünlüğü",
-        phantom == 0 and stop_rejections == 0,
-        f"phantom={phantom} (yakın tekrar={duplicate_rows}, broker eşleşmeyen={unmatched_rows}), "
-        f"server-stop rejection={stop_rejections}, local JSON={len(local_files)}",
+        metric4_ok,
+        metric4_detail,
     )
+    invariants = invariant_counts(state.alarms, state.telemetry, state.backfill)
+    print("Sistem invariant (bilgi; 4-metrik kapi tanimi degismedi):")
+    print(f"  KORUMA alarmi={invariants.protection_alarms}")
+    print(f"  stop-regresyon gozlemi={invariants.stop_regressions}")
+    print(f"  unique-collision (40010001)={invariants.unique_collisions}")
     overall = (
-        net_pnl > 0
-        and partial_rate is not None and partial_rate >= 0.60
-        and metric3_ok and phantom == 0 and stop_rejections == 0
+        metric1_ok and partial.passed and metric3_ok and metric4_ok
     )
     print(
         f"GENEL: {'PASS' if overall else 'FAIL'} — "
@@ -469,14 +874,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="R6 paper ölçüm raporu (tamamen salt okunur).",
         epilog=(
-            "Server stop reddi için VPS log ipucu: "
-            "grep -Eai 'FAILED_NAKED|ELECTED_UNFILLED|stop.{0,80}(redded|reject)' logs/*.log"
+            "Ham/rotate loglar yalnız Metrik-2 için yardımcı +%3 kanıtıdır; "
+            "otoriter Metrik-4 kaynağı değildir."
         ),
     )
     parser.add_argument("--mode", choices=["paper"], default="paper")
     parser.add_argument(
-        "--since", default=date.today().isoformat(),
-        help="Başlangıç tarihi (YYYY-MM-DD; varsayılan: bugün)",
+        "--since", default=MEASUREMENT_START,
+        help=f"Başlangıç tarihi (YYYY-MM-DD; varsayılan: {MEASUREMENT_START})",
     )
     parser.add_argument(
         "--state-dir", type=Path,
@@ -486,7 +891,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--log-dir", type=Path,
         default=Path(os.getenv("OLCUM_LOG_DIR", ROOT / "logs")),
-        help="Server-stop reddi aranacak log dizini",
+        help="Yardımcı +%%3 kanıtı aranacak log dizini",
     )
     return parser.parse_args(argv)
 
@@ -515,19 +920,33 @@ def main(argv: list[str] | None = None) -> int:
     trading = TradingClient(key, secret, paper=True)
     data = StockHistoricalDataClient(api_key=key, secret_key=secret)
     # Girişleri dönem başından önce olan swing'leri eşlemek için 90 gün geri git.
-    orders = fetch_closed_orders(trading, since)
-    trades = reconstruct_closed_trades(broker_fills(orders))
+    broker_available = True
+    try:
+        orders = fetch_closed_orders(trading, since)
+    except Exception as exc:
+        print(f"UYARI: broker closed-orders alinamadi: {exc}", file=sys.stderr)
+        orders = []
+        broker_available = False
+    fills = broker_fills(orders)
+    trades = reconstruct_closed_trades(fills)
     period = [trade for trade in trades if trade.closed_at >= since]
     unknown = attach_peaks(period, data)
-    local_rows, local_files = load_local_exit_rows(args.state_dir, since)
-    phantom, duplicates, unmatched = phantom_count(local_rows, period)
-    stop_rejections = count_stop_rejections(args.log_dir, since_day)
+    today = datetime.now(ET).date()
+    until = datetime.combine(today, time.max, ET).astimezone(timezone.utc)
+    state = load_authoritative_state(args.state_dir, since, until)
+    phantom, duplicates, unmatched = phantom_count(state.trade_rows, period)
+    auxiliary_peaks = load_auxiliary_peak_evidence(args.log_dir, since_day)
+    partial = evaluate_partial_metric(
+        period, state.telemetry, fills, since, auxiliary_peaks,
+        telemetry_start=state.telemetry_start,
+    )
+    stop_rejections = count_broker_stop_rejections(orders, since)
     elapsed_days = broker_trading_days(
-        trading, since.astimezone(ET).date(), datetime.now(ET).date()
+        trading, since.astimezone(ET).date(), today
     )
     passed = print_report(
         period, since, unknown, phantom, duplicates, unmatched,
-        stop_rejections, local_files, elapsed_days,
+        partial, stop_rejections, state, broker_available, elapsed_days, today,
     )
     return 0 if passed else 1
 

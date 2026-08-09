@@ -1,0 +1,37 @@
+{
+  "label": "backfill",
+  "created_at": "2026-08-09T11:03:27-07:00",
+  "period_start": "2026-07-30T00:00:00-04:00",
+  "period_end": "2026-08-09T18:03:27+00:00",
+  "sources": [
+    "alarms.jsonl",
+    "broker_closed_orders"
+  ],
+  "events": [
+    {
+      "ts": "2026-08-07T13:32:00+00:00",
+      "kind": "STOP_REGRESSION",
+      "symbol": "PLTR",
+      "count": 1,
+      "source": "broker_closed_orders",
+      "detail": "Dogrulanmis BE stop 159.50 iken trail stop 156.56'ya geriledi"
+    },
+    {
+      "ts": "2026-08-07T13:35:13+00:00",
+      "kind": "UNIQUE_COLLISION",
+      "symbol": "PLTR",
+      "code": 40010001,
+      "count": 5,
+      "source": "broker_closed_orders",
+      "detail": "Tarihsel deterministic client_order_id ile stop retry 2..6 reddedildi"
+    },
+    {
+      "ts": "2026-08-07T13:35:13+00:00",
+      "kind": "KORUMA",
+      "symbol": "PLTR",
+      "count": 1,
+      "source": "alarms.jsonl",
+      "detail": "Replace sonrasi aktif replacement bulunamayan ciplak pencere"
+    }
+  ]
+}

@@ -1620,6 +1620,8 @@ class StockBot:
                             "highest_price": max(current_price, cached.get("highest_price", 0) or 0),
                             "breakeven_set": cached.get("breakeven_set", False),
                             "partial_sold": cached.get("partial_sold", False),
+                            "partial_intent": cached.get("partial_intent"),
+                            "partial_retry_budget": cached.get("partial_retry_budget"),
                             "server_stop_verified": bool(cached.get("server_stop_verified", False)),
                             "server_stop_order_id": cached.get("server_stop_order_id") or None,
                             "close_in_progress": bool(cached.get("close_in_progress", False)),
@@ -1869,7 +1871,8 @@ class StockBot:
             return
         keep = {}
         for k in ("entry_price", "highest_price", "lowest_price", "breakeven_set",
-                  "partial_sold", "partial_covered", "stop_loss_pct",
+                  "partial_sold", "partial_covered", "partial_intent",
+                  "partial_retry_budget", "stop_loss_pct",
                   "stop_loss_price", "take_profit_pct", "entry_time",
                   "server_stop_verified",
                   "server_stop_order_id", "close_in_progress"):
@@ -1972,6 +1975,13 @@ class StockBot:
                         # "-None" TypeError'a yol açıp TÜM pozisyon yönetimini durduruyordu
                         if meta.get("stop_loss_pct") is not None:
                             self.positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
+                        if exit_flag_cache_matches_entry(
+                            meta, self.positions[sym].get("entry_price")
+                        ):
+                            if isinstance(meta.get("partial_intent"), dict):
+                                self.positions[sym]["partial_intent"] = meta["partial_intent"]
+                            if isinstance(meta.get("partial_retry_budget"), dict):
+                                self.positions[sym]["partial_retry_budget"] = meta["partial_retry_budget"]
                         try:
                             saved_trigger = float(
                                 meta.get("stop_loss_price", 0) or 0

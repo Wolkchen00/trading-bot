@@ -21,6 +21,7 @@ class ProtectionOutcome(str, Enum):
     REPLACED_VERIFIED = "REPLACED_VERIFIED"
     ALREADY_FLAT = "ALREADY_FLAT"
     NO_LEG_RESUBMITTED = "NO_LEG_RESUBMITTED"
+    NOOP_BETTER_PROTECTED = "NOOP_BETTER_PROTECTED"
     FAILED_NAKED = "FAILED_NAKED"
     ELECTED_UNFILLED = "ELECTED_UNFILLED"
     SKIPPED_PARKING = "SKIPPED_PARKING"
@@ -30,6 +31,7 @@ VERIFIED_OUTCOMES = frozenset({
     ProtectionOutcome.VERIFIED,
     ProtectionOutcome.REPLACED_VERIFIED,
     ProtectionOutcome.NO_LEG_RESUBMITTED,
+    ProtectionOutcome.NOOP_BETTER_PROTECTED,
 })
 
 
@@ -40,6 +42,7 @@ class ProtectionResult:
     stop_price: Optional[float]
     qty_covered: float
     detail: str
+    at_target: bool = False
 
     @property
     def verified(self) -> bool:
@@ -362,6 +365,7 @@ def classify_covering_order(
     return ProtectionResult(
         ProtectionOutcome.VERIFIED, oid, stop, covered,
         f"{symbol}: aktif stop {covered:.4f} adedi kapsiyor",
+        at_target=expected_stop is not None,
     )
 
 

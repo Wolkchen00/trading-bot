@@ -97,8 +97,6 @@ class OrderExecutor:
             if sl_pct is None:
                 sl_pct = STOCK_CONFIG["stop_loss_pct"]
             target = float(pos.get("stop_loss_price", 0) or 0)
-            if target <= 0:
-                target = float(pos.get("last_server_sl", 0) or 0)
             if target <= 0 and pos.get("breakeven_set"):
                 target = entry * (
                     1 + STOCK_CONFIG.get("breakeven_offset_pct", 0.001)

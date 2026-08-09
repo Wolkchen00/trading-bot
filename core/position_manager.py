@@ -6,9 +6,10 @@ StockBot’tan ayrıştırılmış pozisyon modülü.
 - Sunucu taraflı SL güncellemesi: Break-even ve trailing stop değiştiğinde
   Alpaca’daki stop emri de güncellenir (bot çökse bile korunma devam eder)
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 from typing import Dict
+from uuid import uuid4
 
 from alpaca.trading.requests import (
     MarketOrderRequest, StopLimitOrderRequest, GetOrdersRequest,
@@ -16,7 +17,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
-from config import SHORT_CONFIG
+from config import SHORT_CONFIG, STOCK_CONFIG
 from core.protection import (
     ACTIVE_STATUSES,
     ProtectionOutcome,
@@ -39,6 +40,7 @@ from core.protection import (
     protection_alarm,
     should_exit_locally,
 )
+from core.telemetry import append_telemetry
 from utils.logger import logger
 
 
@@ -80,7 +82,9 @@ class PositionManager:
                     )
                 except (TypeError, ValueError):
                     existing_trigger = 0.0
-                if (
+                if result.at_target:
+                    pos_data["stop_loss_price"] = verified_trigger
+                elif (
                     existing_trigger <= 0
                     or (side == "LONG" and verified_trigger >= existing_trigger)
                     or (side == "SHORT" and verified_trigger <= existing_trigger)
@@ -244,6 +248,8 @@ class PositionManager:
                     "highest_price": max(current_price, cached.get("highest_price", 0) or 0),
                     "breakeven_set": cached.get("breakeven_set", False),
                     "partial_sold": cached.get("partial_sold", False),
+                    "partial_intent": cached.get("partial_intent"),
+                    "partial_retry_budget": cached.get("partial_retry_budget"),
                     "server_stop_verified": bool(cached.get("server_stop_verified", False)),
                     "server_stop_order_id": cached.get("server_stop_order_id") or None,
                     "close_in_progress": bool(cached.get("close_in_progress", False)),
@@ -281,7 +287,10 @@ class PositionManager:
                     target_verified = (
                         result.verified
                         and result.stop_price is not None
-                        and abs(result.stop_price - breakeven_price) <= 0.011
+                        and (
+                            result.at_target
+                            or abs(result.stop_price - breakeven_price) <= 0.011
+                        )
                     )
                     if target_verified:
                         stop_trigger = float(result.stop_price)
@@ -302,8 +311,10 @@ class PositionManager:
             pos_tp_pct = pos_data.get("take_profit_pct")
             if pos_tp_pct is None:
                 pos_tp_pct = config["take_profit_pct"]
+            exit_action_attempted = False
 
             if should_exit_locally(current_price, stop_trigger, "LONG"):
+                exit_action_attempted = True
                 logger.info(
                     f"  🛑 STOP LOSS {symbol}: {pnl_pct:.1%} "
                     f"(trigger: ${stop_trigger:.2f}) (${pnl_usd:+.2f})"
@@ -315,6 +326,7 @@ class PositionManager:
 
             # 2. TAKE PROFIT
             elif pnl_pct >= pos_tp_pct:
+                exit_action_attempted = True
                 logger.info(
                     f"  💰 TAKE PROFIT {symbol}: +{pnl_pct:.1%} "
                     f"(hedef {pos_tp_pct:.1%}) (${pnl_usd:+.2f})"
@@ -323,70 +335,46 @@ class PositionManager:
 
             # 3. TRAILING STOP
             elif pnl_pct > 0.01 and trailing_drop >= config["trailing_stop_pct"]:
+                exit_action_attempted = True
                 logger.info(
                     f"  TRAILING STOP {symbol}: Peak ${highest:,.2f} -> ${current_price:,.2f} "
                     f"(-{trailing_drop:.1%}) | P&L: {pnl_pct:.1%}"
                 )
                 bot.executor.execute_sell(symbol, f"TRAILING_STOP (peak -{trailing_drop:.1%})")
 
-            # 3b. TRAILING SL sunucu guncelleme (her dongude en yuksek fiyata gore)
-            elif pnl_pct > 0.02 and pos_data.get("breakeven_set", False):
-                # Kar %2+ ve break-even aktifse, trailing SL'yi sunucuda da yukari cek
-                trailing_sl_price = round(highest * (1 - config["trailing_stop_pct"]), 2)
-                last_server_sl = pos_data.get("last_server_sl", 0)
-                # Sadece fiyat yukseldiginde guncelle (gereksiz API cagrisi onle)
-                if trailing_sl_price > last_server_sl + 0.10:
-                    result = self._update_server_stop_loss(
-                        symbol, trailing_sl_price, float(pos.qty), side="LONG"
-                    )
-                    if (result.verified and result.stop_price is not None
-                            and abs(result.stop_price - trailing_sl_price) <= 0.011):
-                        bot.positions[symbol]["last_server_sl"] = trailing_sl_price
-
-            # 4. KADEMELİ KÂR ALMA (hisse senedi: tam hisse satılmalı)
+            # 4. KADEMELİ KÂR ALMA
             elif (pnl_pct >= config["partial_profit_pct"]
                   and not pos_data.get("partial_sold", False)):
-                logger.info(
-                    f"  📊 KADEMELI KÂR {symbol}: +{pnl_pct:.1%} -> Yarısı satılıyor"
+                exit_action_attempted = self._handle_long_partial(
+                    symbol=symbol,
+                    snapshot_position=pos,
+                    pos_data=pos_data,
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    pnl_pct=pnl_pct,
+                    config=config,
+                )
+
+            # 3b. Trailing sunucu-SL bakimi karar zincirinin DISINDADIR.
+            # Bu dongude herhangi bir exit denendiyse bayat qty ile stop yazilmaz.
+            if (
+                not exit_action_attempted
+                and pnl_pct > 0.02
+                and pos_data.get("breakeven_set", False)
+            ):
+                trailing_sl_price = round(
+                    highest * (1 - config["trailing_stop_pct"]), 2
                 )
                 try:
-                    qty = float(pos.qty)
-                    # For crypto allow fractional, for stocks int is fine. We can just use round(qty * 0.5, 4)
-                    half_qty = round(qty * 0.5, 4)
-                    # Minimum satış tutarı kontrolü — cascade selling önleyici
-                    half_value = half_qty * current_price
-                    if half_value < 10.0:
-                        logger.debug(f"  {symbol} kademeli satış çok küçük: ${half_value:.2f} < $10, atla")
-                    elif qty >= 2 or half_qty > 0:
-                        # A5: Yarı satıştan ÖNCE tam-qty bracket çıkış bacaklarını (TP limit +
-                        # SL stop) iptal et — aksi halde resting emir kalan adetten fazlasını
-                        # satıp pozisyonu net-SHORT'a düşürebilir veya emir reddi üretir.
-                        self._cancel_exit_orders(symbol, "LONG")
-                        request = MarketOrderRequest(
-                            symbol=symbol, qty=half_qty,
-                            side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
-                        )
-                        bot.client.submit_order(request)
-                        bot.positions[symbol]["partial_sold"] = True
-                        if hasattr(bot, "_stash_exit_flags"):
-                            bot._stash_exit_flags(symbol, bot.positions[symbol])  # A6
-                        from datetime import timedelta
-                        bot.sell_cooldown[symbol] = datetime.now() + timedelta(seconds=config.get("sell_cooldown_seconds", 300))
-                        bot._save_position_metadata()
-                        logger.info(f"  ✅ Yarısı satıldı: {half_qty} {symbol} (${half_value:.2f}) (Cooldown eklendi)")
-                        # A5: Kalan pozisyon için koruyucu stop'u yeniden kur (korumasız kalmasın)
-                        remaining_qty = round(qty - half_qty, 4)
-                        if remaining_qty > 0:
-                            prot_price = self._ensure_canonical_trigger(
-                                symbol, bot.positions[symbol], entry_price,
-                                "LONG", config,
-                            )
-                            if prot_price is not None:
-                                self._update_server_stop_loss(
-                                    symbol, prot_price, remaining_qty, side="LONG"
-                                )
-                except Exception as e:
-                    logger.error(f"Kademeli satış hatası {symbol}: {e}")
+                    canonical_stop = float(
+                        pos_data.get("stop_loss_price", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    canonical_stop = 0.0
+                if trailing_sl_price > canonical_stop + 0.10:
+                    self._update_server_stop_loss(
+                        symbol, trailing_sl_price, float(pos.qty), side="LONG"
+                    )
 
             # Durum logla (önemli pozisyonlar)
             if abs(pnl_pct) > 0.02:
@@ -754,6 +742,539 @@ class PositionManager:
     # SUNUCU TARAFLI STOP-LOSS GUNCELLEME
     # ================================================================
 
+    def _partial_day(self) -> str:
+        get_day = getattr(self.bot, "_et_today", None)
+        if callable(get_day):
+            try:
+                return get_day().isoformat()
+            except Exception:
+                pass
+        return datetime.now().date().isoformat()
+
+    def _persist_partial_position(self, symbol: str, pos_data: Dict) -> bool:
+        """Partial intent state'ini order submit'ten once kalici hale getir."""
+        if hasattr(self.bot, "_stash_exit_flags"):
+            self.bot._stash_exit_flags(symbol, pos_data)
+        save = getattr(self.bot, "_save_position_metadata", None)
+        if not callable(save):
+            logger.error(f"  {symbol}: partial intent icin kalici state yazici yok")
+            return False
+        try:
+            return save() is True
+        except Exception as exc:
+            logger.error(f"  {symbol}: partial intent state yazilamadi: {exc}")
+            return False
+
+    def _partial_budget(self, pos_data: Dict) -> Dict:
+        today = self._partial_day()
+        budget = pos_data.get("partial_retry_budget")
+        if not isinstance(budget, dict) or budget.get("date") != today:
+            budget = {"date": today, "terminal_nofill": 0, "warned": False}
+            pos_data["partial_retry_budget"] = budget
+        return budget
+
+    @staticmethod
+    def _partial_tolerance(target_qty: float) -> float:
+        return max(1e-4, abs(float(target_qty)) * 1e-4)
+
+    @staticmethod
+    def _partial_client_id(symbol: str) -> str:
+        return f"r1p-{symbol.upper()[:10]}-{uuid4().hex[:24]}"
+
+    def _partial_event(
+        self, kind: str, symbol: str, pos_data: Dict, **fields
+    ) -> bool:
+        intent = pos_data.get("partial_intent")
+        common = {
+            "symbol": symbol,
+            "side": "LONG",
+            "entry_price": pos_data.get("entry_price"),
+        }
+        if isinstance(intent, dict):
+            common.update({
+                "intent_status": intent.get("status"),
+                "client_order_id": intent.get("client_order_id"),
+                "order_id": intent.get("order_id"),
+                "target_qty": intent.get("target_qty"),
+                "filled_qty": intent.get("filled_qty", 0),
+                "remaining_target_qty": max(
+                    float(intent.get("target_qty", 0) or 0)
+                    - float(intent.get("filled_qty", 0) or 0),
+                    0.0,
+                ),
+            })
+        return append_telemetry(kind, **common, **fields)
+
+    @staticmethod
+    def _order_not_found(exc: Exception) -> bool:
+        message = str(exc).lower()
+        status_code = getattr(exc, "status_code", None)
+        return (
+            isinstance(exc, KeyError)
+            or status_code == 404
+            or "404" in message
+            or "not found" in message
+            or "order does not exist" in message
+        )
+
+    def _reconcile_partial_order(
+        self, symbol: str, intent: Dict
+    ) -> tuple[object | None, bool, str]:
+        """Intent cid'ini brokerla uzlastir; ikinci satis ancak kesin yoklukta acilir."""
+        oid = str(intent.get("order_id") or "")
+        if oid:
+            try:
+                return self._reread_order(oid), True, f"order_id={oid}"
+            except Exception as exc:
+                if not self._order_not_found(exc):
+                    return None, False, f"order_id sorgu hatasi: {exc}"
+
+        cid = str(intent.get("client_order_id") or "")
+        getter = getattr(self.bot.client, "get_order_by_client_id", None)
+        if cid and callable(getter):
+            try:
+                return getter(cid), True, f"client_order_id={cid}"
+            except Exception as exc:
+                if not self._order_not_found(exc):
+                    return None, False, f"client_order_id sorgu hatasi: {exc}"
+
+        try:
+            status_all = getattr(QueryOrderStatus, "ALL", QueryOrderStatus.OPEN)
+            orders = flatten_orders(self.bot.client.get_orders(
+                GetOrdersRequest(status=status_all, symbols=[symbol], nested=True)
+            ))
+            for candidate in orders:
+                if str(getattr(candidate, "client_order_id", "") or "") == cid:
+                    return candidate, True, f"order listesinde cid={cid}"
+            return None, True, f"brokerda cid bulunamadi: {cid}"
+        except Exception as exc:
+            return None, False, f"broker intent uzlastirmasi basarisiz: {exc}"
+
+    def _cancel_partial_conflicts(self, symbol: str) -> tuple[bool, str]:
+        """Partial submit oncesi tum LONG exit bacaklarini terminal-dogrula."""
+        try:
+            conflicts = [
+                order for order in self._open_orders(symbol)
+                if str(getattr(order, "symbol", "") or "") == symbol
+                and enum_value(getattr(order, "side", None))
+                == enum_value(OrderSide.SELL)
+                and is_active_order(order)
+            ]
+            ids = list(dict.fromkeys(
+                oid for oid in (order_id(order) for order in conflicts) if oid
+            ))
+            for oid in ids:
+                self.bot.client.cancel_order_by_id(oid)
+            if not ids:
+                return True, "acik exit bacagi yok"
+            return self._wait_exit_cancellations(symbol, "LONG", ids)
+        except Exception as exc:
+            return False, f"exit iptal hazirligi basarisiz: {exc}"
+
+    def _wait_partial_fill(
+        self, symbol: str, intent: Dict, submitted: object | None
+    ) -> tuple[object | None, bool, str]:
+        """Partial emrini bounded bekle; timeout'ta iptal edip terminal-dogrula."""
+        current = submitted
+        details: list[str] = []
+        for attempt in range(self._verify_attempts):
+            if current is None:
+                current, reconciled, detail = self._reconcile_partial_order(
+                    symbol, intent
+                )
+                details.append(detail)
+                if not reconciled:
+                    if attempt < self._verify_attempts - 1:
+                        self._poll_pause()
+                    continue
+            else:
+                oid = order_id(current)
+                if oid:
+                    try:
+                        current = self._reread_order(oid)
+                    except Exception as exc:
+                        details.append(f"{oid}: yeniden okuma hatasi: {exc}")
+
+            if current is not None:
+                status = enum_value(getattr(current, "status", None))
+                try:
+                    filled = abs(float(getattr(current, "filled_qty", 0) or 0))
+                except (TypeError, ValueError):
+                    filled = 0.0
+                details.append(f"{order_id(current)}:{status}:fill={filled:.4f}")
+                attempt_qty = float(intent.get("attempt_qty", 0) or 0)
+                if filled + self._partial_tolerance(attempt_qty) >= attempt_qty:
+                    return current, is_terminal_order(current) or status == "filled", ", ".join(details[-6:])
+                if is_terminal_order(current):
+                    return current, True, ", ".join(details[-6:])
+            if attempt < self._verify_attempts - 1:
+                self._poll_pause()
+
+        oid = order_id(current) if current is not None else intent.get("order_id")
+        if oid:
+            try:
+                self.bot.client.cancel_order_by_id(oid)
+            except Exception as exc:
+                details.append(f"timeout iptal hatasi {oid}: {exc}")
+            terminal, detail = self._wait_exit_cancellations(
+                symbol, "LONG", [str(oid)]
+            )
+            details.append(detail)
+            try:
+                current = self._reread_order(str(oid))
+            except Exception as exc:
+                details.append(f"terminal order okunamadi {oid}: {exc}")
+            return current, terminal, ", ".join(details[-8:])
+        return current, False, ", ".join(details[-8:]) or "partial order id yok"
+
+    def _warn_partial_budget(self, symbol: str, pos_data: Dict) -> None:
+        budget = self._partial_budget(pos_data)
+        if budget.get("warned", False):
+            return
+        budget["warned"] = True
+        self._persist_partial_position(symbol, pos_data)
+        logger.warning(
+            f"  PARTIAL RETRY BUTCESI DOLDU {symbol}: "
+            f"{budget.get('terminal_nofill', 0)}/3; bugun yeni yari-satis yok"
+        )
+        self._partial_event(
+            "PARTIAL_RETRY_EXHAUSTED", symbol, pos_data,
+            severity="WARNING", retry_count=budget.get("terminal_nofill", 0),
+        )
+
+    def _finish_partial_attempt(
+        self, symbol: str, pos_data: Dict, order: object | None,
+        terminal_confirmed: bool, detail: str,
+    ) -> None:
+        intent = pos_data["partial_intent"]
+        base = float(intent.get("attempt_base_filled_qty", 0) or 0)
+        try:
+            attempt_filled = abs(float(getattr(order, "filled_qty", 0) or 0))
+        except (TypeError, ValueError):
+            attempt_filled = 0.0
+        target = float(intent.get("target_qty", 0) or 0)
+        total_filled = min(round(base + attempt_filled, 4), target)
+        intent["filled_qty"] = total_filled
+        intent["attempt_terminal"] = bool(terminal_confirmed)
+        intent["accounted_order_id"] = order_id(order) if order is not None else None
+        intent["updated_at"] = datetime.now().isoformat()
+        tolerance = self._partial_tolerance(target)
+
+        if not terminal_confirmed:
+            # Terminal kanit yoksa intent kapanmaz. Sonraki dongu AYNI cid/order'i
+            # yeniden uzlastirir; yeni yari-satis emri acamaz.
+            intent["status"] = "PARTIAL" if total_filled > tolerance else "SUBMITTED"
+            pos_data["partial_sold"] = False
+        elif total_filled + tolerance >= target:
+            intent["status"] = "FILLED"
+            pos_data["partial_sold"] = True
+            self.bot.sell_cooldown[symbol] = datetime.now() + timedelta(
+                seconds=float(intent.get("cooldown_seconds", 300) or 300)
+            )
+            logger.info(
+                f"  PARTIAL DOLUM DOGRULANDI {symbol}: "
+                f"{total_filled:.4f}/{target:.4f}"
+            )
+        elif total_filled > tolerance:
+            intent["status"] = "PARTIAL"
+            pos_data["partial_sold"] = False
+            logger.warning(
+                f"  PARTIAL KISMI DOLUM {symbol}: "
+                f"{total_filled:.4f}/{target:.4f}; kalan hedef yeniden denenecek"
+            )
+        else:
+            intent["status"] = "TERMINAL_NOFILL"
+            pos_data["partial_sold"] = False
+
+        nofill_attempt = attempt_filled <= self._partial_tolerance(
+            float(intent.get("attempt_qty", 0) or 0)
+        )
+        if nofill_attempt and terminal_confirmed:
+            budget = self._partial_budget(pos_data)
+            budget["terminal_nofill"] = int(
+                budget.get("terminal_nofill", 0) or 0
+            ) + 1
+
+        self._persist_partial_position(symbol, pos_data)
+        self._partial_event(
+            "PARTIAL_STATE", symbol, pos_data,
+            terminal_confirmed=terminal_confirmed,
+            broker_status=enum_value(getattr(order, "status", None)),
+            detail=detail,
+        )
+        if int(self._partial_budget(pos_data).get("terminal_nofill", 0)) >= 3:
+            self._warn_partial_budget(symbol, pos_data)
+
+    def _restore_partial_protection(
+        self, symbol: str, pos_data: Dict, entry_price: float, config: Dict,
+        terminal_safe: bool = True,
+    ) -> None:
+        """Her partial sonucunda gercek kalan qty icin tek stopu geri kur."""
+        if not terminal_safe:
+            protection_alarm(
+                self.bot, f"{symbol}:LONG:PARTIAL",
+                f"{symbol}: partial emir terminal-dogrulanamadi; "
+                "guvenli stop restore yapilamadi",
+            )
+            return
+        try:
+            position = self._current_position(symbol, "LONG")
+            if position is None:
+                return
+            live_qty = abs(float(getattr(position, "qty", 0) or 0))
+            if live_qty <= 0:
+                return
+            pos_data["qty"] = live_qty
+            target = self._ensure_canonical_trigger(
+                symbol, pos_data, entry_price, "LONG", config
+            )
+            if target is None:
+                raise RuntimeError("kanonik stop_loss_price yok")
+            result = self._update_server_stop_loss(
+                symbol, target, live_qty, side="LONG"
+            )
+            if not result.verified:
+                raise RuntimeError(result.detail)
+
+            active_stops = [
+                order for order in self._stop_candidates(
+                    self._open_orders(symbol), symbol, "LONG"
+                )
+                if is_active_order(order)
+            ]
+            keep_id = str(result.order_id or "")
+            extras = [
+                str(order_id(order)) for order in active_stops
+                if order_id(order) and str(order_id(order)) != keep_id
+            ]
+            for oid in extras:
+                self.bot.client.cancel_order_by_id(oid)
+            if extras:
+                canceled, detail = self._wait_exit_cancellations(
+                    symbol, "LONG", extras
+                )
+                if not canceled:
+                    raise RuntimeError(detail)
+            final = self.verify_protective_stop(
+                symbol, "LONG", expected_stop=float(result.stop_price)
+            )
+            qty_tolerance = self._partial_tolerance(live_qty)
+            if (
+                not final.verified
+                or abs(final.qty_covered - live_qty) > qty_tolerance
+            ):
+                raise RuntimeError(final.detail)
+        except Exception as exc:
+            protection_alarm(
+                self.bot, f"{symbol}:LONG:PARTIAL",
+                f"{symbol}: partial sonrasi kalan pozisyon icin stop "
+                f"kurulamadi: {exc}",
+            )
+
+    def _handle_long_partial(
+        self, symbol: str, snapshot_position, pos_data: Dict,
+        entry_price: float, current_price: float, pnl_pct: float, config: Dict,
+    ) -> bool:
+        """Persisted intent + fill dogrulamali LONG yari-satis state machine'i."""
+        threshold = float(config["partial_profit_pct"])
+        if not self._partial_event(
+            "PARTIAL_THRESHOLD", symbol, pos_data,
+            pnl_pct=pnl_pct, threshold_pct=threshold,
+            observed_qty=abs(float(snapshot_position.qty)),
+        ):
+            return False
+
+        budget = self._partial_budget(pos_data)
+        intent = pos_data.get("partial_intent")
+        if not isinstance(intent, dict) or intent.get("status") in {
+            "FILLED", "TERMINAL_NOFILL"
+        }:
+            if int(budget.get("terminal_nofill", 0) or 0) >= 3:
+                self._warn_partial_budget(symbol, pos_data)
+                return False
+            snapshot_qty = abs(float(snapshot_position.qty))
+            target_qty = round(snapshot_qty * 0.5, 4)
+            if target_qty <= 0 or target_qty * current_price < 10.0:
+                logger.debug(
+                    f"  {symbol} kademeli satis cok kucuk: "
+                    f"${target_qty * current_price:.2f} < $10, atla"
+                )
+                return False
+            intent = {
+                "status": "INTENT",
+                "client_order_id": self._partial_client_id(symbol),
+                "order_id": None,
+                "target_qty": target_qty,
+                "filled_qty": 0.0,
+                "attempt_qty": target_qty,
+                "attempt_base_filled_qty": 0.0,
+                "attempt_terminal": False,
+                "starting_qty": snapshot_qty,
+                "sell_cooldown_seconds": config.get("sell_cooldown_seconds", 300),
+                "cooldown_seconds": config.get("sell_cooldown_seconds", 300),
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+            pos_data["partial_intent"] = intent
+            pos_data["partial_sold"] = False
+            if not self._persist_partial_position(symbol, pos_data):
+                return False
+            if not self._partial_event(
+                "PARTIAL_INTENT", symbol, pos_data,
+                pnl_pct=pnl_pct, threshold_pct=threshold,
+            ):
+                return False
+            created_now = True
+        else:
+            created_now = False
+
+        terminal_safe = True
+        attempted = False
+        try:
+            if intent.get("status") == "PARTIAL" and intent.get(
+                "attempt_terminal", False
+            ):
+                existing_order, reconciled, detail = (
+                    None, True, "onceki kismi dolum terminal-dogrulanmis"
+                )
+            else:
+                existing_order, reconciled, detail = self._reconcile_partial_order(
+                    symbol, intent
+                )
+            if (
+                intent.get("status") == "PARTIAL"
+                and existing_order is not None
+                and str(intent.get("accounted_order_id") or "")
+                == str(order_id(existing_order) or "")
+                and is_terminal_order(existing_order)
+            ):
+                existing_order = None
+            if not created_now and not reconciled:
+                logger.warning(
+                    f"  {symbol}: partial intent brokerla uzlastirilamadi; "
+                    f"ikinci satis yok ({detail})"
+                )
+                terminal_safe = False
+                return True
+
+            if existing_order is not None:
+                attempted = True
+                intent["order_id"] = order_id(existing_order)
+                intent["status"] = "SUBMITTED"
+                self._persist_partial_position(symbol, pos_data)
+                final_order, terminal_safe, wait_detail = self._wait_partial_fill(
+                    symbol, intent, existing_order
+                )
+                self._finish_partial_attempt(
+                    symbol, pos_data, final_order, terminal_safe, wait_detail
+                )
+                return True
+
+            # Onceki terminal kismi dolumda yeni yari hedef hesaplanmaz; yalniz
+            # orijinal hedefin eksik kalan adedi icin yeni attempt acilir.
+            target = float(intent.get("target_qty", 0) or 0)
+            filled = float(intent.get("filled_qty", 0) or 0)
+            remaining_target = round(max(target - filled, 0.0), 4)
+            if remaining_target <= self._partial_tolerance(target):
+                intent["status"] = "FILLED"
+                pos_data["partial_sold"] = True
+                self._persist_partial_position(symbol, pos_data)
+                return False
+            if not created_now:
+                if int(budget.get("terminal_nofill", 0) or 0) >= 3:
+                    self._warn_partial_budget(symbol, pos_data)
+                    return False
+                intent["client_order_id"] = self._partial_client_id(symbol)
+                intent["order_id"] = None
+                intent["attempt_qty"] = remaining_target
+                intent["attempt_base_filled_qty"] = filled
+                intent["attempt_terminal"] = False
+                intent["updated_at"] = datetime.now().isoformat()
+                if not self._persist_partial_position(symbol, pos_data):
+                    return False
+                if not self._partial_event("PARTIAL_INTENT", symbol, pos_data):
+                    return False
+
+            canceled, cancel_detail = self._cancel_partial_conflicts(symbol)
+            attempted = True
+            if not canceled:
+                terminal_safe = False
+                raise RuntimeError(cancel_detail)
+
+            # Iptal beklerken bracket bacagi dolmus olabilir. Bayat qty ile SELL
+            # gonderilmez; taraf/adet submit'ten hemen once brokerdan yeniden okunur.
+            live = self._current_position(symbol, "LONG")
+            if live is None:
+                intent["status"] = "TERMINAL_NOFILL"
+                intent["updated_at"] = datetime.now().isoformat()
+                self._persist_partial_position(symbol, pos_data)
+                self._partial_event(
+                    "PARTIAL_ABORTED_FLAT", symbol, pos_data,
+                    detail="exit iptali beklenirken pozisyon kapandi",
+                )
+                return True
+            live_qty = abs(float(getattr(live, "qty", 0) or 0))
+            expected_live_qty = float(intent.get("starting_qty", live_qty)) - filled
+            tolerance = self._partial_tolerance(target)
+            if live_qty + tolerance < expected_live_qty:
+                intent["status"] = "TERMINAL_NOFILL" if filled <= tolerance else "PARTIAL"
+                intent["updated_at"] = datetime.now().isoformat()
+                self._persist_partial_position(symbol, pos_data)
+                self._partial_event(
+                    "PARTIAL_ABORTED_POSITION_CHANGED", symbol, pos_data,
+                    expected_position_qty=expected_live_qty,
+                    observed_position_qty=live_qty,
+                )
+                return True
+            submit_qty = round(min(remaining_target, live_qty), 4)
+            if submit_qty <= 0:
+                return True
+
+            request = MarketOrderRequest(
+                symbol=symbol,
+                qty=submit_qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+                client_order_id=intent["client_order_id"],
+            )
+            try:
+                submitted = self.bot.client.submit_order(request)
+            except Exception as exc:
+                detail = f"submit reddedildi: {exc}"
+                logger.error(f"Kademeli satis hatasi {symbol}: {detail}")
+                self._finish_partial_attempt(
+                    symbol, pos_data, None, True, detail
+                )
+                return True
+
+            intent["status"] = "SUBMITTED"
+            intent["order_id"] = order_id(submitted)
+            intent["attempt_qty"] = submit_qty
+            intent["attempt_terminal"] = False
+            intent["updated_at"] = datetime.now().isoformat()
+            self._persist_partial_position(symbol, pos_data)
+            self._partial_event("PARTIAL_STATE", symbol, pos_data)
+            final_order, terminal_safe, wait_detail = self._wait_partial_fill(
+                symbol, intent, submitted
+            )
+            self._finish_partial_attempt(
+                symbol, pos_data, final_order, terminal_safe, wait_detail
+            )
+            return True
+        except Exception as exc:
+            logger.error(f"Kademeli satis hatasi {symbol}: {exc}")
+            intent["updated_at"] = datetime.now().isoformat()
+            self._persist_partial_position(symbol, pos_data)
+            self._partial_event(
+                "PARTIAL_ERROR", symbol, pos_data, detail=str(exc)
+            )
+            return attempted
+        finally:
+            self._restore_partial_protection(
+                symbol, pos_data, entry_price, config,
+                terminal_safe=terminal_safe,
+            )
+
     def _cancel_exit_orders(self, symbol: str, side: str = "LONG"):
         """Sembol için açık çıkış emirlerini (bracket TP limit + SL stop) iptal eder.
 
@@ -854,13 +1375,108 @@ class PositionManager:
             + ", ".join(details[-6:])
         )
 
+    def _monotonic_stop_target(
+        self, symbol: str, side: str, requested_target: float,
+        requested_qty: float,
+    ) -> tuple[float, ProtectionResult | None]:
+        """Sinirda stop regresyonunu engelle; tum cagiricilar ayni klampi kullanir."""
+        side = side.upper()
+        local = self._position_book(side).get(symbol, {})
+        candidates = [float(requested_target)]
+
+        try:
+            canonical = float(local.get("stop_loss_price", 0) or 0)
+        except (TypeError, ValueError):
+            canonical = 0.0
+        if canonical > 0:
+            candidates.append(canonical)
+
+        # BE ancak dogrulanmis bayrakla klampa katilir. Salt esik gozlemi,
+        # stopu break-even'a cekme yetkisi vermez.
+        if local.get("breakeven_set", False):
+            try:
+                entry = float(local.get("entry_price", 0) or 0)
+                if side == "LONG":
+                    offset = float(STOCK_CONFIG.get("breakeven_offset_pct", 0.001))
+                else:
+                    offset = float(
+                        SHORT_CONFIG.get("short_breakeven_offset_pct", 0.003)
+                    )
+                breakeven = round(entry * (1 + offset), 2)
+                if breakeven > 0:
+                    candidates.append(breakeven)
+            except (TypeError, ValueError):
+                pass
+
+        covering: list[ProtectionResult] = []
+        try:
+            position = self._current_position(symbol, side)
+            if position is not None:
+                for order in self._stop_candidates(
+                    self._open_orders(symbol), symbol, side
+                ):
+                    check = classify_covering_order(order, position, side)
+                    qty_tolerance = self._partial_tolerance(requested_qty)
+                    exact_qty = abs(check.qty_covered - requested_qty) <= qty_tolerance
+                    if check.verified and check.stop_price is not None and exact_qty:
+                        covering.append(check)
+                        candidates.append(float(check.stop_price))
+        except Exception as exc:
+            # Broker sorgusu gecici olarak dusse bile kanonik klamp uygulanir;
+            # asil update dongusu bounded retry ve alarm yolunu korur.
+            logger.debug(f"  {symbol} monoton stop klampi broker sorgusu: {exc}")
+
+        effective = max(candidates) if side == "LONG" else min(candidates)
+        effective = round(float(effective), 2)
+
+        if covering:
+            best = (
+                max(covering, key=lambda item: float(item.stop_price))
+                if side == "LONG"
+                else min(covering, key=lambda item: float(item.stop_price))
+            )
+            best_price = float(best.stop_price)
+            reaches_effective = (
+                best_price + 0.011 >= effective
+                if side == "LONG"
+                else best_price - 0.011 <= effective
+            )
+            is_better_than_requested = (
+                best_price > requested_target + 0.011
+                if side == "LONG"
+                else best_price < requested_target - 0.011
+            )
+            if reaches_effective and is_better_than_requested:
+                return effective, best
+        return effective, None
+
     def _update_server_stop_loss(self, symbol: str, new_stop_price: float,
                                   qty: float, side: str = "LONG") -> ProtectionResult:
         """Mevcut stop'u PATCH et; stop yoksa iptal-bekle-submit et ve doğrula."""
         bot = self.bot
         side = side.upper()
-        target = round(float(new_stop_price), 2)
+        requested_target = round(float(new_stop_price), 2)
         requested_qty = round(abs(float(qty)), 4)
+        target, better_cover = self._monotonic_stop_target(
+            symbol, side, requested_target, requested_qty
+        )
+        if better_cover is not None:
+            result = ProtectionResult(
+                ProtectionOutcome.NOOP_BETTER_PROTECTED,
+                better_cover.order_id,
+                better_cover.stop_price,
+                better_cover.qty_covered,
+                f"{symbol}: mevcut stop istenen hedeften daha iyi; "
+                f"regresif yenileme atlandi (${requested_target:.2f} -> "
+                f"${float(better_cover.stop_price):.2f})",
+                at_target=True,
+            )
+            self._apply_protection_result(symbol, side, result)
+            logger.info(
+                f"  SL KORUNDU {symbol}: mevcut ${float(result.stop_price):.2f} "
+                f"regresif ${requested_target:.2f} hedefinden daha iyi ({side})"
+            )
+            return result
         exit_side = OrderSide.SELL if side == "LONG" else OrderSide.BUY
         limit_price = round(
             target * (0.995 if side == "LONG" else 1.005), 2
@@ -934,10 +1550,44 @@ class PositionManager:
                 stop_orders = deduped
 
                 for candidate in stop_orders:
+                    coverage = classify_covering_order(
+                        candidate, position, side
+                    )
+                    qty_tolerance = self._partial_tolerance(requested_qty)
+                    exact_qty = abs(
+                        coverage.qty_covered - requested_qty
+                    ) <= qty_tolerance
+                    if (
+                        coverage.verified
+                        and coverage.stop_price is not None
+                        and exact_qty
+                    ):
+                        active_price = float(coverage.stop_price)
+                        better = (
+                            active_price > target + 0.011
+                            if side == "LONG"
+                            else active_price < target - 0.011
+                        )
+                        if better:
+                            result = ProtectionResult(
+                                ProtectionOutcome.NOOP_BETTER_PROTECTED,
+                                coverage.order_id,
+                                coverage.stop_price,
+                                coverage.qty_covered,
+                                f"{symbol}: update sirasinda daha iyi aktif stop "
+                                "dogrulandi; regresif PATCH atlandi",
+                                at_target=True,
+                            )
+                            self._apply_protection_result(symbol, side, result)
+                            return result
                     check = classify_covering_order(
                         candidate, position, side, expected_stop=target
                     )
-                    if check.verified:
+                    qty_tolerance = self._partial_tolerance(requested_qty)
+                    if (
+                        check.verified
+                        and abs(check.qty_covered - requested_qty) <= qty_tolerance
+                    ):
                         outcome = (
                             ProtectionOutcome.NO_LEG_RESUBMITTED
                             if submitted_without_leg
@@ -950,6 +1600,7 @@ class PositionManager:
                             check.qty_covered,
                             f"{symbol}: stop yeniden okunup doğrulandı "
                             f"({outcome.value})",
+                            at_target=True,
                         )
                         self._apply_protection_result(symbol, side, result)
                         logger.info(

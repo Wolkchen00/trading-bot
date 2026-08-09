@@ -148,7 +148,6 @@ def test_long_break_even_sets_trigger_above_entry_only_after_verification():
                 "entry_price": 100,
                 "qty": 10,
                 "highest_price": 102.5,
-                "last_server_sl": 200,
                 "stop_loss_pct": 0.05,
             }
         },
@@ -177,7 +176,6 @@ def test_break_even_does_not_advance_when_target_is_not_verified():
                 "entry_price": 100,
                 "qty": 10,
                 "highest_price": 102.5,
-                "last_server_sl": 200,
                 "stop_loss_pct": 0.05,
                 "stop_loss_price": 95.0,
             }

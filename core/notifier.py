@@ -16,7 +16,15 @@ import os
 import requests
 from datetime import datetime
 from typing import Dict, Optional
+from core.ntfy_notifier import CriticalAlarmPublisher, PublishResult
 from utils.logger import logger
+
+
+CRITICAL_EVENT_INVENTORY = (
+    "notify_critical",
+    "notify_kill_switch",
+    "stock_bot.main_loop_consecutive_error",
+)
 
 
 class TelegramNotifier:
@@ -27,6 +35,7 @@ class TelegramNotifier:
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         self.enabled = bool(self.bot_token and self.chat_id)
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
+        self.critical_publisher = CriticalAlarmPublisher(telegram_send=self._send)
 
         if self.enabled:
             logger.info("📱 TelegramNotifier aktif")
@@ -99,7 +108,18 @@ class TelegramNotifier:
             f"📋 Tüm pozisyonlar kapatılıyor!\n"
             f"🕒 {datetime.now().strftime('%H:%M:%S')}"
         )
-        return self._send(text)
+        message = (
+            f"KILL SWITCH TETIKLENDI | Sebep: {reason} | "
+            f"Bakiye: ${equity:,.2f} | Tum pozisyonlar kapatiliyor"
+        )
+        result = self.publish_critical(
+            "KILL_SWITCH",
+            message,
+            telegram_text=text,
+            symbol="BOT",
+            state_code="triggered",
+        )
+        return result.direct_delivered
 
     def notify_daily_summary(self, equity: float, pnl: float,
                               trades_count: int, positions: dict,
@@ -182,57 +202,53 @@ class TelegramNotifier:
         return self._send(text)
 
     # ============================================================
-    # KRITIK ALARM (R0-E) — teslimat kanaldan BAGIMSIZ kayit altina alinir
+    # KRITIK ALARM (R0-E/Rock 4) — tek dayanikli publisher
     # ============================================================
     # NEDEN: Telegram kimlik bilgisi yoksa notifier sessizce devre disi kalir
-    # ve her gonderim False doner. Bir "pozisyon korumasiz" alarmi bu yuzden
-    # hicbir iz birakmadan kaybolabiliyordu. Artik kritik alarm ONCE diske
-    # yazilir (surec olse bile kalir), SONRA teslim edilmeye calisilir;
-    # teslimat basarisizsa ERROR seviyesinde loglanir.
-    #
-    # Diskteki kuyrugu VPS'teki dis nobetci (trading_protection_check.sh /
-    # trading_liveness_check.sh) okuyup ntfy'ye tasiyabilir — bot surecinin
-    # icindeki hicbir kanal, botun kendi olumunu haber veremez.
+    # ve her gonderim False doner. Publisher alarmi once alarms.jsonl'e yazar,
+    # sonra Telegram/ntfy dener. VPS bridge teslim edilmemis kayitlarin backstop'idir.
 
-    def notify_critical(self, kind: str, message: str) -> bool:
-        """Kritik alarm: her kosulda diske yazilir, sonra teslim denenir.
+    def publish_critical(
+        self,
+        kind: str,
+        message: str,
+        *,
+        telegram_text: Optional[str] = None,
+        symbol: Optional[str] = None,
+        state_code: Optional[str] = None,
+    ) -> PublishResult:
+        """Return the honest persisted/direct-delivered result model."""
+        return self.critical_publisher.publish(
+            kind,
+            message,
+            telegram_text=telegram_text,
+            symbol=symbol,
+            state_code=state_code,
+        )
 
-        Returns: teslimatin BASARILI olup olmadigi (diske yazim degil).
-        """
-        import json as _json
-        from datetime import datetime as _dt
-
-        record = {
-            "ts": _dt.now().isoformat(),
-            "kind": kind,
-            "message": message[:2000],
-        }
-
-        # 1) Once kalici kayit — kanal calismasa bile kanit kalir
-        try:
-            from config import state_path
-            path = state_path("alarms.jsonl")
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(_json.dumps(record, ensure_ascii=False) + "\n")
-        except Exception as e:
-            logger.error(f"  ALARM KUYRUGA YAZILAMADI ({kind}): {e}")
-
-        # 2) Sonra teslimat
+    def notify_critical(
+        self,
+        kind: str,
+        message: str,
+        *,
+        symbol: Optional[str] = None,
+        state_code: Optional[str] = None,
+    ) -> bool:
+        """Persist and deliver a critical alarm; return direct delivery only."""
         text = (
             f"🚨 <b>{kind}</b>\n"
             f"---------------\n"
             f"{message[:1500]}\n"
-            f"🕐 {_dt.now().strftime('%H:%M:%S')}"
+            f"🕐 {datetime.now().strftime('%H:%M:%S')}"
         )
-        delivered = self._send(text)
-        if not delivered:
-            # Sessizce yutma — kanal kapaliysa da bunu gormek gerekir
-            logger.error(
-                f"  KRITIK ALARM TESLIM EDILEMEDI ({kind}): "
-                f"notifier {'acik ama gonderim basarisiz' if self.enabled else 'DEVRE DISI (kimlik yok)'} "
-                f"| icerik diskteki alarms.jsonl'de"
-            )
-        return delivered
+        result = self.publish_critical(
+            kind,
+            message,
+            telegram_text=text,
+            symbol=symbol,
+            state_code=state_code,
+        )
+        return result.direct_delivered
 
     def send_message(self, text: str) -> bool:
         """Genel amacli mesaj gonder (short executor, ozel bildirimler vb.)."""

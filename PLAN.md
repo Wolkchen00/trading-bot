@@ -554,7 +554,7 @@ INTERNALERROR verir ,  koşum şekli `py tests/test_full_system.py` (belgelendi)
   heartbeat canlı. Gün içi not: NVDA breakeven-stop ile kapandı (16:14 UTC,
   ≈-$0.30 ,  kâr kilidi seviyesi altına sarkınca tasarım gereği çıkış).
 - **Bildirim kanalı KURULDU** (15 Tem, İhsan "devam"): ntfy.sh push , 
-  abonelik `https://ntfy.sh/trading-ihsan-b697f59b` (telefonda ntfy uygulaması
+  abonelik `https://ntfy.sh/<NTFY_TOPIC>` (telefonda ntfy uygulaması
   veya tarayıcı). VPS tarafı: `/root/trading_liveness_check.sh` cron */20dk
   (konteyner ayakta mı + heartbeat <30dk; sorunda push, 4h cooldown , 
   `/root/trading_alert.sh`); günlük 21:30 UTC sağlık raporu da 🔴 durumda

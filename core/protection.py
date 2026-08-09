@@ -426,8 +426,21 @@ def exit_flag_cache_matches_entry(cached: Any, entry_price: Any) -> bool:
     return abs(new_entry - cached_entry) / cached_entry <= 0.001
 
 
+def _protection_alarm_identity(key: str) -> tuple[str, str]:
+    """Translate the existing protection key into symbol+state-code."""
+    parts = [part.strip() for part in str(key).split(":") if part.strip()]
+    if not parts:
+        return "*", "default"
+    if parts[0] == "RECONCILIATION_QUERY":
+        return "BOT", "reconciliation_query"
+    symbol = parts[0].upper()
+    if len(parts) == 2 and parts[1].upper() in {"LONG", "SHORT"}:
+        return symbol, "naked"
+    return symbol, parts[-1].lower() if len(parts) > 1 else "default"
+
+
 def protection_alarm(bot: Any, key: str, detail: str, dedupe_seconds: int = 900) -> bool:
-    """Yerel CRITICAL alarm + varsa Telegram; ayni alarmi sureli tekillestirir."""
+    """Yerel CRITICAL + dayanikli publisher; ayni alarmi sureli tekillestirir."""
     now = datetime.now().timestamp()
     cache = getattr(bot, "_protection_alarm_cache", None)
     if not isinstance(cache, dict):
@@ -450,13 +463,12 @@ def protection_alarm(bot: Any, key: str, detail: str, dedupe_seconds: int = 900)
     ):
         try:
             if hasattr(notifier, "notify_critical"):
-                delivered = notifier.notify_critical("KORUMA", message)
-            else:
-                delivered = notifier.notify_error(message)
-            if delivered is not True:
-                logger.error(
-                    f"  Koruma alarmi Telegram teslimi dogrulanamadi: {key}"
+                symbol, state_code = _protection_alarm_identity(key)
+                notifier.notify_critical(
+                    "KORUMA", message, symbol=symbol, state_code=state_code
                 )
+            else:
+                notifier.notify_error(message)
         except Exception as exc:
             logger.error(f"  Koruma alarm kanali hatasi {key}: {exc}")
     return True

@@ -493,6 +493,7 @@ def test_critical_alarm_is_durable_when_delivery_is_disabled(
     monkeypatch.setattr(config, "state_path", lambda _name: str(alarm_file))
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("NTFY_TOPIC", "")
     notifier = TelegramNotifier()
 
     assert notifier.notify_critical("KORUMA", "AAPL naked") is False

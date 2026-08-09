@@ -31,6 +31,9 @@ from datetime import datetime, date, timedelta
 _TEST_TMP = tempfile.mkdtemp(prefix="trading_bot_test_")
 os.environ.setdefault("STATE_VOLUME_PATH", _TEST_TMP)
 os.environ.setdefault("BOT_LOG_DIR", os.path.join(_TEST_TMP, "logs"))
+# Tests must never publish to a real phone topic, including when the caller's
+# shell or .env has production delivery configured.
+os.environ["NTFY_TOPIC"] = ""
 
 # Proje kökünü path'e ekle
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

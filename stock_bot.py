@@ -378,6 +378,26 @@ class StockBot:
             logger.error(f"  Periyodik koruma uzlaştırması eksik: {summary.detail}")
         return summary
 
+    def _notify_main_loop_consecutive_error(
+        self, error_count: int, exc: Exception
+    ) -> bool:
+        """Route the main-loop consecutive-error critical path to the publisher."""
+        message = (
+            f"Ana dongude {error_count} ardisik hata; 5 dakika bekleniyor. "
+            f"Son hata: {exc}"
+        )
+        logger.critical(f"  {message}")
+        try:
+            return self.notifier.notify_critical(
+                "MAIN_LOOP_ERROR",
+                message,
+                symbol="BOT",
+                state_code="consecutive_errors",
+            )
+        except Exception as notify_exc:
+            logger.error(f"  Ana dongu kritik alarm publisher hatasi: {notify_exc}")
+            return False
+
     def run(self):
         """Ana trading döngüsü."""
         config = STOCK_CONFIG
@@ -678,7 +698,9 @@ class StockBot:
                 if self.kill_switch.check_api_error(e):
                     continue
                 if self.consecutive_errors >= config.get("max_consecutive_errors", 5):
-                    logger.critical(f"  {self.consecutive_errors} ardışık hata! 5 dakika bekleniyor.")
+                    self._notify_main_loop_consecutive_error(
+                        self.consecutive_errors, e
+                    )
                     time.sleep(300)
                     self.consecutive_errors = 0
                 else:

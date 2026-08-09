@@ -180,9 +180,9 @@ def test_partial_quantity_stop_is_not_coverage():
 
 def test_deterministic_client_order_id_is_stable_and_short():
     """Ayni niyet ayni ID uretmeli (korelasyon), Alpaca 48 karakter siniri."""
-    a = deterministic_client_order_id("AAPL", "SELL", 95.0, 10.0)
-    b = deterministic_client_order_id("AAPL", "SELL", 95.0, 10.0)
-    c = deterministic_client_order_id("AAPL", "SELL", 95.5, 10.0)
+    a = deterministic_client_order_id("AAPL", "SELL", 95.0, 10.0, "test-salt")
+    b = deterministic_client_order_id("AAPL", "SELL", 95.0, 10.0, "test-salt")
+    c = deterministic_client_order_id("AAPL", "SELL", 95.5, 10.0, "test-salt")
     assert a == b
     assert a != c
     assert len(a) < 48, f"client_order_id cok uzun: {len(a)}"

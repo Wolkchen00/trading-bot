@@ -7,6 +7,7 @@ StockBot’tan ayrıştırılmış pozisyon modülü.
   Alpaca’daki stop emri de güncellenir (bot çökse bile korunma devam eder)
 """
 from datetime import datetime, timedelta
+import re
 import time
 from typing import Dict
 from uuid import uuid4
@@ -38,6 +39,7 @@ from core.protection import (
     order_limit_price,
     order_stop_price,
     protection_alarm,
+    protection_drift_severity,
     should_exit_locally,
 )
 from core.telemetry import append_telemetry
@@ -51,6 +53,8 @@ class PositionManager:
         self.bot = bot
         self._small_pos_log_time = {}  # Log spam önleyici: sembol → son log zamanı
         self._verify_attempts = 6
+        # Islem-turu bazli gecici broker hata sayaci bellek-icidir; restart sifirlar.
+        self._reconciliation_retry_counts: dict[str, int] = {}
 
     def _poll_pause(self):
         delay = float(getattr(self.bot, "_protection_poll_seconds", 0.25) or 0)
@@ -91,6 +95,8 @@ class PositionManager:
                 ):
                     pos_data["stop_loss_price"] = verified_trigger
             clear_protection_alarm(self.bot, f"{symbol}:{side}")
+            if result.at_target:
+                clear_protection_alarm(self.bot, f"{symbol}:{side}:DRIFT")
         elif result.outcome not in {
             ProtectionOutcome.ALREADY_FLAT,
             ProtectionOutcome.SKIPPED_PARKING,
@@ -126,6 +132,78 @@ class PositionManager:
 
     def _reread_order(self, oid: str):
         return self.bot.client.get_order_by_id(oid)
+
+    @staticmethod
+    def _is_transient_broker_error(exc: Exception) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        try:
+            if status_code is not None and 500 <= int(status_code) <= 599:
+                return True
+        except (TypeError, ValueError):
+            pass
+        message = str(exc).lower()
+        return (
+            isinstance(exc, (ConnectionError, TimeoutError))
+            or re.search(r"\b5\d\d\b", message) is not None
+            or "connection" in message
+            or "timed out" in message
+            or "timeout" in message
+        )
+
+    def _reconciliation_query(self, operation: str, query):
+        """Gecici sorgu hatasini bir kez dener; basari seriyi sifirlar."""
+        for retry in range(2):
+            try:
+                value = query()
+                self._reconciliation_retry_counts[operation] = 0
+                clear_protection_alarm(
+                    self.bot, f"RECONCILIATION_QUERY:{operation}"
+                )
+                return value
+            except Exception as exc:
+                if not self._is_transient_broker_error(exc):
+                    raise
+                count = self._reconciliation_retry_counts.get(operation, 0) + 1
+                self._reconciliation_retry_counts[operation] = count
+                if retry == 0:
+                    self._poll_pause()
+                    continue
+                raise
+
+    def _report_degraded_protection(
+        self,
+        symbol: str,
+        side: str,
+        result: ProtectionResult,
+        position,
+        canonical_stop: float,
+        config: Dict,
+    ) -> ProtectionResult:
+        threshold = float(config.get("protection_drift_critical_pct", 0.01))
+        severity, drift = protection_drift_severity(
+            side,
+            canonical_stop,
+            float(result.stop_price),
+            float(getattr(position, "avg_entry_price", 0) or 0),
+            threshold,
+        )
+        reported = ProtectionResult(
+            ProtectionOutcome.DEGRADED_PROTECTED,
+            result.order_id,
+            result.stop_price,
+            result.qty_covered,
+            f"{result.detail}; severity={severity}, drift={drift:.4%}, "
+            f"kritik_esik={threshold:.4%}",
+            at_target=False,
+        )
+        self._apply_protection_result(symbol, side, reported)
+        alarm_key = f"{symbol}:{side}:DRIFT"
+        if severity == "CRITICAL":
+            protection_alarm(self.bot, alarm_key, reported.detail)
+        else:
+            clear_protection_alarm(self.bot, alarm_key)
+            logger.warning(f"  KORUMA UYARISI [{alarm_key}] {reported.detail}")
+        return reported
 
     @staticmethod
     def _stop_candidates(orders: list, symbol: str, side: str) -> list:
@@ -601,10 +679,17 @@ class PositionManager:
         """Tüm strategy equity pozisyonlarında gerçek stop kapsamasını uzlaştır."""
         bot = self.bot
         summary = ProtectionSummary()
+        operation = "positions"
         try:
-            positions = bot.client.get_all_positions()
-            orders = flatten_orders(bot.client.get_orders(
-                GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True)
+            positions = self._reconciliation_query(
+                operation, bot.client.get_all_positions
+            )
+            operation = "orders"
+            orders = flatten_orders(self._reconciliation_query(
+                operation,
+                lambda: bot.client.get_orders(
+                    GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True)
+                ),
             ))
         except Exception as exc:
             result = ProtectionResult(
@@ -613,7 +698,9 @@ class PositionManager:
             )
             summary.results.append(result)
             summary.detail = result.detail
-            protection_alarm(bot, "RECONCILIATION_QUERY", result.detail)
+            protection_alarm(
+                bot, f"RECONCILIATION_QUERY:{operation}", result.detail
+            )
             return summary
 
         for pos in positions:
@@ -644,6 +731,17 @@ class PositionManager:
                     summary.results.append(self._alarm_result(symbol, side, result))
                     continue
 
+                target = None
+                if not is_parking:
+                    side_config = config if side == "LONG" else SHORT_CONFIG
+                    target = self._ensure_canonical_trigger(
+                        symbol, pos_data, entry, side, side_config
+                    )
+                    if target is None:
+                        raise ValueError(
+                            f"{symbol}: kanonik stop_loss_price turetilemedi"
+                        )
+
                 wanted_side = OrderSide.SELL if side == "LONG" else OrderSide.BUY
                 symbol_orders = [
                     order for order in orders
@@ -657,13 +755,19 @@ class PositionManager:
                 elected = None
                 covering = None
                 for stop_order in stop_orders:
-                    check = classify_covering_order(stop_order, pos, side)
+                    check = classify_covering_order(
+                        stop_order,
+                        pos,
+                        side,
+                        expected_stop=target,
+                    )
                     if check.outcome == ProtectionOutcome.ELECTED_UNFILLED:
                         elected = check
                         break
                     if check.verified:
                         covering = check
-                        break
+                        if check.at_target or is_parking:
+                            break
 
                 # Parking otomatik olarak değiştirilmez. Yine de kapsaması varsa
                 # doğrulanır; yalnız uncovered parking SKIPPED + alarm döner.
@@ -693,9 +797,18 @@ class PositionManager:
                     summary.results.append(self._alarm_result(symbol, side, elected))
                     continue
                 if covering is not None:
-                    summary.results.append(
-                        self._apply_protection_result(symbol, side, covering)
-                    )
+                    if (
+                        covering.outcome
+                        == ProtectionOutcome.DEGRADED_PROTECTED
+                    ):
+                        reported = self._report_degraded_protection(
+                            symbol, side, covering, pos, target, config
+                        )
+                    else:
+                        reported = self._apply_protection_result(
+                            symbol, side, covering
+                        )
+                    summary.results.append(reported)
                     if pos_data.get("close_in_progress", False):
                         protection_alarm(
                             bot, f"{symbol}:CLOSE_IN_PROGRESS",
@@ -703,15 +816,6 @@ class PositionManager:
                             "pozisyon korumalı fakat hâlâ açık",
                         )
                     continue
-
-                side_config = config if side == "LONG" else SHORT_CONFIG
-                target = self._ensure_canonical_trigger(
-                    symbol, pos_data, entry, side, side_config
-                )
-                if target is None:
-                    raise ValueError(
-                        f"{symbol}: kanonik stop_loss_price türetilemedi"
-                    )
 
                 logger.warning(
                     f"  Koruma kapsama eksiği: {symbol} -> "
@@ -1320,6 +1424,19 @@ class PositionManager:
                         candidate, position, side, expected_stop
                     )
                     if result.verified:
+                        if (
+                            result.outcome
+                            == ProtectionOutcome.DEGRADED_PROTECTED
+                            and expected_stop is not None
+                        ):
+                            return self._report_degraded_protection(
+                                symbol,
+                                side,
+                                result,
+                                position,
+                                expected_stop,
+                                STOCK_CONFIG,
+                            )
                         return self._apply_protection_result(symbol, side, result)
                     if result.outcome == ProtectionOutcome.ELECTED_UNFILLED:
                         elected = result
@@ -1450,6 +1567,109 @@ class PositionManager:
                 return effective, best
         return effective, None
 
+    @staticmethod
+    def _is_duplicate_client_order_id(exc: Exception) -> bool:
+        values = [
+            str(exc),
+            str(getattr(exc, "code", "")),
+            str(getattr(exc, "error_code", "")),
+        ]
+        return "40010001" in " ".join(values)
+
+    def _accepted_order_by_client_id(
+        self,
+        client_id: str,
+        position,
+        side: str,
+        target: float,
+        requested_qty: float,
+    ) -> tuple[ProtectionResult | None, str]:
+        """Unique reddini yalniz cid yeniden-okumasi ile kabul kanitina cevir."""
+        getter = getattr(self.bot.client, "get_order_by_client_id", None)
+        if not callable(getter):
+            return None, "broker client_order_id sorgusunu desteklemiyor"
+        try:
+            found = getter(client_id)
+        except Exception as exc:
+            return None, f"cid yeniden-okuma hatasi: {exc}"
+        check = classify_covering_order(
+            found, position, side, expected_stop=target
+        )
+        exact_qty = (
+            abs(check.qty_covered - requested_qty)
+            <= self._partial_tolerance(requested_qty)
+        )
+        if check.verified and check.at_target and exact_qty:
+            return check, f"cid={client_id} aktif kabul olarak bulundu"
+        return None, (
+            f"cid={client_id} tarihsel/terminal veya kapsamiyor: "
+            f"{check.detail}"
+        )
+
+    def _reconcile_replacement_fate(
+        self,
+        symbol: str,
+        side: str,
+        target: float,
+        requested_qty: float,
+        known_ids: list[str],
+    ) -> tuple[ProtectionResult | None, list[str]]:
+        """Yikici replace sonrasi zinciri kisa bounded poll ile kesinlestir."""
+        details: list[str] = []
+        tracked = list(dict.fromkeys(str(oid) for oid in known_ids if oid))
+        for attempt in range(self._verify_attempts):
+            position = self._current_position(symbol, side)
+            if position is None:
+                return ProtectionResult(
+                    ProtectionOutcome.ALREADY_FLAT,
+                    None,
+                    target,
+                    0.0,
+                    f"{symbol}: replace akibeti beklenirken pozisyon duz",
+                ), details
+
+            candidates = self._stop_candidates(
+                self._open_orders(symbol), symbol, side
+            )
+            for oid in list(tracked):
+                try:
+                    fresh = self._reread_order(oid)
+                    candidates.append(fresh)
+                    status = enum_value(getattr(fresh, "status", None))
+                    replaced_by = getattr(fresh, "replaced_by", None)
+                    details.append(
+                        f"poll {attempt + 1} {oid}:{status or 'durum-yok'}"
+                        + (f"->{replaced_by}" if replaced_by else "")
+                    )
+                    if replaced_by and str(replaced_by) not in tracked:
+                        tracked.append(str(replaced_by))
+                except Exception as exc:
+                    details.append(f"poll {attempt + 1} {oid}: {exc}")
+
+            seen: set[str] = set()
+            degraded = None
+            for candidate in candidates:
+                marker = order_id(candidate) or f"object:{id(candidate)}"
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                check = classify_covering_order(
+                    candidate, position, side, expected_stop=target
+                )
+                exact_qty = (
+                    abs(check.qty_covered - requested_qty)
+                    <= self._partial_tolerance(requested_qty)
+                )
+                if check.verified and exact_qty:
+                    if check.at_target:
+                        return check, details
+                    degraded = check
+            if degraded is not None:
+                return degraded, details
+            if attempt < self._verify_attempts - 1:
+                self._poll_pause()
+        return None, details
+
     def _update_server_stop_loss(self, symbol: str, new_stop_price: float,
                                   qty: float, side: str = "LONG") -> ProtectionResult:
         """Mevcut stop'u PATCH et; stop yoksa iptal-bekle-submit et ve doğrula."""
@@ -1486,12 +1706,17 @@ class PositionManager:
             if float(requested_qty) == int(requested_qty)
             else TimeInForce.DAY
         )
+        invocation_salt = uuid4().hex
         client_id = deterministic_client_order_id(
-            symbol, side, target, requested_qty
+            symbol, side, target, requested_qty, invocation_salt
         )
         errors: list[str] = []
         replacement_ids: list[str] = []
+        replace_source_ids: list[str] = []
         replace_attempted = False
+        replacement_fate_checked = False
+        replace_started_at: float | None = None
+        naked_window_seconds: float | None = None
         submitted_without_leg = False
         canceled_group = False
 
@@ -1586,6 +1811,7 @@ class PositionManager:
                     qty_tolerance = self._partial_tolerance(requested_qty)
                     if (
                         check.verified
+                        and check.at_target
                         and abs(check.qty_covered - requested_qty) <= qty_tolerance
                     ):
                         outcome = (
@@ -1648,10 +1874,13 @@ class PositionManager:
                     )
                     if current_type == "stop_limit":
                         request_kwargs["limit_price"] = limit_price
+                    replace_attempted = True
+                    replace_source_ids.append(oid)
+                    if replace_started_at is None:
+                        replace_started_at = time.monotonic()
                     replacement = bot.client.replace_order_by_id(
                         oid, ReplaceOrderRequest(**request_kwargs)
                     )
-                    replace_attempted = True
                     replacement_id = order_id(replacement)
                     if replacement_id:
                         replacement_ids.append(replacement_id)
@@ -1664,6 +1893,61 @@ class PositionManager:
 
                 # Stop bacağı YOK: ancak bu durumda conflicting exit grubunu
                 # iptal et, terminal durumunu bekle ve yeni stop submit et.
+                if (
+                    replace_attempted
+                    and not submitted_without_leg
+                    and not replacement_fate_checked
+                ):
+                    replacement_fate_checked = True
+                    reconciled, fate_details = self._reconcile_replacement_fate(
+                        symbol,
+                        side,
+                        target,
+                        requested_qty,
+                        replace_source_ids + replacement_ids,
+                    )
+                    errors.extend(fate_details[-4:])
+                    if reconciled is not None:
+                        if reconciled.outcome == ProtectionOutcome.ALREADY_FLAT:
+                            return self._apply_protection_result(
+                                symbol, side, reconciled
+                            )
+                        if (
+                            reconciled.outcome
+                            == ProtectionOutcome.DEGRADED_PROTECTED
+                        ):
+                            return self._report_degraded_protection(
+                                symbol,
+                                side,
+                                reconciled,
+                                position,
+                                target,
+                                STOCK_CONFIG,
+                            )
+                        result = ProtectionResult(
+                            ProtectionOutcome.REPLACED_VERIFIED,
+                            reconciled.order_id,
+                            reconciled.stop_price,
+                            reconciled.qty_covered,
+                            f"{symbol}: gecikmeli replacement bounded poll "
+                            "sirasinda dogrulandi",
+                            at_target=True,
+                        )
+                        return self._apply_protection_result(symbol, side, result)
+
+                    started = replace_started_at or time.monotonic()
+                    naked_window_seconds = max(time.monotonic() - started, 0.0)
+                    naked_detail = (
+                        f"{symbol}: replace eski stopu yok etti ve aktif replacement "
+                        f"bulunamadi; ciplak pencere={naked_window_seconds:.3f}s; "
+                        "taze cid ile acil stop kuruluyor"
+                    )
+                    protection_alarm(bot, f"{symbol}:{side}", naked_detail)
+                    errors.append(naked_detail)
+                    client_id = deterministic_client_order_id(
+                        symbol, side, target, requested_qty, uuid4().hex
+                    )
+
                 if not canceled_group:
                     conflicts = [
                         order for order in orders
@@ -1714,7 +1998,52 @@ class PositionManager:
                     + (f"->{submitted_id}" if submitted_id else "")
                 )
             except Exception as exc:
-                errors.append(f"deneme {attempt + 1}: {exc}")
+                if self._is_duplicate_client_order_id(exc):
+                    try:
+                        current_position = self._current_position(symbol, side)
+                        if current_position is None:
+                            result = ProtectionResult(
+                                ProtectionOutcome.ALREADY_FLAT,
+                                None,
+                                target,
+                                0.0,
+                                f"{symbol}: unique reddi yeniden okunurken pozisyon duz",
+                            )
+                            return self._apply_protection_result(
+                                symbol, side, result
+                            )
+                        accepted, cid_detail = self._accepted_order_by_client_id(
+                            client_id,
+                            current_position,
+                            side,
+                            target,
+                            requested_qty,
+                        )
+                        errors.append(cid_detail)
+                        if accepted is not None:
+                            result = ProtectionResult(
+                                ProtectionOutcome.VERIFIED,
+                                accepted.order_id,
+                                accepted.stop_price,
+                                accepted.qty_covered,
+                                f"{symbol}: 40010001 cid yeniden-okumasi "
+                                "aktif kabulu dogruladi",
+                                at_target=True,
+                            )
+                            return self._apply_protection_result(
+                                symbol, side, result
+                            )
+                        # Tarihsel/terminal cid kesinlesti: yalniz bu carpismaya
+                        # ozel olarak sonraki niyet taze tuz alir.
+                        client_id = deterministic_client_order_id(
+                            symbol, side, target, requested_qty, uuid4().hex
+                        )
+                    except Exception as reread_exc:
+                        errors.append(
+                            f"deneme {attempt + 1}: cid kesin okuma: {reread_exc}"
+                        )
+                else:
+                    errors.append(f"deneme {attempt + 1}: {exc}")
             if attempt < self._verify_attempts - 1:
                 self._poll_pause()
 
@@ -1731,18 +2060,30 @@ class PositionManager:
             for candidate in self._stop_candidates(
                 self._open_orders(symbol), symbol, side
             ):
-                old_check = classify_covering_order(candidate, position, side)
+                old_check = classify_covering_order(
+                    candidate, position, side, expected_stop=target
+                )
                 if old_check.verified:
+                    if (
+                        old_check.outcome
+                        == ProtectionOutcome.DEGRADED_PROTECTED
+                    ):
+                        return self._report_degraded_protection(
+                            symbol,
+                            side,
+                            old_check,
+                            position,
+                            target,
+                            STOCK_CONFIG,
+                        )
                     result = ProtectionResult(
                         ProtectionOutcome.VERIFIED, old_check.order_id,
                         old_check.stop_price, old_check.qty_covered,
                         f"{symbol}: hedef stop kurulamadı; eski kapsayan stop aktif. "
                         + "; ".join(errors[-3:]),
+                        at_target=True,
                     )
                     self._apply_protection_result(symbol, side, result)
-                    protection_alarm(
-                        bot, f"{symbol}:{side}:UPDATE", result.detail
-                    )
                     return result
                 if old_check.outcome == ProtectionOutcome.ELECTED_UNFILLED:
                     return self._alarm_result(symbol, side, old_check)
@@ -1752,6 +2093,11 @@ class PositionManager:
         result = ProtectionResult(
             ProtectionOutcome.FAILED_NAKED, None, target, 0.0,
             f"{symbol}: bounded deadline içinde koruma kurulamadı; "
+            + (
+                f"çıplak pencere={naked_window_seconds:.3f}s; "
+                if naked_window_seconds is not None
+                else ""
+            )
             + "; ".join(errors[-5:]),
         )
         return self._alarm_result(symbol, side, result)

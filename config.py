@@ -363,6 +363,7 @@ STOCK_CONFIG = {
 
     # === STOP/PROFIT HEDEFLERİ (backtest sonrası optimize) ===
     "stop_loss_pct": 0.04,                  # %4 stop-loss (3% çok dar)
+    "protection_drift_critical_pct": 0.01, # Kötü yönlü koruma sapması kritik eşiği
     "stop_loss_max_pct": 0.06,              # %6 max stop
     "atr_stop_multiplier": 1.8,             # ATR çarpanı (1.5 çok sıkı)
     # v4.8 DİNAMİK TP: gerçek TP = clamp(planlanan_SL × min_rr_ratio,

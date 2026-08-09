@@ -22,6 +22,7 @@ class ProtectionOutcome(str, Enum):
     ALREADY_FLAT = "ALREADY_FLAT"
     NO_LEG_RESUBMITTED = "NO_LEG_RESUBMITTED"
     NOOP_BETTER_PROTECTED = "NOOP_BETTER_PROTECTED"
+    DEGRADED_PROTECTED = "DEGRADED_PROTECTED"
     FAILED_NAKED = "FAILED_NAKED"
     ELECTED_UNFILLED = "ELECTED_UNFILLED"
     SKIPPED_PARKING = "SKIPPED_PARKING"
@@ -32,6 +33,7 @@ VERIFIED_OUTCOMES = frozenset({
     ProtectionOutcome.REPLACED_VERIFIED,
     ProtectionOutcome.NO_LEG_RESUBMITTED,
     ProtectionOutcome.NOOP_BETTER_PROTECTED,
+    ProtectionOutcome.DEGRADED_PROTECTED,
 })
 
 
@@ -236,12 +238,36 @@ def is_terminal_order(order: Any) -> bool:
 
 
 def deterministic_client_order_id(
-    symbol: str, side: str, stop_price: float, qty: float
+    symbol: str, side: str, stop_price: float, qty: float, salt: str
 ) -> str:
-    """Retry'larin ayni broker niyetini korele etmesi icin 48 karakterden kisa ID."""
-    material = f"{symbol.upper()}|{side.upper()}|{stop_price:.4f}|{qty:.4f}"
+    """Ayni niyet retry'larini korele eden, cagriya ozel ve kisa ID."""
+    material = (
+        f"{symbol.upper()}|{side.upper()}|{stop_price:.4f}|{qty:.4f}|{salt}"
+    )
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
     return f"r0b-{symbol.upper()[:10]}-{side.upper()[0]}-{digest}"
+
+
+def protection_drift_severity(
+    side: str,
+    canonical_stop: float,
+    active_stop: float,
+    entry_price: float,
+    critical_pct: float = 0.01,
+) -> tuple[str, float]:
+    """Hedeften kotu koruma sapmasini yon-bilincli siniflandir."""
+    entry = float(entry_price)
+    if entry <= 0:
+        raise ValueError("entry_price pozitif olmali")
+    normalized_side = str(side or "").upper()
+    if normalized_side == "LONG":
+        drift = (float(canonical_stop) - float(active_stop)) / entry
+    elif normalized_side == "SHORT":
+        drift = (float(active_stop) - float(canonical_stop)) / entry
+    else:
+        raise ValueError(f"Unsupported position side: {side}")
+    drift = max(drift, 0.0)
+    return ("CRITICAL" if drift > float(critical_pct) else "WARNING", drift)
 
 
 def classify_covering_order(
@@ -356,11 +382,20 @@ def classify_covering_order(
                 f"{symbol}: BUY stop tetik seviyesinde ama pozisyon hala acik",
             )
 
-    if expected_stop is not None and abs(stop - float(expected_stop)) > 0.011:
-        return ProtectionResult(
-            ProtectionOutcome.FAILED_NAKED, oid, stop, covered,
-            f"{symbol}: aktif stop hedefte degil (${stop:.2f} != ${expected_stop:.2f})",
+    if expected_stop is not None:
+        expected = float(expected_stop)
+        at_or_better = (
+            stop + 0.011 >= expected
+            if side == "LONG"
+            else stop - 0.011 <= expected
         )
+        if not at_or_better:
+            return ProtectionResult(
+                ProtectionOutcome.DEGRADED_PROTECTED, oid, stop, covered,
+                f"{symbol}: aktif stop kapsiyor ama hedefin kotu tarafinda "
+                f"(${stop:.2f} != ${expected:.2f})",
+                at_target=False,
+            )
 
     return ProtectionResult(
         ProtectionOutcome.VERIFIED, oid, stop, covered,

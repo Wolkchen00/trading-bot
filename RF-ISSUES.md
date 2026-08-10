@@ -80,6 +80,29 @@
   isleyince (Pazartesi seans oncesi) bot acilis-gecisi mutabakati (stock_bot.py ~432) stopu
   geri kurar; 04:00 UTC gunluk reset + 20dk VPS nobetcisi ek katman.
 
+## Pazartesi acilis dogrulamasi (2026-08-10)
+
+- **AMZN oz-iyilesme GERCEKLESTI:** Alpaca kuyruktaki TP iptalini isledi; acilis-gecisi
+  mutabakati 13:30:07 UTC'de yeni stopu kurdu (broker dogrulandi: STOP_LIMIT SELL 9 @
+  $263.24/$261.92, cid `r0b-AMZN-L-...` salt'li kimlik, status NEW). 13:30:11'deki
+  CRITICAL "replacement pending" alarmi gecis anina ait; stop 4 sn ONCE zaten kurulmustu
+  (dogrulama dongusu yaristi). Sonrasi sessiz = kapsama tutarli. AAPL yeni girisi de
+  normal SL-dogrulama dongusunde.
+- telemetry.jsonl her iki konteynerde baslatildi; metrik-4 "eksik" yerine artik
+  "bos/UNKNOWN" diyor , ilk kademeli-satis telemetri kaydiyla kendiliginden cozulur
+  (fail-closed tasarim).
+
+- **I-13 (YUKSEK, IHSAN KARARI GEREKLI) Canli alim kilidi KODDA YOK.** PLAN.md R6:
+  "Canli alim kilidi R5 kapisina dek KAPALI" , ama kodda boyle bir kilit hic uygulanmamis.
+  Kanit: 2026-08-10 14:01 UTC'de canli konteyner GERCEK hesapta AMZN bracket'i denedi
+  (0.3491 adet, $96.30); tek engel Alpaca'nin "fractional orders must be simple orders"
+  (42210000) reddi oldu. Sizer dolar-tabanli kesirli adet urettigi icin canli girisler
+  su an FIILEN hep reddediliyor , yani kilit tesadufi bir yan etkiye yasli. Risk: sizing'e
+  dokunan herhangi bir degisiklik (tam-adet yuvarlama vb.) R5 kapisi olmadan sessizce
+  gercek pozisyon acmaya baslar; ayrica her deneme ERROR gurultusu uretir. Secenekler:
+  (a) config'e gercek `live_entries_enabled=False` kilidi (onerilen), (b) mevcut durumu
+  bilerek kabul et. Canli-para degisikligi oldugu icin Ihsan kapisinda; kod yazilmadi.
+
 ## Bu donguye ALINMAYAN acik kalemler
 
 - R5 kilit acma (ayri Ihsan kapisi; olcum 4/4 PASS on kosul , I-1 duzelmeden imkansizdi).

@@ -92,7 +92,8 @@
   "bos/UNKNOWN" diyor , ilk kademeli-satis telemetri kaydiyla kendiliginden cozulur
   (fail-closed tasarim).
 
-- **I-13 (YUKSEK, IHSAN KARARI GEREKLI) Canli alim kilidi KODDA YOK.** PLAN.md R6:
+- **I-13 (KAPALI 2026-08-10, Ihsan onayi "tamam ekleyelim" -> v4.15.1 kilidi eklendi;
+  detay PLAN.md v4.15.1) Canli alim kilidi KODDA YOKTU.** PLAN.md R6:
   "Canli alim kilidi R5 kapisina dek KAPALI" , ama kodda boyle bir kilit hic uygulanmamis.
   Kanit: 2026-08-10 14:01 UTC'de canli konteyner GERCEK hesapta AMZN bracket'i denedi
   (0.3491 adet, $96.30); tek engel Alpaca'nin "fractional orders must be simple orders"

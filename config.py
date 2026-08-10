@@ -46,7 +46,7 @@ def get_base_url():
     return ALPACA_PAPER_URL if TRADING_MODE == "paper" else ALPACA_LIVE_URL
 
 # ============================================================
-# STATE DOSYALARI — LIVE / PAPER İZOLASYONU
+# STATE DOSYALARI ,  LIVE / PAPER İZOLASYONU
 # ------------------------------------------------------------
 # Live ve paper bot aynı makinede aynı anda çalıştığında, state
 # dosyalarının (positions, kill_switch, pdt, wash_sale, agent_perf)
@@ -59,7 +59,7 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # KALICILIK: state'i kalıcı bir volume'a yaz, redeploy'da SİLİNMESİN. Coolify/VPS'te
 # docker-compose'da named volume `/app/state_paper`'a mount edilince zaten _BASE_DIR
 # altına denk gelir (env gerekmez). Alternatif: STATE_VOLUME_PATH env'i ile kök override
-# (örn tek volume /data'ya mount). Hiçbiri yoksa eski davranış — geriye birebir uyumlu.
+# (örn tek volume /data'ya mount). Hiçbiri yoksa eski davranış ,  geriye birebir uyumlu.
 _STATE_ROOT = (
     os.getenv("STATE_VOLUME_PATH")              # genel (Coolify/VPS: opsiyonel kök override)
     or _BASE_DIR                                 # volume yok → eski davranış
@@ -75,7 +75,7 @@ def state_path(filename: str) -> str:
     return os.path.join(STATE_DIR, filename)
 
 # ============================================================
-# HİSSE TANIMI — STOCK_IDS (tüm modüller buradan import eder)
+# HİSSE TANIMI ,  STOCK_IDS (tüm modüller buradan import eder)
 # ============================================================
 STOCK_IDS = {
     # Mega Cap
@@ -141,7 +141,7 @@ STOCK_SEARCH_TERMS = {
     "QQQ": ["qqq", "nasdaq 100", "tech index"],
 }
 
-# Jeopolitik anahtar kelimeler — AKILLI AJAN SİSTEMİ
+# Jeopolitik anahtar kelimeler ,  AKILLI AJAN SİSTEMİ
 # Keyword'ler haberi BULUR, FinBERT haberi ANLAR.
 # Severity seviyeleri:
 #   CRITICAL (3 puan) = Doğrudan piyasa etkisi, FinBERT onayı gerekmez
@@ -149,7 +149,7 @@ STOCK_SEARCH_TERMS = {
 #   ELEVATED (1 puan) = Bağlama bağlı, SADECE FinBERT negatif derse sayılır
 GEOPOLITICAL_KEYWORDS = {
     "bearish_critical": [
-        # Doğrudan piyasa çökertenler — FinBERT onayı GEREKMEZ
+        # Doğrudan piyasa çökertenler ,  FinBERT onayı GEREKMEZ
         "nuclear weapon", "nuclear strike", "tactical nuke", "nuclear threat",
         "ceasefire violat", "ceasefire collapse", "broke ceasefire",
         "invasion", "ground offensive", "war declared",
@@ -157,7 +157,7 @@ GEOPOLITICAL_KEYWORDS = {
         "bank run", "systemic risk", "sovereign default",
     ],
     "bearish_high": [
-        # Önemli olaylar — FinBERT negatif onaylarsa 2 puan
+        # Önemli olaylar ,  FinBERT negatif onaylarsa 2 puan
         "war escalat", "military strike", "missile", "airstrike",
         "bombing", "retaliati", "drone attack", "drone strike",
         "artillery", "shelling", "resumed attack", "resumed fighting",
@@ -171,8 +171,8 @@ GEOPOLITICAL_KEYWORDS = {
         "liquidity crisis", "terror attack", "mass casualt",
     ],
     "bearish_elevated": [
-        # Bağlama bağlı — SADECE FinBERT negatif derse 1 puan
-        # "tariff lifted" = pozitif, "tariff war" = negatif — FinBERT ayırt eder
+        # Bağlama bağlı ,  SADECE FinBERT negatif derse 1 puan
+        # "tariff lifted" = pozitif, "tariff war" = negatif ,  FinBERT ayırt eder
         "sanctions", "tariff", "trade war", "export ban",
         "chip ban", "tech ban", "economic warfare",
         "recession", "blockade", "embargo",
@@ -227,7 +227,7 @@ SECTOR_MAP = {
 }
 
 # ============================================================
-# ⚠️ LEGACY CONFIG — Sadece _legacy/ modüller tarafından kullanılıyor.
+# ⚠️ LEGACY CONFIG ,  Sadece _legacy/ modüller tarafından kullanılıyor.
 # Ana bot STOCK_CONFIG kullanır. Bu ayarlar geriye uyumluluk için duruyor.
 # ============================================================
 RISK_CONFIG = {
@@ -237,7 +237,7 @@ RISK_CONFIG = {
     "max_open_positions": 3,             # Max 3 açık pozisyon
     "risk_reward_ratio": 2.0,            # Min risk/ödül oranı (1:2)
     "trailing_stop_pct": 0.03,           # Trailing stop %3
-    "min_confidence_score": 35,          # Min sinyal güven puanı (%35 — önceki %50 çok yüksekti)
+    "min_confidence_score": 35,          # Min sinyal güven puanı (%35 ,  önceki %50 çok yüksekti)
 }
 
 # ============================================================
@@ -249,7 +249,7 @@ COMMISSION_CONFIG = {
     "stock_commission_pct": 0.0,
     "stock_min_commission": 0.0,
 
-    # Düzenleyici ücretler (çok küçük — sadece satışta)
+    # Düzenleyici ücretler (çok küçük ,  sadece satışta)
     "sec_fee_per_dollar": 0.0000278,
     "finra_taf_per_share": 0.000166,
 
@@ -304,13 +304,13 @@ STOCK_CONFIG = {
 
     # === Pozisyon ağırlıkları (tier bazlı) ===
     "tier_weights": {
-        # Mega cap — %40
+        # Mega cap ,  %40
         "AAPL": 0.40, "MSFT": 0.40, "GOOGL": 0.40, "AMZN": 0.40,
         "NVDA": 0.40, "META": 0.40, "TSLA": 0.35,
-        # Growth — %35
+        # Growth ,  %35
         "AMD": 0.35, "SOFI": 0.30, "PLTR": 0.30, "COIN": 0.30,
         "SQ": 0.30, "SHOP": 0.30, "CRWD": 0.30,
-        # Momentum — %25
+        # Momentum ,  %25
         "RIVN": 0.25, "NIO": 0.25, "LCID": 0.25,
         "MARA": 0.25, "RIOT": 0.25, "SMCI": 0.25,
     },
@@ -325,9 +325,9 @@ STOCK_CONFIG = {
     # tabana düşüp $25'lik işlemler üretiyordu. Artık sinyal güven puanı boyutu
     # belirler: normal sinyal $100-200, çok güvenilir $300. Kelly/damping BYPASS;
     # tavanlar: fixed_position_max_pct × equity + live_max_position_usd + eldeki nakit.
-    # Format: [min_güven, $boyut] — güveni karşılayan EN YÜKSEK bant seçilir.
+    # Format: [min_güven, $boyut] ,  güveni karşılayan EN YÜKSEK bant seçilir.
     # v4.8 yön-farkında güven + v4.9 KAYNAK-REMAP: v4.8'in Monte Carlo tahmini
-    # (yeni≈eski×0.83) gerçek oy dağılımında TUTMADI — 06-07 Tem canlı veride
+    # (yeni≈eski×0.83) gerçek oy dağılımında TUTMADI ,  06-07 Tem canlı veride
     # ham |ws| max 15'e sıkıştı (NVDA 3'lü BUY ~32), 50 eşiği hiç ulaşılamadı =
     # canlı hisse motoru fiilen kapalıydı. v4.9: koordinatör güveni kaynağında
     # ×2.0 ölçeklenir (agent_coordinator.decide) → bu bantlar yeniden anlamlı:
@@ -341,18 +341,18 @@ STOCK_CONFIG = {
         [80, 300],                          # çok güvenilir (≈eski 90+) → $300
     ],
     "live_fixed_position_usd": 0,          # eski düz-sabit mod (0=kapalı; bantlar öncelikli)
-    "fixed_position_max_pct": 0.62,        # boyut equity'nin %62'sini aşamaz — $487 hesapta $300
+    "fixed_position_max_pct": 0.62,        # boyut equity'nin %62'sini aşamaz ,  $487 hesapta $300
                                            # bandına izin verir; drawdown'da otomatik küçülür
     "max_open_positions": 3,               # 3 pozisyona çeşitlenme (konsantrasyon riski azalt)
     "cash_reserve_pct": 0.10,              # %10 nakit rezerv (sabit boyut modunda sermaye deploy edilsin)
     "equity_floor_pct": 0.85,              # Hesap %85'ine düşerse yeni giriş dur (~%15 DD koruması)
 
     # === INDEX PARKING (boştaki nakit → SPY beta) ===
-    # v4.8.2 — LIVE'DA AÇIK (İhsan kararı 2026-07-05 "hemen aç"): regime deneyi
+    # v4.8.2 ,  LIVE'DA AÇIK (İhsan kararı 2026-07-05 "hemen aç"): regime deneyi
     # SPY açığının ~9 puanının nakit sürüklemesi olduğunu gösterdi (−11.5→−2.8).
     # Katkı eklenmeyecek (tek sermaye) → boş nakdin çalışması tek yapısal düzeltme.
     # Rezerv etkileşimi: %30 rezerv (~$146 @ $487) likit kalır; executor'ın %10
-    # nakit rezerviyle birlikte ilk alım ~$97-100'e kırpılabilir — bilinçli kabul;
+    # nakit rezerviyle birlikte ilk alım ~$97-100'e kırpılabilir ,  bilinçli kabul;
     # alım rezervi eritirse parking ertesi gün SPY satıp rezervi tamamlar (günde 1
     # rebalance → aynı-gün AL-SAT yok → PDT güvenli; floor ihlalinde park yapılmaz).
     "index_parking_enabled": True,
@@ -371,7 +371,7 @@ STOCK_CONFIG = {
     # kombinasyonu R:R'yi yapısal olarak 2.0'a sabitliyordu → R:R gate fiilen
     # "ATR ≤ %2.22" filtresine dönüşmüştü (yüksek-ATR hisselerde hiç alım yok).
     # Şimdi SL genişledikçe TP de orantılı uzar; oran her işlemde korunur.
-    "take_profit_pct": 0.08,                # TABAN TP — dinamik TP bunun altına inmez
+    "take_profit_pct": 0.08,                # TABAN TP ,  dinamik TP bunun altına inmez
     "take_profit_max_pct": 0.12,            # dinamik TP tavanı (SL %6 × 2.0 = %12'ye izin)
     "trailing_stop_pct": 0.04,              # %4 trailing stop
     "partial_profit_pct": 0.05,             # %5'de yarısını sat
@@ -413,14 +413,14 @@ STOCK_CONFIG = {
     # v4.8: gate artık executor'ın GERÇEK planladığı SL/TP ile oranı ölçer
     # (dinamik TP sayesinde oran normalde sağlanır; gate yalnız take_profit_max_pct
     # tavanı orana izin vermediğinde bloklar). Volatilite koruması bu gate'in işi
-    # DEĞİL — onu max_atr_pct (VOL GATE) yapar.
+    # DEĞİL ,  onu max_atr_pct (VOL GATE) yapar.
     "rr_gate_enabled": True,
     "min_rr_ratio": 2.0,
 
     # === MULTI-TIMEFRAME ===
     "multi_tf_enabled": True,
 
-    # === SIGNAL QUEUE (pullback girişi) — v4.8 ===
+    # === SIGNAL QUEUE (pullback girişi) ,  v4.8 ===
     # Uzamış girişlerde (RSI yüksek / BB üstü / VWAP primli) hemen almak yerine
     # %1.5 pullback bekler (2 saat, gelmezse iptal). Paper-first: canlıda kapalı,
     # paper'da PAPER_AGGRESSIVE açar. Kanıt birikirse live'a alınır.
@@ -442,7 +442,7 @@ STOCK_CONFIG = {
     "min_interval_low_conf": 30,            # %50-54 güven: 30dk
     "sell_cooldown_seconds": 300,            # 5 dakika satış cooldown (swing trade)
 
-    # === KILL SWITCH (ana botun OKUDUĞU değerler — KillSwitch buradan beslenir) ===
+    # === KILL SWITCH (ana botun OKUDUĞU değerler ,  KillSwitch buradan beslenir) ===
     # %5: sabit $250 boyutta 2 tam stop (~%4.1 equity) normal strateji akışıdır,
     # %3'te kill bunu keserdi. %5 yine günü ~$24 kayıpla sert keser ($487 hesap).
     "max_daily_loss_pct": 0.05,             # Sert kill: gün -%5 → TÜM pozisyonları kapat
@@ -457,6 +457,15 @@ STOCK_CONFIG = {
     # === KOMİSYON (HİSSE = $0) ===
     "commission_pct": 0.0,
     "min_trade_value": 10.0,
+
+    # === CANLI ALIM KİLİDİ (I-13 / R5 kapısı) ===
+    # Ölçüm kapısı (20 işlem / 4 metrik) 4/4 PASS olup İhsan R5 kilidini açana
+    # dek canlı hesapta YENİ giriş gönderilmez; çıkış/koruma/mutabakat çalışır,
+    # paper etkilenmez. Açmak: Coolify env LIVE_ENTRIES_ENABLED=true + restart.
+    "live_entries_enabled": (
+        os.getenv("LIVE_ENTRIES_ENABLED", "false").strip().lower()
+        in ("1", "true", "yes")
+    ),
 }
 
 # ============================================================
@@ -469,7 +478,7 @@ SHORT_CONFIG = {
     "short_enabled": True,               # Short sistemi aktif
     "short_paper_only": True,            # Sadece paper'da short (canli icin False yap)
 
-    # === POZISYON — Paper: agresif, Live: muhafazakar ===
+    # === POZISYON ,  Paper: agresif, Live: muhafazakar ===
     "short_max_positions": 3 if _is_paper else 1,
     "short_max_position_pct": 0.20 if _is_paper else 0.15,
     "short_max_position_usd": 2000 if _is_paper else 100,
@@ -482,7 +491,7 @@ SHORT_CONFIG = {
     "short_trailing_stop_pct": 0.035,    # %3.5 trailing
     "short_partial_profit_pct": 0.04,    # %4'de yarisini cover
 
-    # === SINYAL ESIKLERI — Paper: daha dusuk esik ===
+    # === SINYAL ESIKLERI ,  Paper: daha dusuk esik ===
     "short_min_confidence": 40 if _is_paper else 38,
     "short_min_sell_score": 40 if _is_paper else 45,
     "short_atr_stop_multiplier": 2.0,
@@ -493,16 +502,16 @@ SHORT_CONFIG = {
     "squeeze_price_threshold": 0.05,
     "squeeze_consecutive_days": 3,
 
-    # === KARA LISTE — Ters ETF'ler short yapilmaz (zaten ters) ===
+    # === KARA LISTE ,  Ters ETF'ler short yapilmaz (zaten ters) ===
     "short_blacklist": [
         "GME", "AMC",                    # Meme stocks
         "RIVN", "LCID",                  # Dusuk float
         "MARA", "RIOT",                  # Kripto/volatil
-        "NVDA",                          # AI boom — short yapilamaz
-        "AMD",                           # AI chip — guclu uptrend
-        "SMCI",                          # AI server — cok volatil
-        "SQQQ", "SH", "SPXS",           # Ters ETF — short yapma
-        "SPY", "QQQ",                    # Endeksler — short yapma
+        "NVDA",                          # AI boom ,  short yapilamaz
+        "AMD",                           # AI chip ,  guclu uptrend
+        "SMCI",                          # AI server ,  cok volatil
+        "SQQQ", "SH", "SPXS",           # Ters ETF ,  short yapma
+        "SPY", "QQQ",                    # Endeksler ,  short yapma
     ],
 
     # === FILTRELER ===
@@ -531,10 +540,10 @@ MARKET_REGIME_CONFIG = {
 }
 
 # ============================================================
-# BEAR BRAIN — DÜŞÜŞ-KAZANÇ BEYNİ (v4.11)
+# BEAR BRAIN ,  DÜŞÜŞ-KAZANÇ BEYNİ (v4.11)
 # ------------------------------------------------------------
 # İhsan kararı 2026-07-11: "stock düşüşe geçince kazanabileceğimiz yeni AI
-# beynini entegre et — risk yüksek, kazanç da yüksek." Canlıda gerçek short
+# beynini entegre et ,  risk yüksek, kazanç da yüksek." Canlıda gerçek short
 # İMKÂNSIZ (Alpaca marj şartı $2.000 > $487 equity) → düşüş tezi ters-ETF
 # LONG'una çevrilir (cash hesapta çalışır, BOT_MODE=long_only bozulmaz).
 # Eski ters-ETF yolu ölüydü: BEAR rejim şartı (SPY<EMA200, geç sinyal) +
@@ -566,19 +575,19 @@ BEAR_BRAIN_CONFIG = {
     "paper_max_bear_positions": 2,
     "max_bear_exposure_pct": 0.35,   # equity'nin en fazla %35'i ters-ETF'de
     "entry_cooldown_hours": 4,
-    "paper_entry_cooldown_hours": 2, # v4.12: paper'da 2h — günde 3 giriş sığsın
+    "paper_entry_cooldown_hours": 2, # v4.12: paper'da 2h ,  günde 3 giriş sığsın
     "max_entries_per_day": 1,        # canlı: günde 1 giriş (PDT-dostu, churn'süz)
     "paper_max_entries_per_day": 3,  # v4.12: 2 → 3 (agresif gözlem)
 
-    # v4.11.2 — İhsan 12 Tem "iki taraftan kazanırız": iki taraf TAM aktif
+    # v4.11.2 ,  İhsan 12 Tem "iki taraftan kazanırız": iki taraf TAM aktif
     "defense_parking_unwind": True,  # DEFENSE'te SPY sleeve de çözülür (eskiden
                                      # yalnız yeni park duruyordu → net-LONG kalınıyordu)
     "attack_rotation": True,         # ATTACK'a tırmanışta SH kapat → SQQQ terfisi
                                      # (satış PDT korumalı: SH aynı gün alındıysa yarın)
 
-    # Boyut bantları: [min_skor, $] — skoru karşılayan EN YÜKSEK bant
+    # Boyut bantları: [min_skor, $] ,  skoru karşılayan EN YÜKSEK bant
     # (canlı $487: DEFENSE $100≈%20 equity; ATTACK $150 3x ≈ $450 efektif
-    # short-delta ≈ equity'nin ~%92'si — İhsan'ın istediği yüksek risk/kazanç)
+    # short-delta ≈ equity'nin ~%92'si ,  İhsan'ın istediği yüksek risk/kazanç)
     "size_bands": [[55, 100], [72, 150]],
     "paper_size_bands": [[55, 3000], [72, 6000]],  # v4.12: 2× büyütüldü (agresif+)
 
@@ -593,7 +602,7 @@ BEAR_BRAIN_CONFIG = {
     "time_stop_days_1x": 15,
 
     # Wash-sale: bear girişlerinde sadece UYARI (30g kilit stratejiyi öldürür,
-    # $487'de vergi etkisi kuruş — bilinçli karar). True yapılırsa sert blok.
+    # $487'de vergi etkisi kuruş ,  bilinçli karar). True yapılırsa sert blok.
     "respect_wash_sale": False,
 }
 
@@ -623,7 +632,7 @@ LOG_CONFIG = {
 
 # ============================================================
 # KILL SWITCH (ACİL DURUM) AYARLARI
-# ⚠️ Ana bot (stock_bot.py) bu bloğu OKUMAZ — kill eşiklerini STOCK_CONFIG'den
+# ⚠️ Ana bot (stock_bot.py) bu bloğu OKUMAZ ,  kill eşiklerini STOCK_CONFIG'den
 # alır (max_daily_loss_pct / max_consecutive_errors, ~satır 370). Bu blok
 # yalnızca _legacy/main.py içindir. Yanıltıcı olmaması için değerler
 # STOCK_CONFIG ile AYNI tutuldu (3 hata / %3 günlük kayıp).
@@ -720,14 +729,14 @@ OPTIONS_CONFIG = {
 #
 # v4.12 AGRESİF+ (İhsan kararı 2026-07-12): "paper'ı daha agresifleştirelim,
 # sistemin agresif hâlinde neler yaşadığını görelim." Amaç iki katlı:
-#   1) STRES GÖZLEMİ — canlının kullandığı mekanizmalar (güven-bantlı boyut,
+#   1) STRES GÖZLEMİ ,  canlının kullandığı mekanizmalar (güven-bantlı boyut,
 #      bracket emirler, kill/floor) büyük dolarlarla zorlanınca ne oluyor?
-#   2) ÖĞRENME HIZI — daha çok giriş = meta_labeler/ajan-öğrenme örneği.
+#   2) ÖĞRENME HIZI ,  daha çok giriş = meta_labeler/ajan-öğrenme örneği.
 # LIVE KİLİTLERİ DEĞİŞMEDİ: STOCK_CONFIG taban değerleri (kill %5, floor %85,
 # rezerv %10, MTF/VOL/sektör kapıları, $100-300 bantları) aynen duruyor.
 # NOT: max_daily_loss_pct / equity_floor_pct override'ları stock_bot'taki
 # merge'in KillSwitch/floor kurulumundan ÖNCE çalışmasına bağlıdır (v4.12'de
-# merge __init__ başına taşındı — eski yerinde bu ikisi sessizce işlemezdi).
+# merge __init__ başına taşındı ,  eski yerinde bu ikisi sessizce işlemezdi).
 # ============================================================
 PAPER_AGGRESSIVE_CONFIG = {
     # === HİSSE AYARLARI (override) ===
@@ -735,7 +744,7 @@ PAPER_AGGRESSIVE_CONFIG = {
     "max_open_positions": 10,                 # v4.12: 8 → 10 (havuz ~20 sembol)
     # v4.12: paper artık CANLININ bant mekanizmasını kullanır (sizer'daki aynı
     # kod yolu, agresif dolarlarla). Eskiden paper Kelly yoluna düşüyordu ve
-    # PF<1'de Kelly-negatif tabanı ~%5 equity'ye ($3.1k) sabitleniyordu — boyut
+    # PF<1'de Kelly-negatif tabanı ~%5 equity'ye ($3.1k) sabitleniyordu ,  boyut
     # sinyal kalitesinden bağımsızdı. Bantla: zayıf sinyal küçük, güçlü sinyal
     # büyük → canlının davranışı büyütülmüş ölçekte gözlemlenir.
     # Ölçek: conf 30 ≈ ws 15 (koordinatör tabanı), 75+ ≈ güçlü çoklu mutabakat.
@@ -751,7 +760,7 @@ PAPER_AGGRESSIVE_CONFIG = {
     # (2 günde 0 paper işlem). v4.9 remap (conf=|ws|×2.0 çarpanlar sonrası) ile
     # ölçek 0-100'e açıldı; 30 eşiği ≈ ws 15 = "koordinatörün kendi sinyal
     # tabanı" (ws>15 → BUY/SELL). Daha aşağısı ANLAMSIZ: koordinatör ws≤15'te
-    # zaten HOLD üretir — agresiflik eşikten değil kapı/boyuttan gelir.
+    # zaten HOLD üretir ,  agresiflik eşikten değil kapı/boyuttan gelir.
     "min_confidence_score": 30,
     "scan_interval_seconds": 15,              # 30 → 15 (daha sık tara)
     "stop_loss_pct": 0.05,                    # %4 → %5 (biraz daha geniş)
@@ -765,7 +774,7 @@ PAPER_AGGRESSIVE_CONFIG = {
     "take_profit_max_pct": 0.075,
     "sell_cooldown_seconds": 120,             # 5dk → 2dk (daha hızlı geri gir)
 
-    # === KAPILAR (v4.12 — paper'da gevşetilen filtreler; LIVE'da hepsi aynen) ===
+    # === KAPILAR (v4.12 ,  paper'da gevşetilen filtreler; LIVE'da hepsi aynen) ===
     "multi_tf_enabled": False,      # 4h MTF kapısı KAPALI: karşı-trend girişler de
                                     # örneklensin (canlıda en çok giriş yutan kapı)
     "max_atr_pct": 0.08,            # VOL kapısı %5 → %8: MARA/RIOT/SMCI sınıfı
@@ -778,7 +787,7 @@ PAPER_AGGRESSIVE_CONFIG = {
     "equity_floor_pct": 0.75,       # %85 → %75: agresif deney daha derin DD'ye
                                     # rağmen veri üretmeye devam etsin
     "max_daily_loss_pct": 0.08,     # kill %5 → %8/gün: agresif günün frene
-                                    # takılmadan gözlemi (kill YİNE var — felaket
+                                    # takılmadan gözlemi (kill YİNE var ,  felaket
                                     # freni kalkmadı, sadece tasması uzadı)
 
     # === SHORT AYARLARI (override) ===
@@ -789,15 +798,15 @@ PAPER_AGGRESSIVE_CONFIG = {
 
     # === OPTIONS ===
     # v4.9: churn nedeniyle kapalı (OPTIONS_CONFIG.options_enabled yorumuna bak)
-    # v4.12'de de KAPALI KALDI — agresiflik deneyi hisse/short/bear yolunda;
+    # v4.12'de de KAPALI KALDI ,  agresiflik deneyi hisse/short/bear yolunda;
     # opsiyon açma şartları (PLAN v4.9) hâlâ karşılanmadı.
     "enable_options": False,
     "prefer_options_over_stock": False,
 
-    # === INDEX PARKING (paper'da AÇIK — nakit sürüklemesini azalt, beta yakala) ===
+    # === INDEX PARKING (paper'da AÇIK ,  nakit sürüklemesini azalt, beta yakala) ===
     "index_parking_enabled": True,
 
-    # === SIGNAL QUEUE (paper'da AÇIK — pullback girişi paper-first denenir) ===
+    # === SIGNAL QUEUE (paper'da AÇIK ,  pullback girişi paper-first denenir) ===
     "pullback_queue_enabled": True,
 
     # === FUNDAMENTAL GATE (R6 E2, paper-first) ===
@@ -805,14 +814,14 @@ PAPER_AGGRESSIVE_CONFIG = {
     "fundamental_gate_enabled": True,
     "fundamental_gate_min_score": 0,
 
-    # === KAYIP SERİSİ (v4.10 — paper'da öğrenme akışını dondurmasın) ===
+    # === KAYIP SERİSİ (v4.10 ,  paper'da öğrenme akışını dondurmasın) ===
     # 08-10 Tem kanıtı: paper 2 ardışık zarardan sonra her giriş için güven ≥70
     # istiyordu (META ~96 kez bundan bloklandı) → 4 günde 1 işlem. Paper'ın işi
     # ÖRNEK ÜRETMEK (meta_labeler 30-50 kapalı işlem bekliyor) ve beklenen PF
     # ~0.96'yla zarar serisi kaçınılmaz; sermaye koruması DEĞİL (sahte para,
     # kill-switch günlük freni ayrıca duruyor). LIVE değerleri DEĞİŞMEDİ
-    # (warn 2 / halt 4 / 24h — İhsan'ın koruma kilidi aynen).
+    # (warn 2 / halt 4 / 24h ,  İhsan'ın koruma kilidi aynen).
     "loss_streak_warn": 999,        # güven-yükseltme fiilen kapalı
     "loss_streak_halt": 8,          # v4.12: 6 → 8 ardışık zarar → fren
-    "loss_streak_halt_hours": 4,    # v4.12: 6h → 4h — agresif deneyde duraklama kısa
+    "loss_streak_halt_hours": 4,    # v4.12: 6h → 4h ,  agresif deneyde duraklama kısa
 }

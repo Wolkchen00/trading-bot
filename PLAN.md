@@ -660,3 +660,24 @@ tarafindan bagimsiz kosuldu.
 **Acik kalanlar:** R5 kilit acma (olcum 4/4 PASS on kosul), Telegram token (rafta),
 ntfy topic rotasyonu/auth (Ihsan karar maddesi, RF-ISSUES), olcum temposu I-8
 (7 gunde n=1 -> projeksiyon ~4.3/20; donem sonunda strateji karari).
+
+## v4.15.1 ,  I-13 canli alim kilidi (2026-08-10, Ihsan: "tamam ekleyelim")
+
+**Bulgu (I-13, RF-ISSUES):** PLAN "canli alim kilidi R5'e dek KAPALI" diyordu ama
+kodda kilit YOKTU. 2026-08-10 14:01 UTC'de canli konteyner gercek hesapta AMZN
+bracket'i denedi (0.3491 adet, $96.30); tek engel Alpaca'nin fractional-bracket
+reddiydi (42210000). Ustelik `executor.py`'daki tam-paya-yuvarlama (>=%75 esigi)
+ucuz hissede bracket'i GECIRIR , yani gercek pozisyon tesadufen ACILABILIRDI.
+
+**Cozum:** `STOCK_CONFIG["live_entries_enabled"]` (varsayilan False, env
+`LIVE_ENTRIES_ENABLED` ile acilir) + `execute_buy` girisinde canli-mod kilidi:
+- Fail-closed: anahtar yoksa da kilitli; karar broker'a TEK cagri yapilmadan verilir.
+- Yalniz YENI girisleri keser; cikis/koruma/mutabakat/paper etkilenmez.
+- Funnel'a `gate_block/LIVE_LOCK_R5` islenir (gunluk raporda gorunur); telemetri
+  hatasi kilit kararini degistiremez.
+- R5 acilisi = Coolify env `LIVE_ENTRIES_ENABLED=true` + restart (kod deploy'u
+  gerekmez); olcum 4/4 PASS + Ihsan onayi on kosul.
+
+**Testler:** `tests/test_live_entry_lock.py` (6 test: kilit/fail-closed/acik-gecis/
+paper-muaf/telemetri-zirhi/config-anahtari) + `test_protection_invariant.py`'daki
+canli-fallback testi kilit-acik senaryoya tasindi. 138 pytest + tam sistem yesil.

@@ -477,6 +477,10 @@ def test_live_bracket_rejection_does_not_submit_market_fallback():
         "atr_stop_multiplier": 2,
         "take_profit_pct": 0.10,
         "min_risk_reward": 2,
+        # I-13/R5 kilidi açık: bu test kilit AÇIKKEN bile canlıda bracket
+        # reddinin market fallback'e düşmediğini sınar (kilit senaryosu
+        # tests/test_live_entry_lock.py'de ayrıca kapsanır).
+        "live_entries_enabled": True,
     }
 
     assert OrderExecutor(bot).execute_buy("AAPL", analysis, config) is False

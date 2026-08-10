@@ -64,6 +64,22 @@
 - **I-11** 3b guncellemesi `_stash_exit_flags` cagirmiyor gorunumde , restart'ta `last_server_sl` kaybi
   tekrar-ayrisma uretebilir; Rock 1 kapsaminda dogrula/duzelt.
 
+## Deploy sirasinda kesfedilen YENI bulgu (2026-08-09, deploy sonrasi)
+
+- **I-12 (YUKSEK, guard KONULDU) Yerel test suiti gercek paper hesabini mutasyona ugratiyordu.**
+  `tests/test_full_system.py` bolum 11 (`StockBot()` tam baslatma) `__init__` icindeki
+  baslangic koruma uzlastirmasini (stock_bot.py ~322) GERCEK paper hesabina karsi kosuyordu.
+  Yerel bayat state -> kanonik uyusmazligi -> 2026-08-09 17:39:17 UTC'de (deploy'dan 100 dk
+  ONCE, v4.14 kodu, Fable'in baseline kosumu) AMZN bracket'inin iki bacagi da iptal edildi;
+  SL iptali islendi, TP `PENDING_CANCEL` kaldi ve hisseleri rezerve etti -> AMZN sunucu-stopsuz
+  kaldi (bot-ici yerel tetik + VPS nobetcisi devrede; nobetci 18:40'tan beri KORUMASIZ basiyor).
+  Temmuz'daki "pytest artigi log" dersiyle ayni aile. **Cozum (ayni gun):** `test_bot_init`
+  artik `ensure_protective_stops`'u no-op'layarak kuruyor (emir-mutasyonlu uzlastirma gercek
+  hesapta kosulamaz; davranis fake-client testlerinde kapsali). Kanit: kosum oncesi/sonrasi
+  acik emir dokumu birebir ayni. **Oz-iyilesme bekleniyor:** Alpaca kuyruktaki TP iptalini
+  isleyince (Pazartesi seans oncesi) bot acilis-gecisi mutabakati (stock_bot.py ~432) stopu
+  geri kurar; 04:00 UTC gunluk reset + 20dk VPS nobetcisi ek katman.
+
 ## Bu donguye ALINMAYAN acik kalemler
 
 - R5 kilit acma (ayri Ihsan kapisi; olcum 4/4 PASS on kosul , I-1 duzelmeden imkansizdi).

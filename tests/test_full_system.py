@@ -627,8 +627,23 @@ section("11. BOT BAŞLATMA TESTİ (StockBot)")
 def test_bot_init():
     """StockBot.__init__ tam çalışıyor mu? (API bağlantısı + tüm modüller)"""
     from stock_bot import StockBot
-    bot = StockBot()
-    
+    from core.position_manager import PositionManager
+    from core.protection import ProtectionSummary
+    # GERÇEK-HESAP GUARD'I (2026-08-09): __init__ başlangıç koruma uzlaştırmasını
+    # da koşar (stock_bot.py ~322) ve bu, YEREL bayat state ile gerçek paper
+    # hesabında EMİR İPTAL EDEBİLİR (AMZN bracket'ı 17:39 UTC'de böyle iptal
+    # oldu). Bu test yalnız kurulumu doğrular; emir-mutasyonlu uzlaştırma
+    # burada no-op'tur ,  gerçek uzlaştırma davranışı fake-client testlerinde
+    # (test_protection_invariant / test_protection_collision) kapsanır.
+    _orig_reconcile = PositionManager.ensure_protective_stops
+    PositionManager.ensure_protective_stops = (
+        lambda self, config: ProtectionSummary()
+    )
+    try:
+        bot = StockBot()
+    finally:
+        PositionManager.ensure_protective_stops = _orig_reconcile
+
     # Temel kontroller
     assert bot.equity > 0, "Equity $0!"
     assert bot.initial_equity > 0, "Initial equity $0!"

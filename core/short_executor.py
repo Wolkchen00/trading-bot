@@ -15,6 +15,7 @@ from alpaca.trading.requests import (
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from core.streak import update_loss_streak
+from core.fill_ledger import record_fill
 from core.protection import protection_alarm
 from core.risk_guard import can_open_new_risk
 from utils.logger import logger
@@ -25,6 +26,61 @@ class ShortExecutor:
 
     def __init__(self, bot):
         self.bot = bot
+
+    def _record_short_fill(
+        self, symbol: str, side: str, order: object | None,
+        fallback_qty: float, fallback_price: float, pnl_usd: float | None = None,
+        episode_id: str | None = None,
+    ) -> None:
+        candidate = order
+        oid = str(getattr(order, "id", "") or "").strip() or None
+        if oid:
+            try:
+                candidate = self.bot.client.get_order_by_id(oid)
+            except Exception:
+                candidate = order
+        degraded = False
+        try:
+            qty = abs(float(getattr(candidate, "filled_qty", 0) or 0))
+            price = float(getattr(candidate, "filled_avg_price", 0) or 0)
+            if qty <= 0 or price <= 0:
+                qty = abs(float(fallback_qty))
+                price = float(fallback_price)
+                degraded = True
+            execution_id = None
+            for attr in ("execution_id", "activity_id", "fill_id"):
+                value = str(getattr(candidate, attr, "") or "").strip()
+                if value:
+                    execution_id = value
+                    break
+            record_fill(
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                price=price,
+                pnl_usd=pnl_usd,
+                provenance="short",
+                execution_id=execution_id,
+                order_id=oid,
+                client_order_id=(
+                    str(getattr(candidate, "client_order_id", "") or "").strip()
+                    or None
+                ),
+                episode_id=episode_id,
+                degraded=degraded,
+            )
+        except Exception as exc:
+            detail = f"{symbol}: short fill ledger yazim hatasi: {exc}"
+            try:
+                logger.error(f"  DEFTER HATASI {detail}")
+            except Exception:
+                pass
+            try:
+                protection_alarm(
+                    bot=self.bot, key=f"{symbol}:FILL_LEDGER", detail=detail
+                )
+            except Exception:
+                pass
 
     def execute_short(self, symbol: str, analysis: Dict, config: Dict, short_config: Dict) -> bool:
         """
@@ -134,6 +190,11 @@ class ShortExecutor:
                 time_in_force=TimeInForce.DAY,
             )
             order = bot.client.submit_order(request)
+            short_episode_id = f"short|{symbol}|{getattr(order, 'id', '')}"
+            self._record_short_fill(
+                symbol, "SELL", order, qty, price,
+                episode_id=short_episode_id,
+            )
 
             logger.info(
                 f"  🔻 SHORT {symbol}: {qty:.4f} @ ${price:,.2f} "
@@ -178,6 +239,7 @@ class ShortExecutor:
                 "qty": qty,
                 "entry_time": datetime.now().isoformat(),
                 "order_id": str(order.id),
+                "episode_id": short_episode_id,
                 "stop_loss_price": stop_price,
                 "stop_loss_pct": adaptive_sl,
                 "lowest_price": price,  # Trailing stop icin (ters)
@@ -298,7 +360,12 @@ class ShortExecutor:
                     pnl_usd = (entry - current_price) * qty
 
             # Pozisyonu kapat
-            bot.client.close_position(symbol)
+            close_order = bot.client.close_position(symbol)
+            self._record_short_fill(
+                symbol, "BUY", close_order, qty, current_price,
+                pnl_usd=pnl_usd,
+                episode_id=pos.get("episode_id") or f"short|{symbol}|{entry_time}",
+            )
 
             # PDT kaydi
             if hasattr(bot, 'pdt_tracker') and entry_time:

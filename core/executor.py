@@ -5,9 +5,10 @@ Order Executor ,  Hisse Senedi Alım/Satım Emir Yönetimi
 - execute_sell(): Satım emri + cooldown + PDT kontrolü
 - Alpaca hisse senedi: komisyon $0, fractional shares destekli
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 from typing import Dict
+from uuid import uuid4
 
 from alpaca.trading.requests import (
     MarketOrderRequest, StopLimitOrderRequest, GetOrdersRequest,
@@ -15,6 +16,9 @@ from alpaca.trading.requests import (
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from core.streak import update_loss_streak
+from core.fill_ledger import episode_realized_pnl, record_fill
+from core.order_journal import bind as journal_bind
+from core.order_journal import prepare as journal_prepare
 from core.trade_gates import plan_exit_pcts
 from core.protection import (
     ProtectionOutcome,
@@ -29,6 +33,104 @@ class OrderExecutor:
 
     def __init__(self, bot):
         self.bot = bot
+
+    @staticmethod
+    def _fill_ids(order: object | None) -> tuple[str | None, str | None, str | None]:
+        if order is None:
+            return None, None, None
+        execution_id = None
+        for attr in ("execution_id", "activity_id", "fill_id"):
+            value = str(getattr(order, attr, "") or "").strip()
+            if value:
+                execution_id = value
+                break
+        order_id = str(getattr(order, "id", "") or "").strip() or None
+        client_order_id = (
+            str(getattr(order, "client_order_id", "") or "").strip() or None
+        )
+        return execution_id, order_id, client_order_id
+
+    def _ledger_alarm(self, symbol: str, operation: str, exc: Exception) -> None:
+        detail = f"{symbol}: fill ledger {operation} hatasi: {exc}"
+        try:
+            logger.error(f"  DEFTER HATASI {detail}")
+        except Exception:
+            pass
+        try:
+            protection_alarm(self.bot, f"{symbol}:FILL_LEDGER", detail)
+        except Exception:
+            pass
+
+    def _journal_prepare_safe(
+        self, client_order_id: str, symbol: str, side: str, provenance: str,
+        *, qty: float | None = None, notional: float | None = None,
+    ) -> None:
+        try:
+            journal_prepare(
+                client_order_id, symbol, side, provenance,
+                qty=qty, notional=notional,
+            )
+        except Exception as exc:
+            self._ledger_alarm(symbol, "journal prepare", exc)
+
+    def _journal_bind_safe(
+        self, client_order_id: str, order: object | None, symbol: str
+    ) -> None:
+        order_id = str(getattr(order, "id", "") or "").strip()
+        if not order_id:
+            return
+        try:
+            journal_bind(client_order_id, order_id)
+        except Exception as exc:
+            self._ledger_alarm(symbol, "journal bind", exc)
+
+    def _record_fill_safe(self, symbol: str, **fields) -> bool:
+        try:
+            return record_fill(symbol=symbol, **fields)
+        except Exception as exc:
+            self._ledger_alarm(symbol, "yazim", exc)
+            return False
+
+    def _prior_episode_pnl_safe(self, symbol: str, entry_ts: str) -> float:
+        try:
+            return episode_realized_pnl(symbol, entry_ts) if entry_ts else 0.0
+        except Exception as exc:
+            self._ledger_alarm(symbol, "episode okuma", exc)
+            return 0.0
+
+    def _real_entry_fill(
+        self, symbol: str, order: object | None, expected_qty: float,
+        expected_price: float,
+    ) -> tuple[float, float, object | None, bool]:
+        """Entry order/pozisyonundan broker ortalama dolumunu en iyi kanitla oku."""
+        candidates = [order] if order is not None else []
+        order_id = str(getattr(order, "id", "") or "")
+        if order_id:
+            try:
+                candidates.insert(0, self.bot.client.get_order_by_id(order_id))
+            except Exception:
+                pass
+        for candidate in candidates:
+            try:
+                fill_price = float(
+                    getattr(candidate, "filled_avg_price", 0) or 0
+                )
+                filled_qty = abs(float(getattr(candidate, "filled_qty", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+            if fill_price > 0 and filled_qty > 0:
+                return fill_price, filled_qty, candidate, False
+        try:
+            position = self.bot.client.get_open_position(symbol)
+            fill_price = float(getattr(position, "avg_entry_price", 0) or 0)
+            filled_qty = abs(float(getattr(position, "qty", 0) or 0))
+            if fill_price > 0 and filled_qty > 0:
+                return fill_price, filled_qty, order, True
+        except Exception:
+            pass
+        # Mevcut akisin basarili saydigi entry kaybolmasin; broker ortalamasi
+        # okunamadigi acikca degraded olarak isaretlenir.
+        return float(expected_price), abs(float(expected_qty)), order, True
 
     def _position_is_flat(self, symbol: str) -> tuple[bool, object | None, str]:
         """Başarılı pozisyon sorgusuyla flat'i ayır; sorgu hatasını flat sayma."""
@@ -136,6 +238,7 @@ class OrderExecutor:
         """Hisse alım emri ,  PDT-aware, fractional shares destekli."""
         bot = self.bot
         try:
+            fill_provenance = str(config.get("ledger_provenance", "strategy"))
             allowed, block_reason = can_open_new_risk(
                 bot, config, kind="stock_long", symbol=symbol
             )
@@ -246,6 +349,7 @@ class OrderExecutor:
             bracket_success = False
             paper_fallback = False
             order = None
+            entry_client_order_id = None
             try:
                 # Tam payda GTC: TP/SL bacakları gece de aktif kalır (DAY'de gün
                 # sonunda düşüp pozisyonu emirsiz bırakıyordu). Fractional'da
@@ -253,11 +357,15 @@ class OrderExecutor:
                 bracket_tif = (
                     TimeInForce.GTC if float(qty) == int(qty) else TimeInForce.DAY
                 )
+                entry_client_order_id = (
+                    f"r9-{symbol.upper()[:10]}-b-{uuid4().hex[:24]}"
+                )
                 request = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=OrderSide.BUY,
                     time_in_force=bracket_tif,
+                    client_order_id=entry_client_order_id,
                     order_class="bracket",
                     take_profit={"limit_price": tp_price},
                     stop_loss={
@@ -265,7 +373,11 @@ class OrderExecutor:
                         "limit_price": round(stop_price * 0.995, 2),
                     },
                 )
+                self._journal_prepare_safe(
+                    entry_client_order_id, symbol, "BUY", fill_provenance, qty=qty
+                )
                 order = bot.client.submit_order(request)
+                self._journal_bind_safe(entry_client_order_id, order, symbol)
                 bracket_success = True
             except Exception as bracket_err:
                 try:
@@ -287,20 +399,39 @@ class OrderExecutor:
             # PAPER-only fallback: canlıda bu kola yukarıda kesinlikle girilmez.
             if not bracket_success:
                 paper_fallback = True
+                entry_client_order_id = (
+                    f"r9-{symbol.upper()[:10]}-b-{uuid4().hex[:24]}"
+                )
                 request = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=OrderSide.BUY,
                     time_in_force=TimeInForce.DAY,
+                    client_order_id=entry_client_order_id,
+                )
+                self._journal_prepare_safe(
+                    entry_client_order_id, symbol, "BUY", fill_provenance, qty=qty
                 )
                 order = bot.client.submit_order(request)
+                self._journal_bind_safe(entry_client_order_id, order, symbol)
 
             # Pozisyon kaydet ,  take_profit_pct de pozisyon-başına saklanır ki
             # position_manager dinamik hedefi bilsin (sabit config TP'si değil)
+            entry_now = datetime.now()
+            if symbol in bot.positions:
+                old_pos = bot.positions[symbol]
+                logger.warning(
+                    f"  {symbol} mevcut pozisyon kaydi uzerine yaziliyor: "
+                    f"episode_id={old_pos.get('episode_id', '')} | "
+                    f"entry_time_utc={old_pos.get('entry_time_utc', '')}"
+                )
             bot.positions[symbol] = {
                 "entry_price": price,
                 "qty": qty,
-                "entry_time": datetime.now().isoformat(),
+                "entry_time": entry_now.isoformat(),
+                "entry_time_utc": entry_now.astimezone(timezone.utc).isoformat(),
+                "episode_id": entry_client_order_id,
+                "provenance": fill_provenance,
                 "order_id": (
                     str(getattr(order, "id", ""))
                     if getattr(order, "id", None) is not None else None
@@ -336,6 +467,26 @@ class OrderExecutor:
                     "pozisyonu görülmedi; BUY başarısı raporlanmadı"
                 )
                 return False
+
+            entry_fill_price, entry_filled_qty, fill_order, entry_degraded = (
+                self._real_entry_fill(symbol, order, qty, price)
+            )
+            execution_id, entry_order_id, broker_client_id = self._fill_ids(
+                fill_order
+            )
+            self._record_fill_safe(
+                symbol,
+                side="BUY",
+                qty=entry_filled_qty,
+                price=entry_fill_price,
+                pnl_usd=None,
+                provenance=fill_provenance,
+                execution_id=execution_id,
+                order_id=entry_order_id,
+                client_order_id=broker_client_id or entry_client_order_id,
+                episode_id=entry_client_order_id,
+                degraded=entry_degraded,
+            )
             if not target_verified:
                 bot.positions[symbol]["server_stop_verified"] = False
                 bot.positions[symbol]["server_stop_order_id"] = None
@@ -545,6 +696,39 @@ class OrderExecutor:
             current_price = fill_price
             pnl_usd = (fill_price - float(entry)) * filled_qty
 
+            # Final bacak deftere girmeden once yalniz onceki strategy partial'lari
+            # topla; final PnL ayrica eklenir ve episode sonucu tek kez uretilir.
+            episode_entry_ts = str(
+                pos.get("entry_time_utc") or entry_time or ""
+            )
+            previous_partial_pnl = self._prior_episode_pnl_safe(
+                symbol, episode_entry_ts
+            )
+            episode_pnl = pnl_usd + previous_partial_pnl
+            fill_order = close_order
+            if exit_order_id:
+                try:
+                    fill_order = bot.client.get_order_by_id(exit_order_id)
+                except Exception:
+                    pass
+            execution_id, fill_order_id, fill_client_id = self._fill_ids(fill_order)
+            fill_provenance = str(
+                pos.get("provenance")
+                or ("bear_etf" if pos.get("bear_brain") else "strategy")
+            )
+            self._record_fill_safe(
+                symbol,
+                side="SELL",
+                qty=filled_qty,
+                price=fill_price,
+                pnl_usd=pnl_usd,
+                provenance=fill_provenance,
+                execution_id=execution_id,
+                order_id=exit_order_id or fill_order_id,
+                client_order_id=fill_client_id,
+                episode_id=pos.get("episode_id") or f"{symbol}|{entry_time}",
+            )
+
             # Marker yalnız broker'dan flat + gerçek fill kanıtı alındıktan sonra temizlenir.
             pos["close_in_progress"] = False
 
@@ -591,7 +775,7 @@ class OrderExecutor:
             # Bear/ters-ETF hedge kapanışları seriyi etkilemez ,  hedge zararı
             # long giriş hunisini kilitlemesin (BEAR_* eski davranışla uyumlu).
             if not pos.get("bear_brain"):
-                update_loss_streak(bot, symbol, pnl_usd)
+                update_loss_streak(bot, symbol, episode_pnl)
             # WashSale kaydı ,  gerçekleşen zarar, çıkış etiketinden bağımsız
             if hasattr(bot, 'wash_sale_tracker') and pnl_usd < 0:
                 bot.wash_sale_tracker.record_loss_sale(
@@ -604,15 +788,16 @@ class OrderExecutor:
                 sector = SECTOR_MAP.get(symbol, "Unknown")
                 bot.performance.record_trade(
                     symbol=symbol, action="SELL", qty=float(qty),
-                    price=float(current_price), pnl=pnl_usd, reason=reason,
-                    sector=sector,
+                    price=float(current_price), pnl=episode_pnl, reason=reason,
+                    sector=sector, episode_id=str(pos.get("episode_id") or ""),
+                    pnl_scope="episode", provenance=fill_provenance,
                 )
 
             # Ajan öz-değerlendirme feedback loop
             if hasattr(bot, 'agent_perf'):
-                outcome = "WIN" if pnl_usd > 0 else "LOSS" if pnl_usd < 0 else "NEUTRAL"
+                outcome = "WIN" if episode_pnl > 0 else "LOSS" if episode_pnl < 0 else "NEUTRAL"
                 try:
-                    bot.agent_perf.record_outcome(symbol, outcome, pnl_usd)
+                    bot.agent_perf.record_outcome(symbol, outcome, episode_pnl)
                 except Exception:
                     pass
 

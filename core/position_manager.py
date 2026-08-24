@@ -43,6 +43,9 @@ from core.protection import (
     should_exit_locally,
 )
 from core.telemetry import append_telemetry
+from core.fill_ledger import record_fill
+from core.order_journal import bind as journal_bind
+from core.order_journal import prepare as journal_prepare
 from utils.logger import logger
 
 
@@ -885,6 +888,109 @@ class PositionManager:
     def _partial_client_id(symbol: str) -> str:
         return f"r1p-{symbol.upper()[:10]}-{uuid4().hex[:24]}"
 
+    @staticmethod
+    def _partial_fill_ids(
+        order: object | None,
+    ) -> tuple[str | None, str | None, str | None]:
+        if order is None:
+            return None, None, None
+        execution_id = None
+        for attr in ("execution_id", "activity_id", "fill_id"):
+            value = str(getattr(order, attr, "") or "").strip()
+            if value:
+                execution_id = value
+                break
+        return (
+            execution_id,
+            order_id(order),
+            str(getattr(order, "client_order_id", "") or "").strip() or None,
+        )
+
+    def _partial_ledger_alarm(
+        self, symbol: str, operation: str, exc: Exception
+    ) -> None:
+        detail = f"{symbol}: partial fill ledger {operation} hatasi: {exc}"
+        try:
+            logger.error(f"  DEFTER HATASI {detail}")
+        except Exception:
+            pass
+        try:
+            protection_alarm(self.bot, f"{symbol}:FILL_LEDGER", detail)
+        except Exception:
+            pass
+
+    def _prepare_partial_journal(
+        self, symbol: str, client_order_id: str, qty: float,
+        provenance: str = "strategy",
+    ) -> None:
+        try:
+            journal_prepare(
+                client_order_id, symbol, "SELL", provenance, qty=qty
+            )
+        except Exception as exc:
+            self._partial_ledger_alarm(symbol, "journal prepare", exc)
+
+    def _bind_partial_journal(
+        self, symbol: str, client_order_id: str, order: object | None
+    ) -> None:
+        oid = order_id(order) if order is not None else None
+        if not oid:
+            return
+        try:
+            journal_bind(client_order_id, oid)
+        except Exception as exc:
+            self._partial_ledger_alarm(symbol, "journal bind", exc)
+
+    def _record_partial_fill(
+        self, symbol: str, pos_data: Dict, intent: Dict, order: object,
+        leg_qty: float,
+    ) -> None:
+        try:
+            exit_price = float(getattr(order, "filled_avg_price", 0) or 0)
+            if exit_price <= 0:
+                raise ValueError("broker partial filled_avg_price okunamadi")
+            avg_entry_price = None
+            try:
+                live_position = self._current_position(symbol, "LONG")
+            except Exception:
+                live_position = None
+            if live_position is not None:
+                try:
+                    candidate = float(
+                        getattr(live_position, "avg_entry_price", 0) or 0
+                    )
+                    if candidate > 0:
+                        avg_entry_price = candidate
+                except (TypeError, ValueError):
+                    avg_entry_price = None
+            pnl_usd = (
+                (exit_price - avg_entry_price) * leg_qty
+                if avg_entry_price is not None else None
+            )
+            provenance = str(
+                pos_data.get("provenance")
+                or ("bear_etf" if pos_data.get("bear_brain") else "strategy")
+            )
+            execution_id, oid, broker_cid = self._partial_fill_ids(order)
+            record_fill(
+                symbol=symbol,
+                side="SELL",
+                qty=leg_qty,
+                price=exit_price,
+                pnl_usd=pnl_usd,
+                provenance=provenance,
+                execution_id=execution_id,
+                order_id=oid,
+                client_order_id=broker_cid or intent.get("client_order_id"),
+                episode_id=(
+                    pos_data.get("episode_id")
+                    or f"{symbol}|{pos_data.get('entry_time', '')}"
+                ),
+                degraded=avg_entry_price is None,
+            )
+        except Exception as exc:
+            self._partial_ledger_alarm(symbol, "yazim", exc)
+
     def _partial_event(
         self, kind: str, symbol: str, pos_data: Dict, **fields
     ) -> bool:
@@ -1090,6 +1196,18 @@ class PositionManager:
             intent["status"] = "TERMINAL_NOFILL"
             pos_data["partial_sold"] = False
 
+        if (
+            terminal_confirmed
+            and total_filled > tolerance
+            and attempt_filled > 0
+            and order is not None
+        ):
+            # Partial yalniz muhasebe bacagidir; trade/streak/ajan sonucu burada
+            # uretilmez. Retry/restart replay'i ledger dedupe anahtari yutar.
+            self._record_partial_fill(
+                symbol, pos_data, intent, order, attempt_filled
+            )
+
         nofill_attempt = attempt_filled <= self._partial_tolerance(
             float(intent.get("attempt_qty", 0) or 0)
         )
@@ -1264,6 +1382,9 @@ class PositionManager:
             if existing_order is not None:
                 attempted = True
                 intent["order_id"] = order_id(existing_order)
+                self._bind_partial_journal(
+                    symbol, intent.get("client_order_id", ""), existing_order
+                )
                 intent["status"] = "SUBMITTED"
                 self._persist_partial_position(symbol, pos_data)
                 final_order, terminal_safe, wait_detail = self._wait_partial_fill(
@@ -1341,6 +1462,15 @@ class PositionManager:
                 time_in_force=TimeInForce.DAY,
                 client_order_id=intent["client_order_id"],
             )
+            self._prepare_partial_journal(
+                symbol,
+                intent["client_order_id"],
+                submit_qty,
+                str(
+                    pos_data.get("provenance")
+                    or ("bear_etf" if pos_data.get("bear_brain") else "strategy")
+                ),
+            )
             try:
                 submitted = self.bot.client.submit_order(request)
             except Exception as exc:
@@ -1350,6 +1480,10 @@ class PositionManager:
                     symbol, pos_data, None, True, detail
                 )
                 return True
+
+            self._bind_partial_journal(
+                symbol, intent["client_order_id"], submitted
+            )
 
             intent["status"] = "SUBMITTED"
             intent["order_id"] = order_id(submitted)

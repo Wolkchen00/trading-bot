@@ -622,6 +622,8 @@ class BearBrain:
             max(float(b[1]) for b in bands), planned_usd
         )
         call_cfg["min_rr_ratio"] = self.cfg.get("rr_target", 1.5)
+        # Ayni long executor kullanilir; yalniz muhasebe provenance'i ayrilir.
+        call_cfg["ledger_provenance"] = "bear_etf"
         if self._is_3x(symbol):
             call_cfg["stop_loss_pct"] = self.cfg.get("sl_3x", 0.06)
             call_cfg["stop_loss_max_pct"] = self.cfg.get("sl_max_3x", 0.08)

@@ -16,6 +16,8 @@ from typing import Dict, Optional
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
+from core.fill_ledger import record_fill
+from core.protection import protection_alarm
 from core.risk_guard import can_open_new_risk
 from utils.logger import logger
 
@@ -25,6 +27,62 @@ class OptionsExecutor:
 
     def __init__(self, bot):
         self.bot = bot
+
+    def _record_option_fill(
+        self, contract_symbol: str, side: str, order: object | None,
+        fallback_qty: float = 0, fallback_price: float = 0,
+        pnl_usd: float | None = None, degraded: bool = False,
+        require_broker_fill: bool = False, episode_id: str | None = None,
+    ) -> None:
+        candidate = order
+        oid = str(getattr(order, "id", "") or "").strip() or None
+        if oid:
+            try:
+                candidate = self.bot.client.get_order_by_id(oid)
+            except Exception:
+                candidate = order
+        try:
+            qty = abs(float(getattr(candidate, "filled_qty", 0) or 0))
+            price = float(getattr(candidate, "filled_avg_price", 0) or 0)
+            if qty <= 0 or price <= 0:
+                if require_broker_fill:
+                    return
+                qty = abs(float(fallback_qty))
+                price = float(fallback_price)
+                degraded = True
+            if qty <= 0 or price <= 0:
+                return
+            execution_id = None
+            for attr in ("execution_id", "activity_id", "fill_id"):
+                value = str(getattr(candidate, attr, "") or "").strip()
+                if value:
+                    execution_id = value
+                    break
+            record_fill(
+                symbol=contract_symbol,
+                side=side,
+                qty=qty,
+                price=price,
+                pnl_usd=pnl_usd,
+                provenance="option",
+                execution_id=execution_id,
+                order_id=oid,
+                client_order_id=(
+                    str(getattr(candidate, "client_order_id", "") or "").strip()
+                    or None
+                ),
+                episode_id=episode_id,
+                degraded=degraded,
+            )
+        except Exception as exc:
+            detail = f"{contract_symbol}: option fill ledger yazim hatasi: {exc}"
+            try:
+                logger.error(f"  DEFTER HATASI {detail}")
+            except Exception:
+                pass
+            protection_alarm(
+                self.bot, f"{contract_symbol}:FILL_LEDGER", detail
+            )
 
     def execute_call(
         self,
@@ -213,7 +271,13 @@ class OptionsExecutor:
                     )
                     return False
 
+                option_episode_id = f"option|{contract_symbol}|{order.id}"
                 total_cost = fill_price * 100 * filled_qty
+                self._record_option_fill(
+                    contract_symbol, "BUY", order,
+                    fallback_qty=filled_qty, fallback_price=fill_price,
+                    episode_id=option_episode_id,
+                )
 
                 # Pozisyon kaydet — GERÇEK dolum fiyatı ve adediyle
                 self.bot.options_positions[contract_symbol] = {
@@ -226,6 +290,7 @@ class OptionsExecutor:
                     "cost_basis": total_cost,
                     "entry_time": datetime.now().isoformat(),
                     "order_id": str(order.id) if order else None,
+                    "episode_id": option_episode_id,
                     "confidence": analysis.get("confidence", 0),
                     "highest_price": fill_price,
                     "lowest_price": fill_price,
@@ -348,8 +413,9 @@ class OptionsExecutor:
             # düşüp hep "PnL: $+0.00" yazıyor ve ajan istatistiğine LOSS
             # kaydediyordu (06 Tem'de 8 sahte kayıt).
             exit_price = None
+            close_filled_qty = 0
             if close_order is not None:
-                _fq, exit_price = self._wait_for_fill(
+                close_filled_qty, exit_price = self._wait_for_fill(
                     close_order.id, tries=4, delay=1.5
                 )
             if not exit_price:
@@ -359,6 +425,19 @@ class OptionsExecutor:
             pnl = None
             if exit_price and entry_price:
                 pnl = (exit_price - entry_price) * 100 * qty
+
+            if exit_price:
+                self._record_option_fill(
+                    contract_symbol, "SELL", close_order,
+                    fallback_qty=close_filled_qty or qty,
+                    fallback_price=exit_price,
+                    pnl_usd=pnl,
+                    degraded=close_filled_qty <= 0,
+                    episode_id=(
+                        pos.get("episode_id")
+                        or f"option|{contract_symbol}|{pos.get('order_id', '')}"
+                    ),
+                )
 
             emoji = "✅" if (pnl or 0) >= 0 else "❌"
             pnl_str = f"${pnl:+.2f}" if pnl is not None else "bilinmiyor"
@@ -429,7 +508,15 @@ class OptionsExecutor:
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
             )
-            self.bot.client.submit_order(order_data=order_data)
+            partial_order = self.bot.client.submit_order(order_data=order_data)
+            self._record_option_fill(
+                contract_symbol, "SELL", partial_order,
+                require_broker_fill=True,
+                episode_id=(
+                    pos.get("episode_id")
+                    or f"option|{contract_symbol}|{pos.get('order_id', '')}"
+                ),
+            )
 
             # Qty güncelle
             pos["qty"] = total_qty - qty_to_close

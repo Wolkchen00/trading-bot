@@ -732,3 +732,65 @@ canli sermaye/parking orani, cikis geometrisi, ajan mimarisi, kill esigi, canli-
 mirror altyapisi.
 
 **DEPLOY EDILMEDI, PUSH EDILMEDI.** Deploy Ihsan kapili ve piyasa kapaliyken.
+
+## v4.16 , R9 defter dogrulugu: fill ledger + episode toplama (2026-08-24)
+
+**Kok:** Kademeli (partial) satis bacagi FINANSAL OLARAK GORUNMEZDI.
+`_handle_long_partial` / `_finish_partial_attempt` yalniz intent state'ine ve
+telemetriye yaziyordu; `record_trade` / `update_loss_streak` /
+`agent_perf.record_outcome` cagrilarinin HICBIRINI yapmiyordu. **Olculen zarar:
+olcum doneminin 6 isleminin 3'unde toplam $282.93 gerceklesmis PnL deftere hic
+girmedi** (SMCI +189.48 yerine +3.49; AAPL +41.96 yerine +2.72; PLTR +62.75
+yerine +4.91). Ayni bozuk defter kayip-serisi sayacini ve ajan ogrenmesini de
+besliyordu. Metrik-4 bu hatayi YAPISAL OLARAK goremezdi (yalniz FAZLA kaydi gorur).
+
+**Tasarim ilkesi: TOPLAYICI, yeniden yazim DEGIL.** Calisan cikis/koruma zinciri
+(R7a/R7b) korundu; uzerine defter katmani eklendi ve TEK sayisal duzeltme yapildi.
+
+1. **`core/fill_ledger.py`** , append-only JSONL (`state_path("fill_ledger.jsonl")`).
+   **Tekillestirme anahtari broker EXECUTION/ACTIVITY id'sidir, `order_id` DEGIL**
+   , ayni emrin birden fazla kismi dolumu ayni `order_id`'yi tasir ve `order_id`
+   ile tekillestirme gercek partial'lari YUTAR (Codex tur 2 bulgusu). Execution id
+   yoksa bilesik anahtar + `degraded=True`. Surecler arasi dosya kilidi + fsync.
+2. **`core/order_journal.py`** , crash-safe provenance: `prepare()` BROKER
+   CAGRISINDAN ONCE, `bind()` ACK sonrasi, `resolve()` bulamazsa `"UNKNOWN"`.
+   "Submit aninda yaz" yetersizdi , submit/ACK arasi crash'te provenance kaybolurdu.
+3. **Episode toplama (tek sayisal duzeltme):** tam cikista
+   `episode_pnl = final_bacak_pnl + onceki_strategy_partial_bacaklari`.
+   `record_trade`, `update_loss_streak`, `record_outcome` , ucu de `episode_pnl`
+   goruyor, **cagri sayisi ve yeri DEGISMEDI** (episode kapanisinda BIR KEZ).
+   Partial yolu YALNIZ `record_fill` cagirir , partial bir MUHASEBE bacagidir,
+   tamamlanmis bir trade sonucu degildir (karli partial'i "WIN" ogretip sonra
+   zarar eden trade'i yanlis etiketlemek Codex'in yakaladigi tasarim hatasiydi).
+   **Cifte sayim korumasi:** `previous_partial_pnl` final bacak deftere
+   YAZILMADAN ONCE hesaplanir.
+4. **Provenance ayrimi:** strategy / index_parking / dca / option / short /
+   bear_etf / UNKNOWN. Parking kari strateji episode'una SIZAMAZ.
+5. **`tools/ledger_backfill.py`** , broker FILL activities'ten onarim.
+   `--dry-run` VARSAYILAN, yazmak icin acik `--apply`. Idempotent.
+   **TAHMIN YASAGI (Ihsan karar maddesi):** journal deploy oncesi her emir icin
+   BOS oldugundan hicbir tarihsel dolumun stratejisi kanitlanamaz -> provenance
+   `UNKNOWN`, `pnl_usd` `None`. Backfill'in isi defteri TAMAMLAMAK, gecmise PnL
+   ATFETMEK degil; tarihsel PnL R10'un isi (broker dolumlarindan yeniden kurulur).
+6. **Defter bir cikisi ASLA bloklayamaz** (R8'in fail-closed kuralinin bilincli
+   TERSI): tum defter cagrilari try/except + alarm, akis degismez.
+7. `record_trade` satirina geriye uyumlu `episode_id` / `pnl_scope` / `provenance`
+   alanlari , `pnl` artik episode toplami ama `qty`/`price` final bacagin, bu
+   tutarsizlik R10 icin acikca isaretlendi.
+
+**Testler:** pytest 161 -> **171** (+10 R9) + tam sistem 115'te 113 gecen/0
+basarisiz + Claude bagimsiz dusmanca test **21 iddia** (cifte sayim, duplicate
+replay, ayni order_id/farkli execution_id, degraded bilesik anahtar, provenance
+izolasyonu , $1000 parking kari sizmiyor , ayni sembolde iki episode sizintisi,
+bozuk defterde fail-open, gecersiz girdi reddi). Tum kanitlar Claude tarafindan
+bagimsiz kosuldu.
+
+**Level 10 devralma (kayda gecirilir):** Codex duzeltme turunda `test_r9_ledger.py`
+ve `tools/ledger_backfill.py`'yi yeniden yazarken kendi son iyilestirmesini
+SESSIZCE KAYBETTI (10. test + backfill maliyet-tabani mantigi) ve "test dosyasina
+dokunmadim" diye raporladi. Diff karsilastirmasiyla yakalandi. Degerlendirme:
+kaybolan mantik zaten OLU DOGARDI (journal deploy oncesi bos). Karar bilincli
+olarak kabul edildi ve Claude tarafindan teste KILITLENDI
+(`test_backfill_never_guesses_pnl_or_provenance_for_unprovable_history`).
+
+**DEPLOY EDILMEDI, PUSH EDILMEDI.**

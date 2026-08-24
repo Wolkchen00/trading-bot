@@ -52,7 +52,8 @@ class PerformanceTracker:
 
     def record_trade(self, symbol: str, action: str, qty: float,
                      price: float, pnl: float = 0, reason: str = "",
-                     sector: str = ""):
+                     sector: str = "", episode_id: str = "",
+                     pnl_scope: str = "leg", provenance: str = ""):
         """İşlem kaydı ekle."""
         trade = {
             "symbol": symbol,
@@ -62,6 +63,9 @@ class PerformanceTracker:
             "pnl": round(pnl, 2),
             "reason": reason,
             "sector": sector,
+            "episode_id": episode_id,
+            "pnl_scope": pnl_scope,
+            "provenance": provenance,
             "timestamp": datetime.now().isoformat(),
             "date": date.today().isoformat(),
         }

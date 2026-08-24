@@ -26,6 +26,8 @@ from alpaca.trading.requests import ClosePositionRequest, MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from config import TRADING_MODE, state_path
+from core.fill_ledger import record_fill
+from core.protection import protection_alarm
 from core.risk_guard import can_open_new_risk
 from utils.logger import logger
 
@@ -64,6 +66,56 @@ class IndexParkingManager:
     def is_parking_symbol(self, symbol: str) -> bool:
         """Bu sembol parking sleeve'i mi? (enabled değilse her zaman False)"""
         return self.enabled and symbol == self.symbol
+
+    def _record_parking_fill(self, order, side: str) -> None:
+        """Yalniz broker dolum bilgisi bulunan parking emrini deftere ekle."""
+        if order is None:
+            return
+        oid = str(getattr(order, "id", "") or "").strip() or None
+        candidate = order
+        if oid:
+            try:
+                candidate = self.bot.client.get_order_by_id(oid)
+            except Exception:
+                candidate = order
+        try:
+            qty = abs(float(getattr(candidate, "filled_qty", 0) or 0))
+            price = float(getattr(candidate, "filled_avg_price", 0) or 0)
+            if qty <= 0 or price <= 0:
+                return
+            execution_id = None
+            for attr in ("execution_id", "activity_id", "fill_id"):
+                value = str(getattr(candidate, attr, "") or "").strip()
+                if value:
+                    execution_id = value
+                    break
+            record_fill(
+                symbol=self.symbol,
+                side=side,
+                qty=qty,
+                price=price,
+                pnl_usd=None,
+                provenance="index_parking",
+                execution_id=execution_id,
+                order_id=oid,
+                client_order_id=(
+                    str(getattr(candidate, "client_order_id", "") or "").strip()
+                    or None
+                ),
+                episode_id=None,
+            )
+        except Exception as exc:
+            detail = f"{self.symbol}: parking fill ledger yazim hatasi: {exc}"
+            try:
+                logger.error(f"  DEFTER HATASI {detail}")
+            except Exception:
+                pass
+            try:
+                protection_alarm(
+                    self.bot, f"{self.symbol}:FILL_LEDGER", detail
+                )
+            except Exception:
+                pass
 
     def _load_dates(self):
         """v4.12.2: yalnız BUGÜNE ait korumalar geri yüklenir (dünün kaydı anlamsız)."""
@@ -222,7 +274,8 @@ class IndexParkingManager:
                 symbol=self.symbol, notional=notional,
                 side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
             )
-            self.bot.client.submit_order(req)
+            order = self.bot.client.submit_order(req)
+            self._record_parking_fill(order, "BUY")
             self._last_buy_date = date.today()  # v4.11: aynı-gün unwind engeli (PDT)
             self._save_dates()
             logger.info(f"  🅿️ PARK BUY {self.symbol}: ${notional:,.2f} (boş nakit → beta)")
@@ -244,7 +297,7 @@ class IndexParkingManager:
         try:
             if notional >= mval * 0.99:
                 # rezerv açığı ≥ park değeri → tümünü çöz (kalan fraksiyon kalmasın)
-                self.bot.client.close_position(self.symbol)
+                order = self.bot.client.close_position(self.symbol)
                 desc = f"tümü ({qty} pay)"
             else:
                 # qty-sınırlı kısmi kapama: istenen notional'ı paya çevir,
@@ -252,11 +305,12 @@ class IndexParkingManager:
                 sell_qty = min(round(notional / price, 6), qty)
                 if sell_qty <= 0:
                     return
-                self.bot.client.close_position(
+                order = self.bot.client.close_position(
                     self.symbol,
                     close_options=ClosePositionRequest(qty=str(sell_qty)),
                 )
                 desc = f"${notional:,.2f} (~{sell_qty} pay)"
+            self._record_parking_fill(order, "SELL")
             logger.info(f"  🅿️ PARK SELL {self.symbol}: {desc} (rezerv tamamla)")
         except Exception as e:
             logger.debug(f"  Park sell hatası: {e}")

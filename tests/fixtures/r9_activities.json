@@ -1,0 +1,31 @@
+{
+  "activities": [
+    {
+      "id": "fixture-exec-aapl-1",
+      "transaction_time": "2026-08-20T14:31:00Z",
+      "symbol": "AAPL",
+      "side": "buy",
+      "qty": "2",
+      "price": "225.10",
+      "order_id": "fixture-order-aapl"
+    },
+    {
+      "id": "fixture-exec-aapl-2",
+      "transaction_time": "2026-08-20T14:31:01Z",
+      "symbol": "AAPL",
+      "side": "buy",
+      "qty": "1",
+      "price": "225.20",
+      "order_id": "fixture-order-aapl"
+    },
+    {
+      "id": "fixture-exec-spy-1",
+      "transaction_time": "2026-08-21T15:05:00Z",
+      "symbol": "SPY",
+      "side": "sell",
+      "qty": "0.5",
+      "price": "642.00",
+      "order_id": "fixture-order-spy"
+    }
+  ]
+}

@@ -35,6 +35,22 @@ class OrderExecutor:
         self.bot = bot
 
     @staticmethod
+    def _funnel_bump_safe(
+        bot, stage: str, reason: str | None = None, symbol: str | None = None
+    ) -> None:
+        """Telemetri arizasi emir akisini veya sonucunu degistiremez."""
+        try:
+            bump = getattr(bot, "_funnel_bump", None)
+            if bump is None:
+                return
+            if symbol is None:
+                bump(stage, reason=reason)
+            else:
+                bump(stage, reason=reason, symbol=symbol)
+        except Exception:
+            pass
+
+    @staticmethod
     def _fill_ids(order: object | None) -> tuple[str | None, str | None, str | None]:
         if order is None:
             return None, None, None
@@ -254,6 +270,10 @@ class OrderExecutor:
                     )
                 return False
 
+            self._funnel_bump_safe(
+                bot, "reached_executor", symbol=symbol
+            )
+
             account = bot.client.get_account()
             cash = float(account.cash)
             equity = float(account.equity)
@@ -387,6 +407,12 @@ class OrderExecutor:
                     default_paper = True
                 is_live = not bool(getattr(bot, "is_paper", default_paper))
                 if is_live:
+                    self._funnel_bump_safe(
+                        bot,
+                        "gate_block",
+                        reason="FRACTIONAL_NO_BRACKET",
+                        symbol=symbol,
+                    )
                     logger.error(
                         f"  LIVE bracket reddedildi; {symbol} pozisyonu AÇILMADI: "
                         f"{bracket_err}"

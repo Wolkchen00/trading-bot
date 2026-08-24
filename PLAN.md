@@ -862,3 +862,63 @@ assert 42 -> 43, test 11 -> 11, hicbir assert zayiflatilmadi (Claude denetledi);
 mutasyon guard'i izin-listesi oldugu icin saglam kaldi.
 
 **DEPLOY EDILMEDI, PUSH EDILMEDI.**
+
+## v4.16 , R11 huni durustlugu: teshis eden sayaclar (2026-08-24)
+
+**Kok:** Huni sayaclari donmanin sebebini SOYLEYEMEDI. Canli 17 islem gunudur
+giris yapmiyor ve 19 ardisik NO_TRADE alarmi faydasiz cikti; iki blok ise hicbir
+sayacta GORUNMUYORDU. **Bu rock TELEMETRIDIR , hicbir giris/cikis karari degismedi.**
+
+1. **Yon ayrimi:** `conf_below_min` BUY ve SHORT redlerini ayni kovaya atiyordu;
+   canli `long_only` oldugu icin asla alinamayacak SHORT redleri huniyi kirletiyor
+   ve "signal_buy < conf_below_min" celiskisini uretiyordu. `conf_below_min_buy` /
+   `conf_below_min_short` eklendi, **toplam `conf_below_min` geriye uyum icin KALDI**.
+2. **Olay sayisi vs benzersiz sembol:** ayni sembol gunde ~120 kez sayilabiliyordu,
+   yani "gate_block=1122" blok SIKLIGINI mi GENISLIGINI mi anlatiyor belli degildi.
+   Artik gun bazinda asama-basi benzersiz sembol kumesi tutuluyor ve rapor ikisini
+   BIRLIKTE basiyor. **Eski gun kayitlarinda kume yoksa benzersiz sayim `None`
+   (UNKNOWN) doner , "0" diye yalan SOYLEMEZ.**
+3. **Gorunmez bloklar sayaca girdi:** `wash_sale_block` (30 gun yasagi evrenin
+   ~%40'ini sessizce siliyordu) ve `index_signal`.
+4. **`FRACTIONAL_NO_BRACKET`:** canlida broker bracket'i reddettiginde kod
+   `logger.error` + `return False` yapiyordu ve bu giris HICBIR sayacta yoktu
+   (evrenin 20 isminden ~11'i bu yoldan sessizce dusuyor). Artik
+   `gate_block/FRACTIONAL_NO_BRACKET` yaziliyor. **Iki-adimli canli giris
+   fallback'i ACILMADI** , `return False` davranisi aynen korundu ve
+   `test_live_bracket_rejection_does_not_submit_market_fallback` gecmeye devam ediyor.
+5. **`reached_executor`:** guard gecildiginde artan sayac. Plandaki ilk ad
+   `would_enter`'di , YANILTICIYDI (kapiyi gecmek nakit/boyut/broker uygunlugunu
+   garanti etmez). Artik R5 kilidi KAPALIYKEN bile "kilit olmasa kac giris
+   DENENECEKTI" gorunur.
+6. **Dominant asama , iki AYRI metrik, ezme kurali YOK:**
+   - `dominant_stage` DEGISMEDI (onceki "her zaman signal_hold doner" iddiasi
+     YANLISTI; `max(...)` esitlikte oncelik demetini zaten uyguluyor ve
+     `test_dominant_stage_priority_breaks_ties` bunu kilitlemis , KORUNDU).
+   - `numeric_dominant` = hacim gercegi (dominant_stage ile ayni).
+   - `downstream_bottleneck` = YALNIZ aksiyon alinabilir sinyaller uzerindeki
+     downstream engellerin en buyugu; `signal_*` asamalari bu metrige GIRMEZ.
+   Olculdu: `signal_hold=5000` iken bile gercek blokeri (`conf_below_min_buy=30`)
+   isimlendiriyor; 08-21 vakasinda `gate_block=1122` diyor.
+7. **NO_TRADE alarmi durustlesti:** mesaj `downstream_bottleneck` + `top_gate_reason`
+   soyluyor. **`last_entry_date` artik bozuk oldugunu kanitladigimiz
+   `trade_history.json`'dan degil R9 fill ledger'inden okunuyor** (son
+   `provenance="strategy"` BUY dolumu); kayit yoksa `None` , **funnel'in
+   olusturuldugu gune DUSMUYOR, yaniltici tarih BASMIYOR.** (Eski hata: alarm
+   2026-07-30 diyordu, gercek son canli giris 2026-07-16.)
+
+**Bilinen sinir (kayda gecirildi):** yalniz SHORT girisi olan bir donemde
+`last_entry_date` `None` kalir , short girisi defterde `provenance="short"` +
+`side="SELL"` olarak duruyor ve "strategy BUY" filtresine takilmiyor. Canli
+`BOT_MODE=long_only` oldugu icin CANLIDA ETKISIZ; paper'da yalniz-short bir
+donemde NO_TRADE alarmi gereksiz tetiklenebilir. Duzeltme sonraki cycle'a birakildi.
+
+**Testler:** pytest 197 -> **211** (+14 R11) + tam sistem 115'te 113 gecen/0
+basarisiz + Claude bagimsiz dusmanca test **22 iddia** (signal_hold 5000'e karsi
+gercek bloker, 08-21 vakasi, esitlikte oncelik, numeric_dominant esdegerligi,
+100 olay/1 benzersiz sembol, eski sema cokme yok + None yalan soylemiyor, yon
+ayriminda toplam korunuyor, bos defterde yaniltici tarih yok, park/bear sizmiyor).
+`tests/test_r4_observability.py` uyarlandi: assert 34 -> 34, test 10 -> 10,
+hicbir assert zayiflatilmadi (Claude denetledi) , degisiklik kaynak degisimi
+(trade_history -> fill ledger) ve "kayit yoksa None" kuralindan geliyor.
+
+**DEPLOY EDILMEDI, PUSH EDILMEDI.**

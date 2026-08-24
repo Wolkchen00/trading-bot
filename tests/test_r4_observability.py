@@ -3,6 +3,7 @@ from datetime import date
 
 import pytest
 
+import core.fill_ledger
 from core.funnel import DailyFunnel
 
 
@@ -87,21 +88,23 @@ def test_alarm_dedup_and_no_trade_kind_exactly_once(tmp_path):
     assert "LOSS_STREAK" in message
 
 
-def test_migration_uses_last_buy_record(tmp_path):
+def test_migration_uses_last_strategy_buy_fill(tmp_path, monkeypatch):
     history_path = tmp_path / "trade_history.json"
-    history_path.write_text(
-        json.dumps(
-            [
-                {"action": "BUY", "date": "2026-07-02"},
-                {"action": "SELL", "date": "2026-07-03"},
-                {
-                    "action": "BEAR_BUY",
-                    "timestamp": "2026-07-08T15:30:00",
-                },
-                {"action": "SELL", "date": "2026-07-09"},
-            ]
-        ),
-        encoding="utf-8",
+    monkeypatch.setattr(
+        core.fill_ledger,
+        "read_fills",
+        lambda: [
+            {
+                "side": "BUY",
+                "provenance": "strategy",
+                "ts_utc": "2026-07-02T15:00:00+00:00",
+            },
+            {
+                "side": "BUY",
+                "provenance": "bear_etf",
+                "ts_utc": "2026-07-08T15:30:00+00:00",
+            },
+        ],
     )
     notifier = StubNotifier()
     funnel = DailyFunnel(
@@ -121,17 +124,28 @@ def test_migration_uses_last_buy_record(tmp_path):
     assert len(notifier.critical_calls) == 1
 
 
-def test_migration_uses_most_recent_short_strategy_entry(tmp_path):
+def test_migration_ignores_short_and_non_strategy_entries(tmp_path, monkeypatch):
     history_path = tmp_path / "trade_history.json"
-    history_path.write_text(
-        json.dumps(
-            [
-                {"action": "BUY", "date": "2026-07-02"},
-                {"action": "SHORT", "date": "2026-07-08"},
-                {"action": "BEAR_BUY", "date": "2026-07-09"},
-            ]
-        ),
-        encoding="utf-8",
+    monkeypatch.setattr(
+        core.fill_ledger,
+        "read_fills",
+        lambda: [
+            {
+                "side": "BUY",
+                "provenance": "strategy",
+                "ts_utc": "2026-07-02T15:00:00+00:00",
+            },
+            {
+                "side": "SELL",
+                "provenance": "strategy",
+                "ts_utc": "2026-07-08T15:00:00+00:00",
+            },
+            {
+                "side": "BUY",
+                "provenance": "short",
+                "ts_utc": "2026-07-09T15:00:00+00:00",
+            },
+        ],
     )
     notifier = StubNotifier()
     funnel = DailyFunnel(
@@ -147,11 +161,14 @@ def test_migration_uses_most_recent_short_strategy_entry(tmp_path):
         notifier=notifier,
         history_path=str(history_path),
     )
-    assert funnel.last_entry_date == "2026-07-08"
+    assert funnel.last_entry_date == "2026-07-02"
     assert len(notifier.critical_calls) == 1
 
 
-def test_migration_without_history_seeds_closed_day_and_does_not_alarm(tmp_path):
+def test_migration_without_ledger_keeps_entry_unknown_and_does_not_alarm(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(core.fill_ledger, "read_fills", lambda: [])
     notifier = StubNotifier()
     funnel = DailyFunnel(
         path=str(tmp_path / "funnel.json"),
@@ -168,7 +185,7 @@ def test_migration_without_history_seeds_closed_day_and_does_not_alarm(tmp_path)
     )
 
     assert alarmed is False
-    assert funnel.last_entry_date == "2026-07-13"
+    assert funnel.last_entry_date is None
     assert notifier.critical_calls == []
 
 

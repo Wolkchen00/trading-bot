@@ -9,7 +9,7 @@ import copy
 import json
 import os
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -26,10 +26,15 @@ class DailyFunnel:
         "signal_sell",
         "signal_hold",
         "conf_below_min",
+        "conf_below_min_buy",
+        "conf_below_min_short",
         "sector_block",
         "gate_block",
+        "wash_sale_block",
+        "index_signal",
         "queued_pullback",
         "queue_dup",
+        "reached_executor",
         "entries",
         "exits",
     )
@@ -56,6 +61,9 @@ class DailyFunnel:
     def _empty_day() -> dict:
         result = {stage: 0 for stage in DailyFunnel.STAGES}
         result["gate_block_reasons"] = {}
+        result["stage_symbols"] = {
+            stage: [] for stage in DailyFunnel.STAGES
+        }
         return result
 
     def _today(self) -> str:
@@ -95,6 +103,25 @@ class DailyFunnel:
                     )
                 except (TypeError, ValueError):
                     continue
+        raw_symbols = raw.get("stage_symbols")
+        if not isinstance(raw_symbols, dict):
+            # R11 oncesi gunlerde sembol kumesi yoktu. Sifir demek yerine
+            # bilinmiyor olarak koru; aksi halde eski veri sahte kesinlik uretir.
+            day["stage_symbols"] = None
+        else:
+            normalized_symbols = {}
+            for stage in cls.STAGES:
+                values = raw_symbols.get(stage)
+                if not isinstance(values, (list, tuple, set)):
+                    normalized_symbols[stage] = None
+                    continue
+                symbols = {
+                    str(symbol).strip().upper()
+                    for symbol in values
+                    if str(symbol).strip()
+                }
+                normalized_symbols[stage] = sorted(symbols)
+            day["stage_symbols"] = normalized_symbols
         return day
 
     def _load(self) -> None:
@@ -171,7 +198,12 @@ class DailyFunnel:
             logger.debug(f"  Funnel save hatasi: {exc}")
             return False
 
-    def bump(self, stage: str, reason: Optional[str] = None) -> None:
+    def bump(
+        self,
+        stage: str,
+        reason: Optional[str] = None,
+        symbol: Optional[str] = None,
+    ) -> None:
         """Increment today's counter. Telemetry errors never propagate."""
         try:
             if not self.enabled:
@@ -182,6 +214,13 @@ class DailyFunnel:
             today = self._today()
             day = self.days.setdefault(today, self._empty_day())
             day[stage] = int(day.get(stage, 0) or 0) + 1
+            symbol_text = str(symbol or "").strip().upper()
+            symbols_by_stage = day.get("stage_symbols")
+            if symbol_text and isinstance(symbols_by_stage, dict):
+                stage_symbols = symbols_by_stage.get(stage)
+                if isinstance(stage_symbols, list) and symbol_text not in stage_symbols:
+                    stage_symbols.append(symbol_text)
+                    stage_symbols.sort()
             if stage == "gate_block" and reason is not None:
                 reason_text = str(reason).strip() or "BILINMIYOR"
                 reasons = day.setdefault("gate_block_reasons", {})
@@ -204,6 +243,23 @@ class DailyFunnel:
             logger.debug(f"  Funnel snapshot hatasi: {exc}")
             return {}
 
+    @staticmethod
+    def _unique_symbol_count(data: dict, stage: str) -> Optional[int]:
+        symbols_by_stage = data.get("stage_symbols")
+        if not isinstance(symbols_by_stage, dict):
+            return None
+        symbols = symbols_by_stage.get(stage)
+        if not isinstance(symbols, list):
+            return None
+        return len(symbols)
+
+    @classmethod
+    def _metric_text(cls, data: dict, stage: str) -> str:
+        events = int(data.get(stage, 0) or 0)
+        unique = cls._unique_symbol_count(data, stage)
+        unique_text = "UNKNOWN" if unique is None else str(unique)
+        return f"olay={events} (benzersiz sembol={unique_text})"
+
     def report_lines(self, date_str: str) -> list[str]:
         """Return Turkish ASCII log lines and persist the report state."""
         try:
@@ -221,24 +277,45 @@ class DailyFunnel:
             lines = [
                 f"GIRIS HUNISI {day_str}",
                 (
-                    f"  Taranan: {data.get('scanned', 0)} | "
-                    f"BUY: {data.get('signal_buy', 0)} | "
-                    f"SELL: {data.get('signal_sell', 0)} | "
-                    f"HOLD: {data.get('signal_hold', 0)}"
+                    f"  Taranan: {self._metric_text(data, 'scanned')} | "
+                    f"BUY: {self._metric_text(data, 'signal_buy')} | "
+                    f"SELL: {self._metric_text(data, 'signal_sell')} | "
+                    f"HOLD: {self._metric_text(data, 'signal_hold')}"
                 ),
                 (
-                    f"  Dusuk guven: {data.get('conf_below_min', 0)} | "
-                    f"Sektor blok: {data.get('sector_block', 0)} | "
-                    f"Gate blok: {data.get('gate_block', 0)}"
+                    f"  Dusuk guven toplam: "
+                    f"{self._metric_text(data, 'conf_below_min')} | "
+                    f"BUY dusuk guven: "
+                    f"{self._metric_text(data, 'conf_below_min_buy')} | "
+                    f"SHORT dusuk guven: "
+                    f"{self._metric_text(data, 'conf_below_min_short')}"
                 ),
                 (
-                    f"  Pullback kuyruk: {data.get('queued_pullback', 0)} | "
-                    f"Kuyruk tekrari: {data.get('queue_dup', 0)} | "
-                    f"Giris: {data.get('entries', 0)} | "
-                    f"Cikis: {data.get('exits', 0)}"
+                    f"  Sektor blok: {self._metric_text(data, 'sector_block')} | "
+                    f"Gate blok: {self._metric_text(data, 'gate_block')} | "
+                    f"Wash-sale blok: "
+                    f"{self._metric_text(data, 'wash_sale_block')}"
+                ),
+                (
+                    f"  Index sinyali: {self._metric_text(data, 'index_signal')} | "
+                    f"Pullback kuyruk: "
+                    f"{self._metric_text(data, 'queued_pullback')} | "
+                    f"Kuyruk tekrari: {self._metric_text(data, 'queue_dup')}"
+                ),
+                (
+                    f"  Executor'a ulasan: "
+                    f"{self._metric_text(data, 'reached_executor')} | "
+                    f"Giris: {self._metric_text(data, 'entries')} | "
+                    f"Cikis: {self._metric_text(data, 'exits')}"
                 ),
                 f"  Gate nedenleri: {reason_text}",
             ]
+            bottleneck = self.downstream_bottleneck(day_str)
+            numeric = self.numeric_dominant(day_str)
+            lines.append(
+                f"  Downstream bloker: {bottleneck[0]} ({bottleneck[1]}) | "
+                f"Sayisal baskin: {numeric[0]} ({numeric[1]})"
+            )
             self._persist(force=True)
             return lines
         except Exception as exc:
@@ -268,37 +345,84 @@ class DailyFunnel:
             cursor += timedelta(days=1)
         return count
 
-    def _migrate_last_entry(self, closed_day: str, history_path: str) -> bool:
+    @staticmethod
+    def _ledger_entry_date() -> Optional[str]:
+        """R9 defterindeki son strategy BUY dolumunun ET gununu dondur."""
         try:
-            trades = []
-            if os.path.exists(history_path):
-                with open(history_path, "r", encoding="utf-8") as handle:
-                    raw = json.load(handle)
-                if isinstance(raw, list):
-                    trades = raw
-                elif isinstance(raw, dict):
-                    trades = raw.get("trades", [])
-            for trade in reversed(trades):
-                if not isinstance(trade, dict):
+            from core.fill_ledger import read_fills
+
+            latest = None
+            for fill in read_fills():
+                if not isinstance(fill, dict):
                     continue
-                action = str(trade.get("action", "")).upper()
-                if action not in ("BUY", "SHORT"):
+                if fill.get("provenance") != "strategy":
                     continue
-                trade_date = trade.get("date")
-                if not trade_date:
-                    trade_date = str(trade.get("timestamp", ""))[:10]
-                try:
-                    date.fromisoformat(str(trade_date))
-                except (TypeError, ValueError):
+                if str(fill.get("side", "")).upper() != "BUY":
                     continue
-                self.last_entry_date = str(trade_date)
-                self._persist(force=True)
-                return True
+                raw_ts = str(fill.get("ts_utc", "")).strip()
+                if not raw_ts:
+                    continue
+                if raw_ts.endswith("Z"):
+                    raw_ts = raw_ts[:-1] + "+00:00"
+                parsed = datetime.fromisoformat(raw_ts)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if latest is None or parsed > latest:
+                    latest = parsed
+            if latest is not None:
+                return latest.astimezone(
+                    ZoneInfo("America/New_York")
+                ).date().isoformat()
         except Exception as exc:
-            logger.debug(f"  Funnel BUY tarihi migration hatasi: {exc}")
-        self.last_entry_date = closed_day
+            logger.debug(f"  Funnel fill ledger BUY tarihi okuma hatasi: {exc}")
+        return None
+
+    def _migrate_last_entry(self, closed_day: str, history_path: str) -> bool:
+        # Parametreler imzada geriye uyumluluk icin kalir; R11'de tek fallback
+        # kaynagi R9 fill ledger'daki strategy BUY dolumudur.
+        del closed_day, history_path
+        migrated = self._ledger_entry_date()
+        self.last_entry_date = migrated
         self._persist(force=True)
-        return False
+        return migrated is not None
+
+    def _has_trustworthy_entry_date(self) -> bool:
+        try:
+            if not self.last_entry_date:
+                return False
+            entry_str = str(self.last_entry_date)
+            date.fromisoformat(entry_str)
+            # Eski migration funnel'in olusturuldugu gunu entries=0 iken
+            # last_entry_date yapardi. Bu imza gorulurse defterden yeniden kur.
+            if entry_str in self.days:
+                entry_day = self._normalize_day(self.days.get(entry_str))
+                if int(entry_day.get("entries", 0) or 0) <= 0:
+                    return False
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    def _observed_no_entry_days(self, closed_day: str) -> int:
+        """Son giris bilinmiyorsa yalniz kanitli funnel gunlerini say."""
+        try:
+            cursor = date.fromisoformat(closed_day)
+            count = 0
+            while True:
+                if cursor.weekday() >= 5:
+                    cursor -= timedelta(days=1)
+                    continue
+                day_str = cursor.isoformat()
+                if day_str not in self.days:
+                    break
+                day = self._normalize_day(self.days.get(day_str))
+                if int(day.get("entries", 0) or 0) > 0:
+                    break
+                count += 1
+                cursor -= timedelta(days=1)
+            return count
+        except Exception as exc:
+            logger.debug(f"  Funnel bilinmeyen giris gun sayimi hatasi: {exc}")
+            return 0
 
     def dominant_stage(self, date_str: str) -> tuple[str, int]:
         """Return the most useful downstream explanation for a no-entry day."""
@@ -319,6 +443,30 @@ class DailyFunnel:
             default=("veri_yok", 0),
         )
         return dominant if dominant[1] > 0 else ("veri_yok", 0)
+
+    def numeric_dominant(self, date_str: str) -> tuple[str, int]:
+        """Hacim gercegi: mevcut dominant_stage ile birebir ayni sonuc."""
+        return self.dominant_stage(date_str)
+
+    def downstream_bottleneck(self, date_str: str) -> tuple[str, int]:
+        """Aksiyon alinabilir sinyallerden sonraki en sik engeli dondur."""
+        data = self.snapshot(date_str)
+        priority = (
+            "conf_below_min_buy",
+            "conf_below_min_short",
+            "conf_below_min",
+            "sector_block",
+            "gate_block",
+            "wash_sale_block",
+            "queue_dup",
+            "queued_pullback",
+        )
+        bottleneck = max(
+            ((stage, int(data.get(stage, 0) or 0)) for stage in priority),
+            key=lambda item: item[1],
+            default=("veri_yok", 0),
+        )
+        return bottleneck if bottleneck[1] > 0 else ("veri_yok", 0)
 
     def top_gate_reason(self, date_str: str) -> tuple[str, int]:
         reasons = self.snapshot(date_str).get("gate_block_reasons", {})
@@ -341,16 +489,22 @@ class DailyFunnel:
                 return False
             closed_str = self._date_str(closed_day)
             today_str = self._date_str(today)
-            if not self.last_entry_date:
+            if not self._has_trustworthy_entry_date():
+                self.last_entry_date = None
                 migrated = self._migrate_last_entry(
                     closed_str, history_path or state_path("trade_history.json")
                 )
-                if not migrated:
-                    return False
+            else:
+                migrated = True
 
-            days = self.business_days_between(
-                self.last_entry_date, closed_str
-            )
+            if migrated:
+                days = self.business_days_between(
+                    self.last_entry_date, closed_str
+                )
+                last_entry_text = str(self.last_entry_date)
+            else:
+                days = self._observed_no_entry_days(closed_str)
+                last_entry_text = "bilinmiyor (funnel oncesi)"
             if days < int(threshold):
                 self._persist(force=True)
                 return False
@@ -358,15 +512,20 @@ class DailyFunnel:
                 self._persist(force=True)
                 return False
 
-            stage, stage_count = self.dominant_stage(closed_str)
-            gate_reason, gate_count = self.top_gate_reason(closed_str)
+            stage, stage_count = self.downstream_bottleneck(closed_str)
+            numeric_stage, numeric_count = self.numeric_dominant(closed_str)
             mode = "PAPER" if is_paper else "CANLI"
             message = (
                 f"Hesap modu: {mode} | Islemsiz is gunu: {days} | "
-                f"Son giris tarihi: {self.last_entry_date} | "
-                f"Baskin funnel asamasi: {stage} ({stage_count}) | "
-                f"En sik gate nedeni: {gate_reason} ({gate_count})"
+                f"Son giris tarihi: {last_entry_text} | "
+                f"Baskin downstream bloker: {stage} ({stage_count}) | "
+                f"Sayisal baskin asama: {numeric_stage} ({numeric_count})"
             )
+            if stage == "gate_block":
+                gate_reason, gate_count = self.top_gate_reason(closed_str)
+                message += (
+                    f" | Baskin gate nedeni: {gate_reason} ({gate_count})"
+                )
 
             # Persist the dedupe marker before delivery for at-most-once behavior
             # across process crashes and notifier exceptions.

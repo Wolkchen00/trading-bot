@@ -591,13 +591,13 @@ class StockBot:
                             continue
                         if self._sector_limit_reached(sym, config):
                             continue
-                        is_wash, _wash_reason = self.wash_sale_tracker.check_wash_sale(sym)
+                        is_wash, _wash_reason = self._check_wash_sale(sym)
                         if is_wash:
                             continue
                         if sig["signal"] == "BUY" and BOT_MODE in ("long_only", "both"):
                             q_bought = self.executor.execute_buy(sym, sig_analysis, config)
                             if q_bought:
-                                self._funnel_bump("entries")
+                                self._funnel_bump("entries", symbol=sym)
                                 self._record_trade_votes(sym, sig.get("decision") or {})
                             # Kuyruk BUY'ında opsiyon — v4.9: yalnız hisse alımı gerçekleştiyse
                             if q_bought and self._options_enabled and sig.get("confidence", 0) >= 60:
@@ -614,7 +614,7 @@ class StockBot:
                         elif sig["signal"] == "SHORT" and BOT_MODE in ("short_only", "both"):
                             q_shorted = self.short_executor.execute_short(sym, sig_analysis, config, SHORT_CONFIG)
                             if q_shorted:
-                                self._funnel_bump("entries")
+                                self._funnel_bump("entries", symbol=sym)
                                 self._record_trade_votes(sym, sig.get("decision") or {})
                             # Kuyruk SHORT'unda PUT — v4.9: yalnız short gerçekten açıldıysa
                             if q_shorted and self._options_enabled and sig.get("confidence", 0) >= 60:
@@ -681,7 +681,7 @@ class StockBot:
                     if self._sector_limit_reached(symbol, config):
                         continue
                     # Wash Sale kontrolü
-                    is_wash, wash_reason = self.wash_sale_tracker.check_wash_sale(symbol)
+                    is_wash, wash_reason = self._check_wash_sale(symbol)
                     if is_wash:
                         logger.info(f"  {symbol} WASH SALE: {wash_reason}")
                         continue
@@ -901,14 +901,29 @@ class StockBot:
     # HİSSE ANALİZİ VE İŞLEM
     # ============================================================
 
-    def _funnel_bump(self, stage: str, reason: Optional[str] = None):
+    def _funnel_bump(
+        self,
+        stage: str,
+        reason: Optional[str] = None,
+        symbol: Optional[str] = None,
+    ):
         """Best-effort telemetry hook; trading flow must never observe errors."""
         try:
             funnel = getattr(self, "funnel", None)
             if funnel is not None:
-                funnel.bump(stage, reason=reason)
+                if symbol is None:
+                    funnel.bump(stage, reason=reason)
+                else:
+                    funnel.bump(stage, reason=reason, symbol=symbol)
         except Exception as exc:
             logger.debug(f"  Funnel bump hatasi ({stage}): {exc}")
+
+    def _check_wash_sale(self, symbol: str):
+        """Mevcut wash-sale kararini degistirmeden red telemetrisi yaz."""
+        result = self.wash_sale_tracker.check_wash_sale(symbol)
+        if result[0]:
+            self._funnel_bump("wash_sale_block", symbol=symbol)
+        return result
 
     def _analyze_and_trade(self, symbol: str, config: Dict):
         """Tek bir hisseyi analiz et ve gerekirse islem yap (LONG veya SHORT).
@@ -926,7 +941,7 @@ class StockBot:
 
             # Multi-agent karar
             decision = self._get_agent_decision(symbol, analysis, config)
-            self._funnel_bump("scanned")
+            self._funnel_bump("scanned", symbol=symbol)
             signal_stage = {
                 "BUY": "signal_buy",
                 "SELL": "signal_sell",
@@ -934,7 +949,7 @@ class StockBot:
                 "HOLD": "signal_hold",
             }.get(str(decision.get("signal", "")).upper())
             if signal_stage:
-                self._funnel_bump(signal_stage)
+                self._funnel_bump(signal_stage, symbol=symbol)
 
             # 🐻 Genişlik verisi (v4.11): koordinatör ws'i BearBrain'in piyasa-
             # genişliği bileşenini besler (evrenin % kaçı bearish mutabakatta)
@@ -965,6 +980,7 @@ class StockBot:
 
             # Endeksler asla trade edilmez (sadece rejim tespiti icin)
             if _is_index:
+                self._funnel_bump("index_signal", symbol=symbol)
                 return
 
             # v4.11: Ters ETF'ler YALNIZ BearBrain'den işlem görür. Eski yol
@@ -972,6 +988,7 @@ class StockBot:
             # hiç çalışmamıştı; koordinatör oyu ETF'nin kendisi için anlamsız —
             # düşüş tezini piyasa-geneli skor verir (bear_brain.run_cycle).
             if symbol in _inverse_etfs:
+                self._funnel_bump("index_signal", symbol=symbol)
                 return
 
             # Rejim bazli guven ayarlamasi
@@ -998,12 +1015,14 @@ class StockBot:
                 decision["signal"] == "BUY"
                 and decision["confidence"] < effective_buy_conf
             ):
-                self._funnel_bump("conf_below_min")
+                self._funnel_bump("conf_below_min", symbol=symbol)
+                self._funnel_bump("conf_below_min_buy", symbol=symbol)
             elif (
                 decision["signal"] == "SHORT"
                 and decision["confidence"] < effective_short_conf
             ):
-                self._funnel_bump("conf_below_min")
+                self._funnel_bump("conf_below_min", symbol=symbol)
+                self._funnel_bump("conf_below_min_short", symbol=symbol)
 
             # === OPTIONS DEĞERLENDİRMESİ (v4.0) ===
             # Güçlü sinyalde hisse yerine opsiyon tercih et
@@ -1043,7 +1062,7 @@ class StockBot:
 
                 # Sektör rotasyonu kontrolü (VIX bazlı)
                 if not self.sector_rotator.should_buy(symbol):
-                    self._funnel_bump("sector_block")
+                    self._funnel_bump("sector_block", symbol=symbol)
                     logger.info(f"  {symbol} SEKTÖR ROTASYON BLOK: {self.sector_rotator.current_regime} rejiminde kaçınılıyor")
                     return
 
@@ -1059,13 +1078,13 @@ class StockBot:
                     if (config.get("pullback_queue_enabled", False)
                             and self._is_extended_entry(analysis)):
                         if self.signal_queue.add_signal(symbol, "BUY", analysis, decision):
-                            self._funnel_bump("queued_pullback")
+                            self._funnel_bump("queued_pullback", symbol=symbol)
                             logger.info(
                                 f"  ⏳ {symbol} girişi uzamış (RSI/BB/VWAP) — "
                                 f"pullback kuyruğuna alındı"
                             )
                         else:
-                            self._funnel_bump("queue_dup")
+                            self._funnel_bump("queue_dup", symbol=symbol)
                             logger.info(
                                 f"  ⏳ {symbol} uzamış girişi zaten pullback "
                                 "kuyruğunda — market BUY yapılmadı"
@@ -1076,7 +1095,7 @@ class StockBot:
 
                     bought = self.executor.execute_buy(symbol, analysis, config)
                     if bought:
-                        self._funnel_bump("entries")
+                        self._funnel_bump("entries", symbol=symbol)
                         # v4.10: ajan oyları yalnız GERÇEKLEŞEN işlemde kaydedilir —
                         # record_outcome kapanışta bu kaydı çözümler (meta_labeler beslenir)
                         self._record_trade_votes(symbol, decision)
@@ -1096,7 +1115,9 @@ class StockBot:
                         except Exception:
                             pass
                 else:
-                    self._funnel_bump("gate_block", reason=block_reason)
+                    self._funnel_bump(
+                        "gate_block", reason=block_reason, symbol=symbol
+                    )
                     logger.debug(f"  {symbol} GATE BLOK: {block_reason}")
                     # v4.9: "gate'den geçemese bile opsiyon dene" KALDIRILDI.
                     # R:R/earnings/rejim kapısının blokladığı işlemi kaldıraçlı
@@ -1124,7 +1145,7 @@ class StockBot:
                     analysis["reasons"].append("🐻 BEAR_MODE")
                 shorted = self.short_executor.execute_short(symbol, analysis, config, SHORT_CONFIG)
                 if shorted:
-                    self._funnel_bump("entries")
+                    self._funnel_bump("entries", symbol=symbol)
                     self._record_trade_votes(symbol, decision)
 
                 # SHORT sinyalinde PUT opsiyon da ekle — v4.9: yalnız short

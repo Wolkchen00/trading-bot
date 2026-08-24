@@ -1001,3 +1001,55 @@ esigi, K6 canli-profil mirror altyapisi (detay: `RF-PLAN-3.md` sonu).
 (saf DecisionEngine + golden event tape), EMA200 cache zehirlenmesi,
 split-duzeltmeli bar, partial sonrasi TP restorasyonu, cikis geometrisi,
 kayip serisi zaman asimi, SocialAgent/FundAgent kararlari.
+
+## v4.16.1 , Yeni olcum epoch'u + konteynerde commit SHA (2026-08-24, deploy sonrasi)
+
+**Tetik:** v4.16 deploy'u (2026-08-24 21:21 UTC) sirasinda uretimde iki sey gorundu.
+
+1. **Yeni olcum epoch'u , `MEASUREMENT_START` 2026-07-30 -> 2026-08-25.**
+   R12 SentAgent isaret duzeltmesi karar dagilimini degistirdi; PLAN v4.16 R12
+   bolumunde "deploy sonrasi yeni epoch, iki donem TOPLANMAZ" zorunlu adim olarak
+   yazilmisti. Eski donem strateji **n=0** ile kapandi (18/30 islem gunu, hic
+   strateji islemi yok), yani veri kaybi YOK. Yeni epoch deploy'dan sonraki ilk
+   islem gununde (2026-08-25) sifirdan basliyor ve 30 islem gunu tam sayilacak.
+2. **Konteynerde `git commit SHA=UNKNOWN` cikti.** Imajda `.git` yok, dolayisiyla
+   `git rev-parse` basarisiz oluyordu. Bu, R12 epoch ayrimi icin bir bosluktu:
+   **config hash TEK BASINA yetmez** , v4.16'da PAPER_AGGRESSIVE config degismedi,
+   yani hash R12 oncesi ve sonrasi AYNI. Coolify deploy edilen commit'i zaten
+   `SOURCE_COMMIT` env'iyle veriyor (uretimde dogrulandi:
+   `SOURCE_COMMIT=539643b2...`). Fallback zinciri: `git rev-parse` ->
+   `SOURCE_COMMIT` -> `BOT_COMMIT_SHA` -> `UNKNOWN`.
+
+**Testler:** 218 pytest + tam sistem 115'te 113 gecen/0 basarisiz. Uc test
+uyarlandi ve **hicbiri zayiflatilmadi** (assert sayisi 43 -> 43):
+- `test_default_since_is_frozen_measurement_start` ve baslik assert'i artik
+  tarihi HARDCODE etmiyor, `report.MEASUREMENT_START` sabitine BAGLI , gelecekteki
+  epoch degisimlerinde de dogru kalir (guclendirme).
+- Otoriter-kaynak assert'inden kosula bagli `+ backfill` soneki cikarildi:
+  `tools/olcum_backfill.json` satirlari yalniz olcum penceresine DUSUYORSA
+  eklenir ve yeni epoch'ta dusmuyorlar. Kaynak hiyerarsisinin tamami hala assert
+  ediliyor; backfill davranisinin kendi ayri testi var
+  (`test_backfill_and_broker_rejected_stop_are_authoritative`).
+
+### v4.16 DEPLOY KAYDI (2026-08-24, Ihsan onayi: "Evet, piyasa kapanisinda deploy et")
+
+- Piyasa kapanisindan **78 dk sonra** (17:18 ET Pazartesi) deploy edildi.
+- Coolify app `dlyojlxudkezk2bze3f3ypp2`, deployment `smz4h70543uxttubeyia2b1p`,
+  commit `539643b`. Durum: `finished` 21:21:38 UTC. Iki konteyner de yeniden kuruldu.
+- **Deploy oncesi canli fotograf:** equity $490.95, nakit $145.82, **tek pozisyon
+  SPY $345.13** , hicbir strateji pozisyonu YOK, yani etkilenecek acik islem yoktu.
+- **Uretimde dogrulandi:** v4.16 modulleri konteynerde; `LIVE_ENTRIES_ENABLED`
+  env YOK -> fail-closed **False** (R5 kilidi saglam); `NTFY_TOPIC` iki
+  konteynerde de SET; **0 ERROR/Traceback**; guard konteyner icinde kosuldu ve
+  `stock_long/stock_short/option/bear_etf` -> `(False, 'LIVE_LOCK_R5')`,
+  `index_parking` -> `(True, '')` (tasarim); `classify_error` kod/broker ayrimi calisiyor.
+- **Backfill:** canli **109**, paper **1017** dolum eklendi (hepsi provenance
+  `UNKNOWN`, `pnl_usd=None` , tahmin yasagi). **Idempotency uretimde kanitlandi:**
+  ikinci `--apply` 0 ekledi, 109 atladi.
+- **Backfill sonrasi olcum:** metrik-4 **FAIL -> PASS** (broker'da var/ledger'da
+  yok **45 -> 0**). GENEL: **UNKNOWN (exit 2)** , metrik 1/2/3 hala UNKNOWN cunku
+  provenance'i bilinen strateji islemi yok. **Yanlis yesil YOK.**
+
+**Kalan acik:** K1-K6 Ihsan karar maddeleri; sonraki cycle adaylari R13 (dongu
+hizi , bloklayici sleep'ler ana donguyu tasarim hizinin ~%1'ine dusurmus) ve
+R14 (backtest/canli parity harness).

@@ -70,8 +70,8 @@ def _complete_state(tmp_path, telemetry=(), alarms=(), history=()):
 
 def test_default_since_is_frozen_measurement_start():
     args = report.parse_args([])
-    assert report.MEASUREMENT_START == "2026-07-30"
-    assert args.since == "2026-07-30"
+    assert report.MEASUREMENT_START == "2026-08-25"
+    assert args.since == report.MEASUREMENT_START
     assert report.parse_args(["--since", "2026-08-01"]).since == "2026-08-01"
 
 
@@ -286,9 +286,13 @@ def test_main_clients_are_mocked_and_no_order_mutation_api_is_used(
         "--state-dir", str(state_dir), "--log-dir", str(tmp_path / "missing-logs")
     ]) == 2
     output = capsys.readouterr().out
-    assert "Olcum donemi (UTC): 2026-07-30" in output
+    assert f"Olcum donemi (UTC): {report.MEASUREMENT_START}" in output
     assert "[PASS] 4 kayit/stop butunlugu" in output
-    assert "kaynak=broker filled orders + R9 fill ledger + persistent state + backfill" in output
+    # Otoriter kaynak hiyerarsisi HER KOSUMDA basilir. "+ backfill" soneki
+    # kosula baglidir: tools/olcum_backfill.json satirlari yalniz olcum
+    # penceresine DUSUYORSA eklenir (yeni epoch'ta dusmuyorlar). Backfill
+    # davranisinin kendi testi var: test_backfill_and_broker_rejected_stop_are_authoritative
+    assert "kaynak=broker filled orders + R9 fill ledger + persistent state" in output
 
 
 def test_broker_closed_orders_failure_makes_metric4_unknown(

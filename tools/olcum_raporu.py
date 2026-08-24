@@ -46,7 +46,10 @@ from config import PAPER_AGGRESSIVE_CONFIG, STOCK_CONFIG
 from core import fill_ledger, order_journal
 
 
-MEASUREMENT_START = "2026-07-30"
+# R12 (SentAgent isaret duzeltmesi) karar dagilimini degistirdi; olcum epoch'u
+# 2026-08-24 21:21 UTC deploy'undan sonraki ILK islem gununde SIFIRDAN baslar.
+# Eski donem (2026-07-30..08-24) strateji n=0 ile kapandi; iki donem TOPLANMAZ.
+MEASUREMENT_START = "2026-08-25"
 ET = ZoneInfo("America/New_York")
 EXIT_ACTIONS = {"SELL", "COVER"}
 # Yalniz immutable backfill kapsamasinin bitisini dogrular. Metrik-2'nin gercek
@@ -1186,6 +1189,15 @@ def measured_profile() -> ProfileInfo:
         git_sha = completed.stdout.strip() or "UNKNOWN"
     except (OSError, subprocess.SubprocessError):
         git_sha = "UNKNOWN"
+    if git_sha == "UNKNOWN":
+        # Konteynerde .git yoktur; Coolify deploy edilen commit'i SOURCE_COMMIT
+        # olarak enjekte eder. Profil parmak izi epoch ayrimi icin sart:
+        # config hash TEK BASINA yetmez (v4.16'da paper config degismedi).
+        git_sha = (
+            os.environ.get("SOURCE_COMMIT")
+            or os.environ.get("BOT_COMMIT_SHA")
+            or "UNKNOWN"
+        ).strip() or "UNKNOWN"
     return ProfileInfo(
         name="PAPER_AGGRESSIVE",
         is_live=False,

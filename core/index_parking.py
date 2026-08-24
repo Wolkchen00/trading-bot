@@ -26,6 +26,7 @@ from alpaca.trading.requests import ClosePositionRequest, MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from config import TRADING_MODE, state_path
+from core.risk_guard import can_open_new_risk
 from utils.logger import logger
 
 
@@ -34,6 +35,7 @@ class IndexParkingManager:
 
     def __init__(self, bot, config):
         self.bot = bot
+        self.config = config
         self.symbol = config.get("index_parking_symbol", "SPY")
         self.reserve_pct = float(config.get("index_parking_reserve_pct", 0.30))
         self.min_trade = float(config.get("index_parking_min_trade_usd", 50))
@@ -205,6 +207,17 @@ class IndexParkingManager:
     def _buy(self, notional: float):
         """Notional (dolar) market BUY — fazla nakdi beta'ya."""
         try:
+            allowed, block_reason = can_open_new_risk(
+                self.bot,
+                self.config,
+                kind="index_parking",
+                symbol=self.symbol,
+            )
+            if not allowed:
+                logger.info(
+                    f"  PARK BUY {self.symbol} yeni risk engeli: {block_reason}"
+                )
+                return
             req = MarketOrderRequest(
                 symbol=self.symbol, notional=notional,
                 side=OrderSide.BUY, time_in_force=TimeInForce.DAY,

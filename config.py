@@ -446,7 +446,7 @@ STOCK_CONFIG = {
     # %5: sabit $250 boyutta 2 tam stop (~%4.1 equity) normal strateji akışıdır,
     # %3'te kill bunu keserdi. %5 yine günü ~$24 kayıpla sert keser ($487 hesap).
     "max_daily_loss_pct": 0.05,             # Sert kill: gün -%5 → TÜM pozisyonları kapat
-    "max_consecutive_errors": 3,            # 3 ardışık API hatası → kill (önceki 5; de-risk)
+    "max_consecutive_errors": 3,            # 3 ardışık hata → yeni risk halt + alarm
 
     # === ZAMANLAMA SABİTLERİ ===
     "error_retry_sleep": 30,

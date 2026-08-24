@@ -20,6 +20,7 @@ from core.protection import (
     ProtectionOutcome,
     protection_alarm,
 )
+from core.risk_guard import can_open_new_risk
 from utils.logger import logger
 
 
@@ -135,26 +136,19 @@ class OrderExecutor:
         """Hisse alım emri ,  PDT-aware, fractional shares destekli."""
         bot = self.bot
         try:
-            # I-13 / R5 kilidi: canlı hesapta YENİ giriş, ölçüm kapısı 4/4 PASS
-            # + İhsan onayıyla açılana dek kapalı (fail-closed: anahtar yoksa da
-            # kilitli). Yalnız girişleri keser; mevcut pozisyonların çıkış /
-            # koruma / mutabakat akışları etkilenmez, paper'a dokunmaz.
-            try:
-                from config import TRADING_MODE
-                default_paper = TRADING_MODE != "live"
-            except Exception:
-                default_paper = True
-            is_live = not bool(getattr(bot, "is_paper", default_paper))
-            if is_live and not config.get("live_entries_enabled", False):
-                logger.info(
-                    f"  {symbol} canlı alım R5 kilidiyle atlandı "
-                    f"(live_entries_enabled=False)"
-                )
-                try:
-                    if hasattr(bot, "_funnel_bump"):
-                        bot._funnel_bump("gate_block", reason="LIVE_LOCK_R5")
-                except Exception:
-                    pass  # telemetri kilit kararını asla değiştiremez
+            allowed, block_reason = can_open_new_risk(
+                bot, config, kind="stock_long", symbol=symbol
+            )
+            if not allowed:
+                if block_reason == "LIVE_LOCK_R5":
+                    logger.info(
+                        f"  {symbol} canlı alım R5 kilidiyle atlandı "
+                        f"(live_entries_enabled=False)"
+                    )
+                else:
+                    logger.info(
+                        f"  {symbol} yeni risk girişi engellendi: {block_reason}"
+                    )
                 return False
 
             account = bot.client.get_account()

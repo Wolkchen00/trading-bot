@@ -62,6 +62,7 @@ from core.social_sentiment import SocialSentimentAnalyzer
 from core.fundamental_analyzer import FundamentalAnalyzer
 from core.macro_data import MacroDataAnalyzer
 from core.kill_switch import KillSwitch
+from core.risk_guard import classify_error
 from core.compliance import WashSaleTracker
 from core.notifier import TelegramNotifier
 from core.performance_tracker import PerformanceTracker
@@ -243,7 +244,7 @@ class StockBot:
 
         # KillSwitch — acil durum koruması
         self.kill_switch = KillSwitch(
-            max_consecutive_errors=config.get("max_consecutive_errors", 5),
+            max_consecutive_errors=config.get("max_consecutive_errors", 3),
             max_daily_loss_pct=config.get("max_daily_loss_pct", 0.03),
         )
         self.kill_switch.set_callback(self._emergency_close_all)
@@ -398,6 +399,17 @@ class StockBot:
             logger.error(f"  Ana dongu kritik alarm publisher hatasi: {notify_exc}")
             return False
 
+    def _reset_main_loop_error_counts(self):
+        """Başarıyla tamamlanan ana döngü turunun iki hata sayacını temizle."""
+        if getattr(self.kill_switch, "risk_halted", False):
+            logger.warning(
+                "⚠️ YENİ RİSK HALT TEMİZLENDİ: "
+                f"sebep={getattr(self.kill_switch, 'risk_halt_reason', '') or 'bilinmiyor'} | "
+                f"hata_sayısı={getattr(self.kill_switch, 'consecutive_errors', 0)}"
+            )
+        self.consecutive_errors = 0
+        self.kill_switch.reset_error_count()
+
     def run(self):
         """Ana trading döngüsü."""
         config = STOCK_CONFIG
@@ -456,12 +468,14 @@ class StockBot:
                     wait_secs = min(self.market_hours.seconds_until_open(), 300)
                     if self._heartbeat_counter % 60 == 0:
                         logger.info(f"  Piyasa kapalı ({market_status['reason']}) — {wait_secs//60}dk bekleniyor")
+                    self._reset_main_loop_error_counts()
                     time.sleep(min(wait_secs, 60))
                     continue
 
                 # Pre-market → sabah taraması
                 if market_status["status"] == "PRE_MARKET":
                     self._do_morning_scan()
+                    self._reset_main_loop_error_counts()
                     time.sleep(30)
                     continue
 
@@ -480,6 +494,7 @@ class StockBot:
                             self.options_manager.manage_positions(OPTIONS_CONFIG)
                         except Exception as e:
                             logger.debug(f"  AH Options yonetim hatasi: {e}")
+                    self._reset_main_loop_error_counts()
                     time.sleep(30)
                     continue
 
@@ -491,7 +506,6 @@ class StockBot:
                     self.equity = float(account.equity)
                     if self.kill_switch.check_daily_loss(self.equity, self.initial_equity):
                         continue  # Kill tetiklendi, döngü başına dön
-                    self.kill_switch.reset_error_count()
                 except Exception as e:
                     if self.kill_switch.check_api_error(e):
                         continue
@@ -619,6 +633,7 @@ class StockBot:
 
                 # Guvenli bolge kontrolu
                 if not market_status["is_safe_zone"]:
+                    self._reset_main_loop_error_counts()
                     time.sleep(10)
                     continue
 
@@ -627,6 +642,7 @@ class StockBot:
                 max_positions = config.get("max_open_positions", 3)
 
                 if open_count >= max_positions:
+                    self._reset_main_loop_error_counts()
                     time.sleep(config.get("scan_interval_seconds", 30))
                     continue
 
@@ -645,6 +661,7 @@ class StockBot:
                             f"  🚨 JEOPOLİTİK KRİTİK! Skor: {geo_score} | "
                             f"Yeni alım ENGELLENDİ. Mevcut pozisyonlar korunuyor."
                         )
+                        self._reset_main_loop_error_counts()
                         time.sleep(config.get("scan_interval_seconds", 30))
                         continue  # Yeni alım yapma, sadece pozisyon yönet
                     elif geo_level == "HIGH":
@@ -685,6 +702,9 @@ class StockBot:
                 
                 # Her döngü sonunda metadata kaydet ki bot çökerse state (partial_sold vs) kaybolmasın
                 self._save_position_metadata()
+
+                # Yalnız eksiksiz tamamlanan tur hata/risk-halt sayaçlarını temizler.
+                self._reset_main_loop_error_counts()
                 
                 time.sleep(interval)
 
@@ -693,11 +713,12 @@ class StockBot:
                 self._save_position_metadata()
                 break
             except Exception as e:
+                error_kind = classify_error(e)
                 self.consecutive_errors += 1
-                logger.error(f"Ana döngü hatası: {e}")
-                if self.kill_switch.check_api_error(e):
-                    continue
-                if self.consecutive_errors >= config.get("max_consecutive_errors", 5):
+                error_label = "kod" if error_kind == "code" else "broker/API"
+                logger.error(f"Ana döngü {error_label} hatası: {e}")
+                self.kill_switch.check_api_error(e, error_kind=error_kind)
+                if self.consecutive_errors >= config.get("max_consecutive_errors", 3):
                     self._notify_main_loop_consecutive_error(
                         self.consecutive_errors, e
                     )

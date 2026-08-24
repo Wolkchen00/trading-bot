@@ -3,15 +3,17 @@ Kill Switch - Acil durum güvenlik modülü.
 Felaket senaryolarında botu otomatik durdurup tüm pozisyonları kapatır.
 
 Tetikleyiciler:
-1. Ardışık API hataları (3+)
-2. Günlük kayıp limiti aşımı (%5)
-3. Beklenmedik büyük pozisyon değer düşüşü
-4. Manuel tetikleme (kullanıcı)
+1. Günlük kayıp limiti aşımı (%5)
+2. Manuel tetikleme (kullanıcı)
+
+Ardışık broker/kod hataları tasfiye tetiklemez; yalnız yeni risk girişini
+``risk_halted`` durumuyla durdurur ve alarm üretir.
 """
 import os
 import json
 from datetime import datetime
 from typing import Optional, Callable
+from core.risk_guard import classify_error
 from utils.logger import logger
 
 
@@ -36,6 +38,8 @@ class KillSwitch:
         self.consecutive_errors = 0
         self.is_killed = False
         self.kill_reason = ""
+        self.risk_halted = False
+        self.risk_halt_reason = ""
         self.on_kill_callback: Optional[Callable] = None
 
         # Önceki kill durumunu kontrol et
@@ -81,29 +85,43 @@ class KillSwitch:
             f"Max kayıp: {max_daily_loss_pct:.0%}"
         )
 
-    def check_api_error(self, error: Exception) -> bool:
+    def check_api_error(
+        self,
+        error: Exception,
+        error_kind: Optional[str] = None,
+    ) -> bool:
         """
-        API hatasını kaydeder. Ardışık hata limiti aşılırsa kill tetikler.
-        Returns: True = kill tetiklendi
+        Broker/kod hatasını kaydeder. Eşikte yalnız yeni risk durdurulur.
+        Returns: True = yeni-risk halt durumu aktif
         """
+        error_kind = error_kind or classify_error(error)
         self.consecutive_errors += 1
-        logger.warning(
-            f"⚠️ API Hatası ({self.consecutive_errors}/{self.max_consecutive_errors}): "
+        label = "KOD" if error_kind == "code" else "BROKER/API"
+        log_error = logger.error if error_kind == "code" else logger.warning
+        log_error(
+            f"⚠️ {label} Hatası "
+            f"({self.consecutive_errors}/{self.max_consecutive_errors}): "
             f"{str(error)[:100]}"
         )
 
         if self.consecutive_errors >= self.max_consecutive_errors:
-            self._trigger_kill(
-                f"Ardışık {self.consecutive_errors} API hatası! "
+            self.risk_halted = True
+            self.risk_halt_reason = (
+                f"Ardışık {self.consecutive_errors} {label} hatası! "
                 f"Son hata: {str(error)[:200]}"
+            )
+            logger.error(
+                f"🚨 YENİ RİSK DURDURULDU: {self.risk_halt_reason} "
+                "Mevcut pozisyonlar tasfiye edilmeyecek."
             )
             return True
         return False
 
     def reset_error_count(self):
-        """Başarılı API çağrısı sonrası hata sayacını sıfırlar."""
-        if self.consecutive_errors > 0:
-            self.consecutive_errors = 0
+        """Başarılı ana döngü turu sonrası hata ve risk-halt durumunu sıfırla."""
+        self.consecutive_errors = 0
+        self.risk_halted = False
+        self.risk_halt_reason = ""
 
     def check_daily_loss(self, equity: float, starting_equity: float) -> bool:
         """
@@ -169,6 +187,8 @@ class KillSwitch:
         self.is_killed = False
         self.kill_reason = ""
         self.consecutive_errors = 0
+        self.risk_halted = False
+        self.risk_halt_reason = ""
         if os.path.exists(self.kill_file):
             os.remove(self.kill_file)
         logger.info("✅ Kill switch sıfırlandı")

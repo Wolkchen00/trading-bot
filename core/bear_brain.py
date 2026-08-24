@@ -34,6 +34,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from config import state_path
+from core.risk_guard import can_open_new_risk
 from utils.logger import logger
 
 
@@ -505,6 +506,13 @@ class BearBrain:
         if symbol is None:
             return
         bot = self.bot
+
+        allowed, block_reason = can_open_new_risk(
+            bot, config, kind="bear_etf", symbol=symbol
+        )
+        if not allowed:
+            logger.info(f"  BearBrain {symbol} yeni risk engeli: {block_reason}")
+            return
 
         # Bayatlık kapısı: giriş için skor BU SÜREÇTE ve son 3 saatte ölçülmüş
         # olmalı (SPY/VIX verisi çekilemiyorsa restore edilmiş eski modla yeni

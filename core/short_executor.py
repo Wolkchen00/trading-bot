@@ -16,6 +16,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from core.streak import update_loss_streak
 from core.protection import protection_alarm
+from core.risk_guard import can_open_new_risk
 from utils.logger import logger
 
 
@@ -36,6 +37,13 @@ class ShortExecutor:
         """
         bot = self.bot
         try:
+            allowed, block_reason = can_open_new_risk(
+                bot, config, kind="stock_short", symbol=symbol
+            )
+            if not allowed:
+                logger.info(f"  {symbol} SHORT yeni risk engeli: {block_reason}")
+                return False
+
             account = bot.client.get_account()
             equity = float(account.equity)
 

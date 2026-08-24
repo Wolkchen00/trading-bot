@@ -681,3 +681,54 @@ ucuz hissede bracket'i GECIRIR , yani gercek pozisyon tesadufen ACILABILIRDI.
 **Testler:** `tests/test_live_entry_lock.py` (6 test: kilit/fail-closed/acik-gecis/
 paper-muaf/telemetri-zirhi/config-anahtari) + `test_protection_invariant.py`'daki
 canli-fallback testi kilit-acik senaryoya tasindi. 138 pytest + tam sistem yesil.
+
+## v4.16 , R8 guvenlik invarianti (2026-08-24, /codex Clarity Break; Ihsan: "donmus, once bunu duzelt + butun kodlara bak + plan olustur")
+
+**Tetik:** Canli hesap 17 islem gununde 0 giris. 7 boyutlu kod denetimi 94 bulgu
+cikardi (`RF-ISSUES-3.md`); plan `RF-PLAN-3.md`, 3 turlu Codex Same Page Meeting
+(gpt-5.6-sol/xhigh) VERDICT: SAME PAGE, log `RF-SAME-PAGE-LOG-3.md`.
+
+**Teshis , donma tek sebepli DEGIL, alti kilit ust uste:** (1) `min_confidence_score=50`,
+(2) `LOSS_STREAK_WARN` cikissiz kisir dongu, (3) EMA200 kapisi tarayiciyla ters yon,
+(4) MTF canli/paper ayrisimi, (5) `live_entries_enabled=False` (KASITLI), (6) kesirli
+adet + broker bracket reddi. **Karar: 5 numarali kasitli kilit kapali oldugu surece
+digerlerinin canliya marjinal etkisi SIFIR. Bu cycle kilit ACMAZ; kilidin acilip
+acilmayacagina karar verecek DURUST olcumu kurar.**
+
+**R8 (bu commit):**
+1. **Merkezi `core/risk_guard.py`:** `can_open_new_risk(bot, config, kind, symbol)`.
+   Bes risk-acan yol da cagiriyor: `executor.execute_buy` (stock_long),
+   `short_executor.execute_short`, `options_executor._execute_option`,
+   `bear_brain` ters-ETF girisi, `index_parking._buy`. Fail-closed: bilinmeyen
+   `kind`, bozuk config, guard-ici istisna -> RED. Broker'a TEK cagri yapilmadan
+   karar verilir. Telemetri hatasi kilit kararini DEGISTIREMEZ.
+   **Parking R5'ten muaf** (strateji girisi degil, savunma nakit parki) ama
+   kill/risk-halt kapilarina TABI. `live_entries_enabled` anahtari config'te yoksa
+   `STOCK_CONFIG`'ten okunur (tek kaynak), o da yoksa RED.
+2. **Kill switch yetkisi daraltildi:** ardisik hata artik `_trigger_kill` CAGIRMIYOR;
+   yeni `risk_halted` durumu kuruyor (yalniz yeni risk durur, pozisyonlar tasfiye
+   EDILMEZ) + alarm. Otomatik `close_all_positions` yalniz `check_daily_loss` ve
+   `manual_kill` yollarindan gelir. **Bir KOD hatasi artik portfoyu likide edemez.**
+3. **Hata siniflandirmasi:** `classify_error()` , AttributeError/TypeError/KeyError/
+   NameError/IndexError/ZeroDivisionError/ImportError/UnboundLocalError = "code",
+   digerleri "broker". Kod hatasi ERROR seviyesinde loglanir.
+4. **Sayac dogrulugu:** yalniz EKSIKSIZ tamamlanan ana dongu turu iki sayaci da
+   sifirlar; aktif bir halt temizlenirken sebep + hata sayisi WARNING'le gorunur
+   olur (sessiz temizlik yok). Kod-ici `max_consecutive_errors` varsayilani 5 -> 3
+   (config'in gercek degeriyle tutarli; CONFIG DEGERI DEGISMEDI).
+5. **`test_full_system.py` sahte-yesil onarimi:** "ALPACA API BAGLANTISI" bolumu
+   varsayilan CEVRIMDISI ve adlari buna gore ("istemci yuzeyi"); gercek salt-okunur
+   kontrol `FULL_SYSTEM_ALLOW_BROKER=1` ile opt-in. Sebep: bolum sahte istemciye
+   gecince kimlik bilgisi bozuk olsa bile GECIYORDU , "115 test gecti" yaniltiyordu.
+
+**Testler:** pytest 138 -> **161** (+23 R8) + tam sistem 115'te 113 gecen/0 basarisiz
++ Claude bagimsiz dusmanca test 48 iddia (eksik config anahtari, kill_switch'siz bot,
+patlayan telemetri, bilinmeyen kind, bozuk config, halt-reset dongusu, kod hatasinda
+tasfiye YASAGI, gunluk zararda tasfiye YETKISININ DURDUGU). Tum kanitlar Claude
+tarafindan bagimsiz kosuldu.
+
+**Ihsan karar maddeleri (K1-K6):** RF-PLAN-3.md sonunda , strateji devam/yeniden-insa,
+canli sermaye/parking orani, cikis geometrisi, ajan mimarisi, kill esigi, canli-profil
+mirror altyapisi.
+
+**DEPLOY EDILMEDI, PUSH EDILMEDI.** Deploy Ihsan kapili ve piyasa kapaliyken.

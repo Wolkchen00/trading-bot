@@ -6,7 +6,7 @@ Test Kategorileri:
   1. Python bağımlılıkları (tüm pip paketleri import edilebilir mi?)
   2. Config ve env dosya doğruluğu
   3. Tüm core modül import'ları
-  4. Alpaca API bağlantısı (paper hesap)
+  4. Alpaca istemci yüzeyi (çevrimdışı varsayılan, gerçek salt-okunur opt-in)
   5. Teknik analiz zinciri
   6. Agent Coordinator karar sistemi
   7. Risk yönetimi modülleri
@@ -22,6 +22,89 @@ import sys
 import tempfile
 import traceback
 from datetime import datetime, date, timedelta
+from types import SimpleNamespace
+
+# PowerShell/Codex gibi stdout'u pipe eden Windows kosuculari cp1252 secebilir;
+# Turkce test adlari o durumda testi davranistan bagimsiz olarak dusurmesin.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+
+class _OfflineTradingClient:
+    """Full-system harness'inde gercek broker agina cikmayan Alpaca spy'i."""
+
+    def __init__(self, *args, **kwargs):
+        self.paper = kwargs.get("paper", True)
+
+    def get_account(self):
+        return SimpleNamespace(
+            equity="10000",
+            cash="10000",
+            last_equity="10000",
+            buying_power="10000",
+            portfolio_value="10000",
+            regt_buying_power="10000",
+            daytrading_buying_power="10000",
+            status="ACTIVE",
+            pattern_day_trader=False,
+            daytrade_count=0,
+        )
+
+    def get_all_positions(self):
+        return []
+
+    def get_orders(self, *args, **kwargs):
+        return []
+
+    def get_clock(self):
+        return SimpleNamespace(is_open=False, next_open=None, next_close=None)
+
+    def get_calendar(self, *args, **kwargs):
+        return []
+
+
+class _OfflineStockHistoricalDataClient:
+    """Deterministik bar verisi donduren, agsiz veri istemcisi."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def get_stock_bars(self, request):
+        import pandas as pd
+        return SimpleNamespace(df=pd.DataFrame({"close": [100.0, 101.0, 102.0]}))
+
+
+_FULL_SYSTEM_ALLOW_BROKER = os.getenv("FULL_SYSTEM_ALLOW_BROKER", "") == "1"
+_ALPACA_MODE_LABEL = (
+    "gerçek salt-okunur" if _FULL_SYSTEM_ALLOW_BROKER else "çevrimdışı"
+)
+
+
+def _full_system_trading_client():
+    if not _FULL_SYSTEM_ALLOW_BROKER:
+        return _OfflineTradingClient(paper=True), True
+    from alpaca.trading.client import TradingClient
+    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, TRADING_MODE
+
+    is_paper = TRADING_MODE != "live"
+    return (
+        TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=is_paper),
+        is_paper,
+    )
+
+
+def _full_system_data_client():
+    if not _FULL_SYSTEM_ALLOW_BROKER:
+        return _OfflineStockHistoricalDataClient()
+    from alpaca.data.historical import StockHistoricalDataClient
+    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY
+
+    return StockHistoricalDataClient(
+        api_key=ALPACA_API_KEY,
+        secret_key=ALPACA_SECRET_KEY,
+    )
 
 # İZOLASYON (v4.12.2): bu dosya import anında koşar ve config/logger üzerinden
 # GERÇEK state/log dosyalarına yazabilir (11-13 Tem: kurtarılmış 145KB
@@ -281,31 +364,24 @@ test("utils.logger", test_logger)
 
 
 # ============================================================
-# 4. ALPACA API BAĞLANTISI
+# 4. ALPACA İSTEMCİ YÜZEYİ
 # ============================================================
-section("4. ALPACA API BAĞLANTISI")
+section("4. ALPACA İSTEMCİ YÜZEYİ")
+print(f"     Alpaca test modu: {_ALPACA_MODE_LABEL}")
 
-def test_paper_connection():
-    from alpaca.trading.client import TradingClient
-    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, TRADING_MODE
-    # Her zaman paper hesapla test et (güvenlik)
-    is_paper = TRADING_MODE != "live"
-    client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=is_paper)
+def test_account_surface():
+    client, is_paper = _full_system_trading_client()
     account = client.get_account()
     equity = float(account.equity)
     cash = float(account.cash)
     assert equity > 0, f"Hesap bakiyesi $0!"
     print(f"     Equity: ${equity:,.2f} | Cash: ${cash:,.2f} | Paper: {is_paper}")
-test("Alpaca hesap bağlantısı", test_paper_connection)
+test(f"Alpaca hesap yüzeyi ({_ALPACA_MODE_LABEL})", test_account_surface)
 
 def test_data_client():
-    from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
-    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY
-    client = StockHistoricalDataClient(
-        api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY
-    )
+    client = _full_system_data_client()
     request = StockBarsRequest(
         symbol_or_symbols="AAPL",
         timeframe=TimeFrame.Hour,
@@ -315,30 +391,24 @@ def test_data_client():
     df = bars.df
     assert not df.empty, "AAPL bar verisi boş!"
     print(f"     AAPL bars: {len(df)} satır, son fiyat: ${float(df['close'].iloc[-1]):,.2f}")
-test("Alpaca veri bağlantısı (AAPL)", test_data_client)
+test(f"Alpaca veri yüzeyi ({_ALPACA_MODE_LABEL})", test_data_client)
 
 def test_positions():
-    from alpaca.trading.client import TradingClient
-    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, TRADING_MODE
-    is_paper = TRADING_MODE != "live"
-    client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=is_paper)
+    client, _is_paper = _full_system_trading_client()
     positions = client.get_all_positions()
     print(f"     Açık pozisyon: {len(positions)}")
     for pos in positions[:5]:
         pnl = float(pos.unrealized_pl)
         print(f"       {pos.symbol}: {float(pos.qty):.4f} @ ${float(pos.avg_entry_price):,.2f} | P&L: ${pnl:+.2f}")
-test("Alpaca açık pozisyonlar", test_positions)
+test(f"Alpaca pozisyon yüzeyi ({_ALPACA_MODE_LABEL})", test_positions)
 
 def test_orders():
-    from alpaca.trading.client import TradingClient
     from alpaca.trading.requests import GetOrdersRequest
     from alpaca.trading.enums import QueryOrderStatus
-    from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, TRADING_MODE
-    is_paper = TRADING_MODE != "live"
-    client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=is_paper)
+    client, _is_paper = _full_system_trading_client()
     orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
     print(f"     Açık emir: {len(orders)}")
-test("Alpaca açık emirler", test_orders)
+test(f"Alpaca emir yüzeyi ({_ALPACA_MODE_LABEL})", test_orders)
 
 
 # ============================================================
@@ -447,12 +517,13 @@ def test_kill_switch():
     ks = KillSwitch(max_consecutive_errors=3, max_daily_loss_pct=0.05, kill_file=_kill_path)
     assert not ks.is_active, "KillSwitch başlangıçta aktif olmamalı"
     
-    # API hatası simülasyonu
+    # R8: API/kod hatası tasfiye etmez; yalnız yeni risk girişini durdurur.
     ks.check_api_error(Exception("timeout"))
     ks.check_api_error(Exception("timeout"))
     assert not ks.is_active, "2 hata ile aktif olmamalı"
     ks.check_api_error(Exception("timeout"))
-    assert ks.is_active, "3 hata ile aktif olmalı!"
+    assert not ks.is_active, "3 API hatası kill/tasfiye tetiklememeli"
+    assert ks.risk_halted, "3 API hatası yeni riski durdurmalı"
     
     ks.reset()
     assert not ks.is_active, "Reset sonrası hala aktif"
@@ -639,8 +710,12 @@ def test_bot_init():
     PositionManager.ensure_protective_stops = (
         lambda self, config: ProtectionSummary()
     )
+    from unittest.mock import patch
     try:
-        bot = StockBot()
+        with patch("stock_bot.TradingClient", _OfflineTradingClient), patch(
+            "stock_bot.StockHistoricalDataClient", _OfflineStockHistoricalDataClient
+        ):
+            bot = StockBot()
     finally:
         PositionManager.ensure_protective_stops = _orig_reconcile
 
@@ -1647,7 +1722,7 @@ def test_v4112_exposure_headroom():
     bb.enabled = True; bb.is_paper = False
     bb.mode = "ATTACK"; bb.score = 80.0; bb._last_update = _dt.now()
     bb._state = {"last_entry_ts": "", "entries": {}}
-    bb._maybe_enter({"min_trade_value": 10})
+    bb._maybe_enter({"min_trade_value": 10, "live_entries_enabled": True})
     assert buys and buys[0][0] == "SQQQ", f"ATTACK girişi yapılmadı: {buys}"
     assert abs(buys[0][1]["max_position_usd"] - 150.0) < 1e-9, \
         f"Tam boyut $150 olmalıydı: {buys[0][1]['max_position_usd']}"
@@ -1659,7 +1734,7 @@ def test_v4112_exposure_headroom():
     bb2.enabled = True; bb2.is_paper = False
     bb2.mode = "ATTACK"; bb2.score = 80.0; bb2._last_update = _dt.now()
     bb2._state = {"last_entry_ts": "", "entries": {}}
-    bb2._maybe_enter({"min_trade_value": 10})
+    bb2._maybe_enter({"min_trade_value": 10, "live_entries_enabled": True})
     assert buys2, "Tavan-üstü hedef girişi tamamen blokladı (kırpmalıydı)!"
     got = buys2[0][1]["max_position_usd"]
     assert abs(got - 420.0 * 0.35) < 0.01, f"Kırpılmış boyut yanlış: {got}"

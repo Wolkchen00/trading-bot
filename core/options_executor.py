@@ -16,6 +16,7 @@ from typing import Dict, Optional
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
+from core.risk_guard import can_open_new_risk
 from utils.logger import logger
 
 
@@ -65,6 +66,13 @@ class OptionsExecutor:
             underlying = option_info["underlying"]
             strike = option_info["strike"]
             expiry = option_info["expiry"]
+
+            allowed, block_reason = can_open_new_risk(
+                self.bot, config, kind="option", symbol=underlying
+            )
+            if not allowed:
+                logger.info(f"  {underlying} OPT yeni risk engeli: {block_reason}")
+                return False
 
             # === KONTROLLER ===
 

@@ -383,3 +383,25 @@ def test_existing_empty_ledger_does_not_print_backfill_remedy(tmp_path):
 
     assert metric.status is report.Status.FAIL
     assert report.MISSING_LEDGER_REMEDY not in metric.detail
+
+
+def test_future_epoch_is_not_ready_and_makes_no_broker_calls(monkeypatch, capsys):
+    """v4.16.1: epoch GELECEKTE ise ters pencere olusur ve broker
+    'end should not be before start' der. Bu ariza degil; arac NOT_READY
+    demeli ve broker'a HIC dokunmamali."""
+    from datetime import date as _date, timedelta as _td
+
+    class ExplodingClient:
+        def __init__(self, *a, **k):
+            raise AssertionError("gelecek epoch'ta broker'a cagri YAPILMAMALI")
+
+    monkeypatch.setattr(report, "TradingClient", ExplodingClient)
+    monkeypatch.setattr(report, "StockHistoricalDataClient", ExplodingClient)
+
+    yarin = (_date.today() + _td(days=5)).isoformat()
+    code = report.main(["--since", yarin])
+
+    assert code == report.EXIT_CODES[report.Status.NOT_READY]
+    assert code != 0, "gelecek epoch ASLA basarili (0) donmemeli"
+    out = capsys.readouterr().out
+    assert "NOT_READY" in out and yarin in out

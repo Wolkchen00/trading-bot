@@ -1392,6 +1392,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     since = datetime.combine(since_day, time.min, ET).astimezone(timezone.utc)
 
+    # Olcum epoch'u GELECEKTE ise (ornek: R12 gibi bir davranis degisikliginden
+    # sonra epoch ertesi is gunune alinir) pencere ters doner ve broker cagrilari
+    # "end should not be before start" hatasi verir. Bu bir ariza DEGILDIR;
+    # net soyle, uc API hatasi basma.
+    if since_day > datetime.now(ET).date():
+        print(
+            f"NOT_READY: olcum epoch'u {since_day.isoformat()} tarihinde BASLIYOR, "
+            f"bugun {datetime.now(ET).date().isoformat()} (ET). Henuz olculecek "
+            "gun yok; rapor ilk islem gununden itibaren anlamlidir."
+        )
+        return EXIT_CODES[Status.NOT_READY]
+
     key = os.getenv("ALPACA_PAPER_API_KEY")
     secret = os.getenv("ALPACA_PAPER_SECRET_KEY")
     if not key or not secret:

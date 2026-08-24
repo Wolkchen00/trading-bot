@@ -282,11 +282,15 @@ def test_main_clients_are_mocked_and_no_order_mutation_api_is_used(
     monkeypatch.setenv("ALPACA_PAPER_API_KEY", "test-key")
     monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "test-secret")
 
+    # Bu test metrik-4 davranisini sinar, epoch zamanlamasini DEGIL. Varsayilan
+    # MEASUREMENT_START gelecekte oldugunda (v4.16.1 epoch gecisi) gelecek-epoch
+    # korumasi devreye girer; o davranisin kendi testi test_r10_olcum.py'de.
     assert report.main([
+        "--since", "2026-07-30",
         "--state-dir", str(state_dir), "--log-dir", str(tmp_path / "missing-logs")
     ]) == 2
     output = capsys.readouterr().out
-    assert f"Olcum donemi (UTC): {report.MEASUREMENT_START}" in output
+    assert "Olcum donemi (UTC): 2026-07-30" in output
     assert "[PASS] 4 kayit/stop butunlugu" in output
     # Otoriter kaynak hiyerarsisi HER KOSUMDA basilir. "+ backfill" soneki
     # kosula baglidir: tools/olcum_backfill.json satirlari yalniz olcum
@@ -314,7 +318,11 @@ def test_broker_closed_orders_failure_makes_metric4_unknown(
     monkeypatch.setenv("ALPACA_PAPER_API_KEY", "test-key")
     monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "test-secret")
 
+    # Bu test metrik-4 davranisini sinar, epoch zamanlamasini DEGIL. Varsayilan
+    # MEASUREMENT_START gelecekte oldugunda (v4.16.1 epoch gecisi) gelecek-epoch
+    # korumasi devreye girer; o davranisin kendi testi test_r10_olcum.py'de.
     assert report.main([
+        "--since", "2026-07-30",
         "--state-dir", str(state_dir), "--log-dir", str(tmp_path / "missing-logs")
     ]) == 2
     captured = capsys.readouterr()

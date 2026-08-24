@@ -318,12 +318,16 @@ class FinBERTAnalyzer:
     def analyze(self, text: str) -> Dict:
         """
         Metni analiz et — ONNX FinBERT veya VADER ile.
+
+        ``score`` işaretli duygu skorudur: negatif duygu negatif, pozitif duygu
+        pozitif değer taşır; 0 nötrdür. ``confidence`` ise işaretsiz model
+        güvenidir (FinBERT için ``raw_score``).
         
         Returns:
             {
                 'label': 'positive' | 'negative' | 'neutral',
-                'score': float (-1.0 to 1.0),
-                'confidence': float (0.0 to 1.0),
+                'score': float (-1.0 to 1.0, işaretli duygu skoru),
+                'confidence': float (0.0 to 1.0, işaretsiz büyüklük),
                 'source': 'finbert' | 'vader'
             }
         """
@@ -386,8 +390,8 @@ class FinBERTAnalyzer:
             
             return {
                 "label": label,
-                "score": round(score, 4),
-                "confidence": round(raw_score, 4),
+                "score": round(score, 4),  # İşaretli duygu skoru
+                "confidence": round(raw_score, 4),  # İşaretsiz büyüklük
                 "source": "finbert",
             }
             

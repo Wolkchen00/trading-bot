@@ -303,10 +303,7 @@ class StockNewsAnalyzer:
             if self.finbert:
                 try:
                     result = self.finbert.analyze(text[:512])
-                    if result["label"] == "positive":
-                        nlp_score = result["score"] * 30
-                    elif result["label"] == "negative":
-                        nlp_score = -result["score"] * 30
+                    nlp_score = self._finbert_nlp_score(result)
                 except Exception:
                     pass
             elif self.vader:
@@ -336,6 +333,13 @@ class StockNewsAnalyzer:
             total_score = max(min(total_score, 100), -100)
 
         return total_score, sentiments
+
+    @staticmethod
+    def _finbert_nlp_score(result: Dict) -> float:
+        """İşaretli FinBERT skorunu haber skoru ölçeğine taşı."""
+        if result["label"] in ("positive", "negative"):
+            return result["score"] * 30
+        return 0
 
     def _keyword_score(self, text: str) -> float:
         """Anahtar kelime bazlı skor."""
@@ -471,7 +475,7 @@ class StockNewsAnalyzer:
                 text = f"{matching_articles[0].get('title', '')} {matching_articles[0].get('summary', '')}"
                 try:
                     result = self.finbert.analyze(text[:512])
-                    if result["label"] == "negative" and result["score"] > 0.6:
+                    if result["label"] == "negative" and abs(result["score"]) > 0.6:
                         risk_score += 1
                         confirmed_risks.append(
                             f"🟡 ELEVATED (FinBERT:{result['label']} {result['score']:.0%}): {kw}"

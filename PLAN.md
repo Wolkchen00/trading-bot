@@ -922,3 +922,82 @@ hicbir assert zayiflatilmadi (Claude denetledi) , degisiklik kaynak degisimi
 (trade_history -> fill ledger) ve "kayit yoksa None" kuralindan geliyor.
 
 **DEPLOY EDILMEDI, PUSH EDILMEDI.**
+
+## v4.16 , R12 SentAgent isaret hatasi (2026-08-24, EN SON + AYRI COMMIT)
+
+**Kok (Claude olctu ve dogruladi):** `FinBERTAnalyzer.analyze()` ISARETLI skor
+donduruyor (`finbert_analyzer.py:368-371`, negatif etikette `score = -raw_score`),
+ama iki tuketici bunu BUYUKLUK saniyordu.
+
+1. **`news_analyzer.py:306-309`** , `nlp_score = -result["score"] * 30`.
+   Skor zaten negatif oldugu icin CIFT NEGATIFLIK olusuyordu.
+   **Olculdu: iyi haber `+27.6`, kotu haber `+26.4` , IKISI DE POZITIF.**
+   Yani FinBERT kanali tek yonlu BUY ratchet'iydi; bearish haber sinyali
+   yapisal olarak IMKANSIZDI (`agent_coordinator.py:212-213`: `combined >= 12` -> BUY).
+2. **`news_analyzer.py:473`** , `label == "negative" and result["score"] > 0.6`.
+   Negatif etikette skor negatif oldugu icin bu kosul HICBIR ZAMAN dogru olamazdi
+   , ELEVATED risk dali OLU KODDU. (Denetim envanterinde YOKTU; dogrulama
+   sirasinda bulundu, ID `SENT-ELEVATED-DALI-OLU-KOD`.)
+
+**Cozum , yalnizca ISARET, mimari degil:**
+- `analyze()` sozlesmesi belgelendi: `score` = ISARETLI duygu, `confidence` =
+  ISARETSIZ buyukluk. **Donus semasi DEGISMEDI.**
+- Cift negatiflik kaldirildi (`_finbert_nlp_score`); notr acikca 0.
+- ELEVATED karsilastirmasi `abs(result["score"]) > 0.6` oldu; **esik 0.6 KALDI**.
+- VADER yolu (`compound * 25`) zaten dogruydu, DOKUNULMADI.
+- Esik/agirlik/coğunluk/guven olcegi/ajan mimarisi DEGISMEDI.
+
+**Olculen once/sonra (Claude bagimsiz kostu):**
+| Haber | ONCE | SONRA |
+|---|---|---|
+| iyi (raw 0.92)  | `+27.6` | `+27.6` |
+| kotu (raw 0.88) | `+26.4` | **`-26.4`** |
+| notr            | `0`     | `0` |
+
+Kotu haber artik Fear&Greed BUY ofseti EKLI olsa bile BUY uretmiyor (SELL uretiyor).
+Guclu negatif haberde ELEVATED risk dali artik TETIKLENIYOR.
+
+**NEDEN EN SONDA VE AYRI COMMIT:** bu duzeltme karar dagilimini degistirir.
+Codex hakli olarak "olcum baseline'i kurulmadan davranis degistirme" dedi;
+cozum duzeltmeyi atmak degil SIRAYA koymakti , R8-R11 baseline'i once, R12 sonra,
+boylece etkisi ATFEDILEBILIR olur.
+
+**⚠️ DEPLOY SIRASINDA ZORUNLU ADIM (Ihsan karar maddesi):** R12 karar dagilimini
+degistirdigi icin deploy'undan sonra **YENI bir olcum epoch'u sifirdan baslar**.
+20 islem / 30 gun sayaci R12 oncesi ve sonrasi TOPLANMAZ. R10 raporu zaten her
+kosumda commit SHA basiyor , epoch ayrimi bununla yapilir. `MEASUREMENT_START`
+bu commit'te DEGISTIRILMEDI (deploy zamani Ihsan karari).
+
+**Testler:** pytest 211 -> **218** (+7 R12) + tam sistem 115'te 113 gecen/0
+basarisiz + Claude bagimsiz dusmanca test **26 iddia** (isaret dogrulugu,
+4 buyuklukte simetri, tek-yonlu-BUY ratchet'inin kirildigi, ELEVATED esik
+davranisi 0.60/0.61 sinirinda, eski hatali formullerin kodda KALMADIGI regresyon
+kilidi, VADER yolunun bozulmadigi).
+
+**DEPLOY EDILMEDI, PUSH EDILMEDI.**
+
+---
+
+### v4.16 KAPANIS , 5 rock tamam (R8-R12)
+
+| Rock | Konu | Durum |
+|---|---|---|
+| R8  | Guvenlik invarianti (merkezi risk guard + kill switch yetkisi) | ✅ `1a351a9` |
+| R9  | Defter dogrulugu (fill ledger + episode toplama) | ✅ `72dc095` |
+| R10 | Olcum dogrulugu (cift yonlu mutabakat + 4 durumlu kapi) | ✅ `7d0b2c8` |
+| R11 | Huni durustlugu (teshis eden sayaclar) | ✅ `e03c981` |
+| R12 | SentAgent isaret hatasi | ✅ (bu commit) |
+
+**Toplam:** pytest 138 -> **218** (+80) · tam sistem 115'te 113 gecen / 0 basarisiz
+· Claude bagimsiz dusmanca test **171 iddia** (48+21+33+22+26, hepsi Claude
+tarafindan yazildi ve kosuldu) · strateji tuning degeri **DEGISMEDI** ·
+`live_entries_enabled` **False** · **DEPLOY/PUSH YOK**.
+
+**Acik kalan Ihsan karar maddeleri:** K1 strateji devam/yeniden-insa, K2 canli
+sermaye/parking orani, K3 cikis geometrisi, K4 ajan mimarisi, K5 kill switch
+esigi, K6 canli-profil mirror altyapisi (detay: `RF-PLAN-3.md` sonu).
+
+**Sonraki cycle adaylari (NON-GOAL olarak ertelenenler):** backtest/canli parity
+(saf DecisionEngine + golden event tape), EMA200 cache zehirlenmesi,
+split-duzeltmeli bar, partial sonrasi TP restorasyonu, cikis geometrisi,
+kayip serisi zaman asimi, SocialAgent/FundAgent kararlari.

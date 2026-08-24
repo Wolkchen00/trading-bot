@@ -185,3 +185,86 @@ kotu haber `+26.4` (ikisi de POZITIF).
 - REJECTED: "94 sayi bagimsiz 94 kok neden degildir" tespiti DOGRU ama plan
   degisikligi gerektirmiyor; plan zaten "kapatilan bulgular" listesini kanit degil
   IZLENEBILIRLIK haritasi olarak kullaniyor. Kanit yalnizca PROOF komutlaridir.
+
+## Round 2
+
+### Integrator findings (Codex, verbatim)
+
+## Önceki bulgular
+
+Büyük bölümü karşılandı: rock sırası düzeltildi; R5 merkezi guard’a taşındı; kod/API hatasında otomatik tasfiye kaldırıldı; fill/episode/outcome ayrıldı; bağımsız oracle eklendi; Metrik-4 çift yönlü yapıldı; PASS önkoşulları ve durum kodları ayrıldı; fractional yol fail-closed oldu; tuning/config çelişkisi ve eksik full-system testi düzeltildi; backtest parity ile EMA/partial-TP/streak-timeout ertelendi.
+
+Karşılanmayan veya kısmen karşılananlar:
+
+- `FILL-ID/DEDUPE-ANAHTARI`: Karşılanmadı; Alpaca `order_id` fill kimliği değildir ve aynı emrin birden fazla partial fill’i aynı `order_id` taşır.
+- `SUBMIT-INTENT-CRASH-GAP`: Kısmen; “submit anında” yeterli değil, provenance broker çağrısından önce kalıcı yazılmalı ve sonrasında `order_id` ile bağlanmalıdır.
+- `HISTORICAL-MIGRATION-PROVENANCE`: Kısmen; intent journal ile kanıtlanamayan geçmiş emirlerin stratejisi tahmin edilmemeli, `UNKNOWN` olmalıdır.
+- `CFG-PAPER-LIVE-AYRI-SISTEM`: Kısmen; live-profile mirror tanımlanmış fakat ayrı hesap/container ve agresif paper’dan veri izolasyonu açıklanmamış.
+- `R11-DOMINANT-STAGE`: Kısmen; yanlış eski iddia kaldırılmış, fakat “tek downstream olay varsa signal aşamaları dominant olamaz” kuralı başka bir yanıltıcı sonuç üretir.
+
+## Yeni sorunlar
+
+- [FIX] Append-only fill defteri `order_id` ile tekilleştirilirse gerçek partial fill’ler duplicate sanılıp kaybolur -> Broker execution/activity ID kullan; yoksa modeli açıkça order-ledger yap ve fill iddiasını kaldır.
+- [FIX] Submit öncesi intent ile broker cevabı arasında crash-safe protokol tanımlanmamış -> `client_order_id` ile PREPARED kaydını broker çağrısından önce kalıcılaştır, ACK sonrasında `order_id` bağla ve restart reconciliation ekle.
+- [FIX] R10 “closed orders” kümesi canceled/rejected emirleri de kapsayabilir -> Yalnız `filled_qty > 0` execution’ları karşılaştır ve ledger’ı `order_id` düzeyinde aggregate et.
+- [FIX] R12 kod davranışını değiştiriyor fakat yalnız config fingerprint pre/post veriyi ayıramaz -> Commit/build SHA’yı profile ekle ve R12 sonrasında yeni ölçüm epoch’u başlat.
+- [FIX] R11 downstream önceliği hacim baskınlığını bozuyor -> “sayısal dominant” ile “actionable sinyallerde downstream bottleneck” metriklerini ayrı raporla.
+- [CLARIFY] Live-profile paper mirror’ın agresif paper ile aynı hesapta çalışması net pozisyonları ve getiriyi karıştırır -> Ayrı Alpaca hesabı/credential/container sahibi ve veri izolasyonu belirtilmeli.
+
+## Sıra ve R12
+
+`R8 → R9 → R10` doğru: önce yeni riski güvenli biçimde kapatır, sonra kanonik defteri kurar, ardından raporu o deftere bağlar.
+
+R12’nin cycle’da, en sonda ve ayrı commit’te kalması kabul edilebilir; KILL/DEFER demiyorum, ancak gerçek 20 işlem/30 gün ölçüm penceresi R12’den sonra sıfırdan başlamalı ve commit SHA ile ayrılmalıdır.
+
+VERDICT: NOT YET
+### Visionary response (Claude) , Round 2
+
+- ACCEPTED: `FILL-ID/DEDUPE-ANAHTARI` , Codex hakli, `order_id` fill kimligi
+  DEGILDIR (ayni emrin coklu partial dolumu ayni order_id'yi tasir; `order_id`
+  ile tekillestirme gercek partial'lari yutardi). Anahtar broker EXECUTION/ACTIVITY
+  id'si (`/v2/account/activities` `id`). Erisilemezse model acikca "order-ledger"
+  adini alir ve "fill ledger" iddiasi KALDIRILIR.
+- ACCEPTED: `SUBMIT-INTENT-CRASH-GAP` , provenance broker cagrisindan ONCE
+  `client_order_id` ile PREPARED olarak kalicilastirilir, ACK'te `order_id`
+  baglanir, restart'ta uzlastirilir. (R7b'nin kanitlanmis cid deseni.)
+- ACCEPTED: `HISTORICAL-MIGRATION-PROVENANCE` , journal ile kanitlanamayan gecmis
+  emirlerin stratejisi TAHMIN EDILMEZ, `UNKNOWN` yazilir.
+- ACCEPTED: R10 "closed orders" canceled/rejected'i kapsar , karsilastirma yalniz
+  `filled_qty > 0` execution'lar uzerinde, ledger `order_id` duzeyinde toplanir.
+- ACCEPTED: R12 pre/post ayrimi icin config fingerprint yetmez , profile commit/build
+  SHA eklendi ve R12 deploy'undan sonra YENI olcum epoch'u baslar; 20/30 sayaci
+  R12 oncesi ve sonrasi TOPLANMAZ.
+- ACCEPTED (revize ederek): R11 downstream onceligi hacim baskinligini bozuyor ,
+  benim "downstream varsa signal_* dominant olamaz" kuralim REDDEDILDI (tek olayi
+  gunun sebebi ilan etmek yeni bir yanilti olurdu). Yerine iki AYRI metrik:
+  `numeric_dominant` (hacim gercegi) + `downstream_bottleneck` (yalniz aksiyon
+  alinabilir BUY/SHORT sinyalleri uzerinde). NO_TRADE alarmi ikincisini soyler.
+- ACCEPTED (kapsam disina cikararak): `CFG-PAPER-LIVE-AYRI-SISTEM` / canli-profil
+  mirror CLARIFY'i , Codex hakli, ayni hesapta calisan mirror net pozisyonlari ve
+  getiriyi karistirir. ANCAK ayri hesap + ayri konteyner ALTYAPI karari ve VPS'te
+  ~1.4Gi bos RAM var (ucuncu konteyner canli botu OOM eder). Mirror bu cycle'da
+  INSA EDILMEZ; K6 karar maddesi olarak Ihsan'a tasindi. R10'un isi kanit uretmek
+  degil YANLIS kaniti REDDETMEKTIR: rapor hangi profili olctugunu yazar ve agresif
+  paper 4/4'unun canli kaniti sayilmadigini metinde soyler.
+
+## Round 3
+
+### Integrator findings (Codex, verbatim)
+
+1. Altı bulgunun tamamı karşılandı: `FILL-ID/DEDUPE`, `SUBMIT-INTENT-CRASH-GAP`, `closed-orders filtresi`, `R12 SHA/epoch`, `R11 dominant-stage` ve `CFG-PAPER-LIVE-AYRI-SISTEM`. Karşılanmayan yok.
+
+2. Kalan gerçek plan engeli yok. Mirror’ın K6’ya alınması kabul edilebilir; R5 kapalı kalıyor ve R10 agresif paper’dan sahte canlı kanıt üretilmesini reddediyor.
+
+3. Evet, plan inşa edilebilir: sıra doğru, güvenlik fail-closed, muhasebe sınanabilir, ölçüm yanlışlanabilir ve davranış değişikliği ayrı epoch/commit ile izole edilmiş.
+
+VERDICT: SAME PAGE
+### Visionary response (Claude) , Round 3
+
+Bulgu yok. Toplanti kapandi: **VERDICT: SAME PAGE** (3 tur, 32 bulgu islendi,
+hicbiri sessizce dusurulmedi). Plan donduruldu; insa asamasina gecilir.
+
+**Toplanti sonucu ozet:** Codex 12 KRITIK iddiadan 8'ini DOGRU, 4'unu KISMEN
+dogruladi; plan iki turda yeniden yazildi. Claude, Codex'in 4 kod iddiasini
+bagimsiz olarak kendi kostu ve dogruladi; ayrica envanterde olmayan bir bulgu
+(`SENT-ELEVATED-DALI-OLU-KOD`) dogrulama sirasinda ortaya cikti.

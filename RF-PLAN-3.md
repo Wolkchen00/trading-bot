@@ -1,7 +1,7 @@
 # RF-PLAN-3.md , v4.16 Clarity Break: "Once olculebilir, sonra karli"
 
 **Tarih:** 2026-08-23/24 | **Surum hedefi:** v4.16 | **Rock'lar:** R8..R12
-**Revizyon:** r2 (Codex Same Page Meeting tur 1 sonrasi , 26 bulgu islendi)
+**Revizyon:** r3 (Codex Same Page Meeting tur 1+2 sonrasi , 32 bulgu islendi)
 **Tetik (Ihsan):** "Son zamanlarda hic alis satis olmamis, neden donmus? Once bunu
 duzelt. Sonra: aylar gecti ama para konusunda hala ayni yerde sayiyoruz. Ajanlarin
 codinglerinde problem var mi? Butun kodlara bak. Sonra bana bir plan olustur."
@@ -120,19 +120,32 @@ saniyordu , karli bir partial'i "WIN" olarak ogretip sonradan zarar eden trade'i
 yanlis etiketlerdi.
 
 **Kapsam:**
-- **Append-only fill ledger:** her dolum bir satir; anahtar broker `order_id`
-  (fill id). `_partial_client_id` dedupe anahtari OLAMAZ , `position_manager.py:885`
-  her cagride `uuid4()` uretiyor ve `:1290` retry'de yeniden yaziyor (dogrulandi).
-- **Provenance submit ANINDA yazilir:** strateji / index_parking / DCA / opsiyon.
+- **Append-only fill ledger:** her dolum bir satir. **Dedupe anahtari broker
+  EXECUTION/ACTIVITY id'sidir** (`/v2/account/activities` `id` alani) , `order_id`
+  DEGIL: Codex tur 2'de hakli olarak isaret etti ki ayni emrin birden fazla partial
+  dolumu AYNI `order_id`'yi tasir, dolayisiyla `order_id` ile tekillestirme gercek
+  partial'lari duplicate sanip YUTAR. Execution id erisilemezse model acikca
+  **order-ledger** olarak adlandirilir ve "fill ledger" iddiasi kaldirilir , yanlis
+  isim yanlis guven uretir.
+  `_partial_client_id` dedupe anahtari OLAMAZ , `position_manager.py:885` her
+  cagride `uuid4()` uretiyor ve `:1290` retry'de yeniden yaziyor (dogrulandi).
+- **Crash-safe provenance protokolu (R7b cid deseninin aynisi):** broker cagrisindan
+  ONCE `client_order_id` ile `PREPARED` kaydi kalici yazilir; ACK sonrasi `order_id`
+  baglanir; restart'ta bagllanmamis PREPARED kayitlari broker'dan uzlastirilir.
+  "Submit aninda yazilir" YETERSIZDI , submit ile ACK arasindaki crash penceresinde
+  provenance kaybolurdu.
+- **Provenance siniflari:** strateji / index_parking / DCA / opsiyon.
   Sonradan sembolden geri cikarilamaz (`Fill` modeli yalnizca symbol/side/qty/
   price/order_id tasiyor).
 - **Episode toplama:** pozisyon TAMAMEN kapandiginda tek bir trade sonucu uretilir;
   `update_loss_streak` ve `agent_perf.record_outcome` YALNIZ burada, toplam
   episode PnL'i ile bir kez calisir.
 - **Giris fiyati** broker ortalama giris fiyatidir, sinyal fiyati degil.
-- **Tarihsel migration:** gecmiste dolmus ama yazilmamis bacaklar broker closed
-  fills'ten idempotent, `--dry-run` cikisli, provenance isaretli tek seferlik
-  backfill ile onarilir. Bu OLMADAN R10'un cift yonlu mutabakati KALICI FAIL verir.
+- **Tarihsel migration:** gecmiste dolmus ama yazilmamis bacaklar broker
+  activities'ten idempotent, `--dry-run` cikisli tek seferlik backfill ile onarilir.
+  Bu OLMADAN R10'un cift yonlu mutabakati KALICI FAIL verir.
+  **Intent journal'i olmayan gecmis emirlerin stratejisi TAHMIN EDILMEZ , provenance
+  `UNKNOWN` yazilir.** Tahmin, duzeltmek istedigimiz sahte-kesinligi geri getirir.
 - Sema surumlenir (`ledger_schema_version`).
 
 **Kapatilan bulgular:** EXIT-PARTIAL-DEFTERE-YAZILMIYOR, OLCUM-DEFTER-KADEMELI-SATISI-YAZMIYOR,
@@ -155,9 +168,11 @@ bir kez guncellenir.
 **Kok:** 4/4 PASS kapisi gercek parayi acan tetiktir ve su anda YANLIS YESIL verir.
 
 **Kapsam:**
-- **Metrik-4 cift yonlu:** broker kapali emir kumesi <-> ledger kumesi, `order_id`
-  tabanli kanonik multiset karsilastirmasi (qty/symbol eslemesi duplicate ve
-  kismi dolumlari karistirir). Kimliksiz legacy satir PASS degil **UNKNOWN**.
+- **Metrik-4 cift yonlu:** broker tarafi YALNIZ `filled_qty > 0` execution'lardir
+  (canceled/rejected emirler kumeye GIRMEZ , "closed orders" onlari da kapsar);
+  ledger tarafi `order_id` duzeyinde toplanir; karsilastirma kanonik multiset'tir
+  (qty/symbol eslemesi duplicate ve kismi dolumlari karistirir).
+  Kimliksiz legacy satir PASS degil **UNKNOWN**.
 - **Durum sozlesmesi:** PASS / FAIL / **NOT_READY** / **UNKNOWN** ayri exit
   kodlari. `n>=20` VE `>=30 islem gunu` saglanmadan **PASS YASAK**.
 - **Metrik-1** yalniz R9'un provenance journal'i ile strateji olarak dogrulanmis
@@ -166,9 +181,13 @@ bir kez guncellenir.
 - **Metrik-3** tautolojisi kaldirilir (reddedilebilir olur).
 - **Metrik-2** paydasi yalniz KAPALI episode'lardir.
 - **Rapor sozlesmesi:** hesap getirisi + strateji getirisi + SPY getirisi +
-  **config/profile fingerprint (hash)** ayni raporda basilir. Agresif paper'in
-  4/4'u canli R5 acma kanidi SAYILMAZ , kanit yalniz canli profil ile calisan
-  ayrilmis paper mirror'dan gelir.
+  **profil parmak izi: config hash + commit/build SHA** ayni raporda basilir.
+  Rapor HANGI profili olctugunu acikca yazar. Agresif paper'in 4/4'u canli R5
+  acma kaniti **SAYILMAZ** ve arac bunu rapor metninde soyler.
+  **Canli-profil mirror bu cycle'da INSA EDILMEZ** , ayri Alpaca hesabi/kimlik
+  bilgisi/konteyner ve veri izolasyonu gerektirir; VPS'te su an ~1.4Gi bos RAM var
+  ve ucuncu konteyner canli botu OOM eder. Bu bir ALTYAPI KARARIDIR -> K6.
+  R10'un isi kanit uretmek degil, YANLIS kaniti reddetmektir.
 - Zaman damgalari acikca UTC.
 
 **Kapatilan bulgular:** METRIK4-EKSIK-KAYDI-GOREMEZ, OLCUM-SPY-PARKING-TRADE-SAYILIYOR,
@@ -209,8 +228,13 @@ alarmi faydasiz cikti.
   demetini zaten uyguluyor (`core/funnel.py:303-321`,
   `test_dominant_stage_priority_breaks_ties` bunu kanitliyor). GERCEK sorun:
   `signal_hold` sayica her zaman baskin oldugu icin "en yuksek sayi" teshis
-  degeri tasimiyor. Duzeltme: downstream asamalar (gate_block, conf_below_min,
-  sector_block, queue_*) sifirdan buyukse `signal_*` asamalari dominant SECILMEZ.
+  degeri tasimiyor. **Duzeltme (Codex tur 2 uyarisiyla revize):** tek bir kurali
+  ezmek yerine IKI AYRI metrik raporlanir , (a) `numeric_dominant`: bugunku
+  sayica en buyuk asama (hacim gercegini bozmadan korur), (b)
+  `downstream_bottleneck`: yalniz aksiyon alinabilir sinyaller (BUY/SHORT)
+  uzerindeki en buyuk downstream blokaji. NO_TRADE alarmi (b)'yi soyler, (a)'yi
+  baglam olarak basar. "Tek downstream olay varsa signal asamalari dominant olamaz"
+  kurali reddedildi , tek olayi gunun sebebi ilan etmek yeni bir yanilti olurdu.
 - NO_TRADE alarm metni gercek blokeri ve DOGRU `last_entry_date`'i soyler
   (bugun 2026-07-30 diyor, gercek 2026-07-16).
 
@@ -251,6 +275,10 @@ iki tuketici bunu BUYUKLUK sanir:
 hakli olarak "olcum baseline'i kurulmadan davranis degistirme" dedi. Cozum:
 duzeltmeyi cycle'dan atmak degil, SIRAYA koymak , R8-R11 baseline'i once
 deploy edilir, R12 ayri commit olarak sonra gelir, boylece etkisi ATFEDILEBILIR olur.
+
+**Olcum epoch'u:** R12 karar dagilimini degistirdigi icin deploy'undan sonra
+**YENI bir olcum epoch'u sifirdan baslar** ve eski donemden commit SHA ile ayrilir.
+20 islem / 30 gun sayaci R12 oncesi ve sonrasi TOPLANMAZ.
 
 **Kapsam:** yalnizca isaret dogrulugu. Esik, agirlik, ajan mimarisi DEGISMEZ.
 Tercih edilen duzeltme: `analyze()` sozlesmesini netlestir (`score` = isaretli,
@@ -321,5 +349,11 @@ her uc durumu de kilitler.
 - **K4 , Ajan mimarisi:** 5 ajandan 3'u fiilen bozuk (SocialAgent Reddit 403 ile
   kalici sessiz, FundAgent kotasi gunun ilk 5 dakikasinda bitiyor, SentAgent
   isareti tek yonlu). Onarilsin mi, yoksa mimari 2 saglam ajana mi indirilsin?
+- **K6 , Canli-profil mirror (ALTYAPI):** Canli R5 kilidini acmanin kaniti
+  agresif paper'dan GELEMEZ (farkli esik/boyut/MTF/cikis geometrisi). Kanit icin
+  canli profille calisan ayri bir paper mirror gerekir: ayri Alpaca hesabi + ayri
+  kimlik bilgisi + ayri konteyner + veri izolasyonu. VPS'te ~1.4Gi bos RAM var,
+  ucuncu konteyner canli botu OOM eder. Secenekler: (a) VPS'i buyut, (b) canli
+  konteyneri gecici olarak mirror profiline al, (c) R5'i suresiz kapali tut.
 - **K5 , Kill switch politikasi:** Otomatik tasfiye yetkisi R8'de daraltiliyor.
   Gunluk zarar esigi kucuk hesap icin yeniden ayarlansin mi?

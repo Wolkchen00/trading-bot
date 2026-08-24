@@ -794,3 +794,71 @@ olarak kabul edildi ve Claude tarafindan teste KILITLENDI
 (`test_backfill_never_guesses_pnl_or_provenance_for_unprovable_history`).
 
 **DEPLOY EDILMEDI, PUSH EDILMEDI.**
+
+## v4.16 , R10 olcum dogrulugu: cift yonlu mutabakat + dort durumlu kapi (2026-08-24)
+
+**Kok:** `tools/olcum_raporu.py`'nin 4/4 PASS kapisi GERCEK PARAYI ACAN TETIKTIR
+ve YANLIS YESIL verebiliyordu. Dort ayri yoldan:
+(a) metrik-4 tek yonluydu , yalniz FAZLA kaydi goruyordu, EKSIK kaydi yapisal
+olarak goremiyordu (R9'un kapattigi $282.93 boslugu tam olarak bu kor noktadaydi);
+(b) metrik-1 SPY park al/sat dongulerini strateji islemi sayiyordu;
+(c) GENEL PASS kendi "n>=20 / 30 islem gunu" on kosulunu HIC uygulamiyordu
+(n=6, gun=8 iken exit 0 donuyordu); (d) metrik-3 reddedilemezdi , bir tik yukari
+gidip $128 kaybeden islem "yesile gecti" sayiliyordu.
+
+**Temel ilke: bu aracin isi kanit URETMEK degil, YANLIS KANITI REDDETMEKTIR.**
+Suphede kalinan her yerde sonuc PASS DEGILDIR.
+
+1. **Dort durumlu sozlesme** , bool `overall` kaldirildi:
+   `PASS`=0, `FAIL`=1, `UNKNOWN`=2, `NOT_READY`=3.
+   **Oncelik: FAIL > UNKNOWN > NOT_READY > PASS** , gercek bir basarisizlik
+   "hazir degil" ile, bir kor nokta da "hazir degil" ile MASKELENEMEZ.
+   **PASS ancak dort metrik de PASS VE n>=20 VE islem gunu>=30 ise.**
+   Eksik/fazla metrik sayisi da PASS uretemez (`len(statuses)==4` sarti).
+2. **Metrik-4 cift yonlu kanonik multiset:** broker tarafi YALNIZ `filled_qty>0`
+   execution'lar (canceled/rejected kumeye girmez), yerel taraf R9 fill ledger'i
+   `order_id` duzeyinde toplanmis. Iki yon de FAIL uretir , **broker'da var/
+   ledger'da yok artik GORULUYOR.** Kimliksiz legacy satir PASS degil UNKNOWN.
+   Gercek tutarsizlik baska bir kor noktayla maskelenmez (FAIL > UNKNOWN).
+3. **Metrik-1 provenance zorunlu, TAHMIN YASAK:** net PnL yalniz provenance'i
+   `strategy` olarak DOGRULANMIS dolumlardan. Donemde `UNKNOWN` provenance'li
+   kapali islem varsa metrik-1 UNKNOWN doner. **Sembole bakarak "SPY ise parktir"
+   kisayolu EKLENMEDI** , duzeltmeye calistigimiz sahte kesinlik odur.
+4. **Metrik-3 tautolojisi kapandi:** "yesile gecti" artik
+   `peak_pct >= config["breakeven_trigger_pct"]` , sistemin KENDISININ "bu islem
+   tuttu" dedigi esik (keyfi yeni sabit uydurulmadi). Donemde `peak_pct=None`
+   islem varsa metrik-3 UNKNOWN (eskiden sessizce alt kume uzerinde hesapliyordu).
+5. **Metrik-2 paydasi yalniz KAPALI episode'lar** (acik pozisyonun yari satisi
+   paydayi sismiyor).
+6. **Rapor sozlesmesi (bilgi, kapiyi degistirmez):** hesap getirisi + strateji
+   getirisi + ayni UTC penceresinde SPY getirisi + **profil parmak izi**
+   (config SHA-256 + git commit SHA). Rapor hangi profili olctugunu yazar ve
+   agresif paper sonucunun canli R5 kilidini acmanin kaniti SAYILMADIGINI soyler.
+   SPY barlari acikca `DataFeed.IEX` ile isteniyor (hesabin aboneligi guncel SIP
+   sorgusuna izin vermiyor , benchmark sessizce UNKNOWN dusuyordu; ayni feed
+   mantigi `attach_peaks`'e de uygulandi). Kullanilan feed raporda yazili.
+
+**GERCEK VERIYLE KOSULDU (salt okunur, 2026-08-24):**
+```
+islem gunu=18/30, strategy n=0/20
+Hesap getirisi: +2.81% | SPY getirisi: +2.94% (feed=iex)
+[UNKNOWN] 1 strategy PnL: provenance UNKNOWN kapali islem=8
+[UNKNOWN] 2 +%3 kademeli satis  [UNKNOWN] 3 never-green
+[FAIL]    4 kayit/stop butunlugu: broker'da var/ledger'da yok=45
+GENEL: FAIL   (exit 1)
+```
+**Yani arac ilk gercek kosumunda 45 eksik kaydi YAKALADI** , eski kod bunu
+yapisal olarak goremezdi. `fill_ledger.jsonl` henuz hic olusmadigi icin metin
+careyi de isimlendiriyor (`ledger_backfill.py --dry-run` sonra `--apply`).
+Ayrica **hesabin tamami (strateji+park) SPY'in altinda kaldi** , bagimsiz yeni
+bir veri noktasi.
+
+**Testler:** pytest 171 -> **197** (+26 R10) + tam sistem 115'te 113 gecen/0
+basarisiz + Claude bagimsiz dusmanca test **33 iddia** (kapi sinir degerleri
+n=20/gun=30 tam esikte, maskeleme yasagi, eksik metrik sayisi, exit kodu
+sozlesmesi, cift yon, iptal/red emirler, kimliksiz satir, broker/defter
+okunamama, pencere disi dolum). `tests/test_olcum_defaults.py` uyarlandi:
+assert 42 -> 43, test 11 -> 11, hicbir assert zayiflatilmadi (Claude denetledi);
+mutasyon guard'i izin-listesi oldugu icin saglam kaldi.
+
+**DEPLOY EDILMEDI, PUSH EDILMEDI.**

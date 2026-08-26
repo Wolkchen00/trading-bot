@@ -1231,3 +1231,54 @@ tasimiyor**. Guven formulune, ajan agirliklarina veya cikis geometrisine
 dokunmadan once ya (a) backtest canli cekirdegi kullanacak sekilde tasinmali,
 ya da (b) karar R13'un `agent_stats` canli verisiyle verilmeli. Sonraki rock'in
 konusu budur.
+
+---
+
+## v4.18 DEPLOY , 2026-08-26 18:31 UTC (Ihsan karari: piyasa ACIKKEN)
+
+**Ihsan karari:** "R13'u canliya deploy et simdiden, zaten son alim july 16,
+cok da buyuk bir etkisi olamayacak." Deploy piyasa acikken yapildi.
+
+**Deploy oncesi fotograf:**
+- CANLI: equity $491.68, nakit $145.82, **tek pozisyon SPY parki 0.4517 pay**,
+  **0 acik emir**, hicbir strateji pozisyonu YOK.
+- PAPER: equity $63,294.47, 6 pozisyon, 4 koruma emri , **hepsi Alpaca
+  SUNUCUSUNDA** (STOP_LIMIT + BRACKET LIMIT), konteyner restart'i etkilemez.
+
+**Deploy:** Coolify app `dlyojlxudkezk2bze3f3ypp2`, deployment
+`h4n7zyi58fqihtcfnbmsguve`, commit `334b483`. `finished` 18:33:23 UTC.
+
+**Uretimde dogrulandi:**
+- Iki konteyner ayakta, **0 ERROR/Traceback**.
+- R5 kilidi: canlida `stock_long/stock_short/option/bear_etf` ->
+  `(False, 'LIVE_LOCK_R5')`, `index_parking` -> `(True,'')` (tasarim).
+  `LIVE_ENTRIES_ENABLED` env YOK -> fail-closed. Paper'da dogal olarak acik.
+- R13/R14 modulleri yuklu; sweep pencere/aralik 24s / 15dk.
+- `agent_stats.json` ILK KARARLARDAN itibaren birikiyor.
+
+### BULGU , supurge penceresi gecmis deligi kapatmiyor
+Acilis supurgesi **hicbir sey eklemedi** ve bunun sebebi hata degil PENCERE:
+kesme `2026-08-25 18:35 UTC`, kayip SPY SELL ise `2026-08-25 13:33 UTC`
+, penceredan **5 saat** once. 24s pencerede broker'da 4 dolum gorunuyor
+(hepsi zaten defterde), 72s pencerede 25 gorunuyor.
+- **Tek seferlik onarim yapildi** (pencere 96s, paper konteynerinde):
+  **1020 -> 1024 satir**, tam olarak eksik 4 SPY execution'i; ikinci kosu **+0**.
+- **Uretimde metrik-4: FAIL -> PASS** (`broker'da var/ledger'da yok=0`).
+  GENEL: UNKNOWN (metrik 1/2/3 icin hala strateji islemi yok) , yanlis yesil yok.
+- **ACIK KALAN RISK:** bot 24 saatten uzun kapali kalirsa, o sure icindeki
+  dolumlar acilis supurgesinin menzili disinda kalir ve **kalici delik** olusur.
+  Onerilen: ACILIS supurgesi genis pencere (or. 72s), periyodik supurge 24s'te
+  kalir. Config-only degisiklik degil (acilis/periyodik ayrimi kod gerektirir).
+
+### ILK AJAN TELEMETRISI (n=3, uretim, her iki konteyner ayni)
+```
+TechAgent    BUY=1 SELL=2 HOLD=0 | veri_yok=0%
+FundAgent    BUY=0 SELL=0 HOLD=3 | veri_yok=100%
+SentAgent    BUY=0 SELL=0 HOLD=3 | veri_yok=0%
+SocialAgent  BUY=0 SELL=0 HOLD=3 | veri_yok=100%
+RiskAgent    BUY=0 SELL=0 HOLD=3 | veri_yok=0%
+```
+n cok kucuk ama SEKIL hipotezle birebir: **FundAgent + SocialAgent agirlik
+kutlesinin %35'ini (0.20 + 0.15) tasiyor ve ikisi de VERI YOKLUGUNDAN HOLD
+diyor** , anlasmazliktan degil. Bir haftalik veri birikince karar bu tabloya
+dayanarak verilecek.

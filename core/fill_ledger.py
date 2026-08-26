@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import json
 import os
 import threading
@@ -28,6 +29,41 @@ PROVENANCES = {
 }
 
 _PROCESS_LOCK = threading.RLock()
+
+
+def _canonical_decimal(value: Any) -> str:
+    """Sayisal fill alanini R10 ile ayni kayipsiz metne kanonlastir."""
+    try:
+        number = abs(Decimal(str(value or 0)))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"gecersiz fill sayisi: {value}") from exc
+    if number <= 0:
+        raise ValueError(f"fill sayisi pozitif olmali: {value}")
+    return str(number.normalize())
+
+
+def canonical_fill_key(
+    symbol: str, side: str, qty: Any, price: Any,
+) -> tuple[str, str, str, str]:
+    """Execution kimliginden bagimsiz, tek dolumun kanonik icerik anahtari."""
+    return (
+        str(symbol or "").strip().upper(),
+        str(side or "").strip().upper(),
+        _canonical_decimal(qty),
+        _canonical_decimal(price),
+    )
+
+
+def order_fill_key(
+    order_id: str, symbol: str, side: str, qty: Any,
+) -> tuple[str, str, str, str]:
+    """R10 mutabakatinin kullandigi emir-seviyesi kanonik anahtar."""
+    return (
+        str(order_id or "").strip(),
+        str(symbol or "").strip().upper(),
+        str(side or "").strip().upper(),
+        _canonical_decimal(qty),
+    )
 
 
 def _ledger_path() -> str:
@@ -131,8 +167,15 @@ def record_fill(
     episode_id: str | None = None,
     ts_utc: Any = None,
     degraded: bool = False,
+    source: str | None = None,
+    reconcile_order_qty: Any = None,
 ) -> bool:
-    """Dolumu tekillestirerek kalici yaz; duplicate replay'de True dondur."""
+    """Dolumu tekillestirerek kalici yaz; normal replay'de True dondur.
+
+    ``reconcile_order_qty`` yalniz mutabakat supurgesi icindir. Bu modda
+    execution kimligi farkli olsa bile ayni emir dolumu defterde kanitliysa
+    atomik kontrol ikinci satiri yazmaz ve False dondurur.
+    """
     normalized_side = str(side).upper()
     if normalized_side not in {"BUY", "SELL"}:
         raise ValueError(f"gecersiz fill side: {side}")
@@ -174,13 +217,60 @@ def record_fill(
         "dedupe_key": dedupe_key,
         "degraded": bool(degraded),
     }
+    normalized_source = str(source or "").strip() or None
+    if normalized_source is not None:
+        record["source"] = normalized_source
 
     path = _ledger_path()
     line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
     with _PROCESS_LOCK, _file_lock(path):
         existing = _read_path(path)
         if any(item.get("dedupe_key") == dedupe_key for item in existing):
-            return True
+            return False if reconcile_order_qty is not None else True
+        if reconcile_order_qty is not None:
+            target_order_key = order_fill_key(
+                normalized_order_id,
+                record["symbol"],
+                normalized_side,
+                reconcile_order_qty,
+            )
+            grouped_qty = Decimal("0")
+            current_fill_key = canonical_fill_key(
+                record["symbol"], normalized_side,
+                normalized_qty, normalized_price,
+            )
+            for item in existing:
+                if (
+                    str(item.get("order_id") or "").strip()
+                    != str(normalized_order_id or "")
+                    or str(item.get("symbol") or "").strip().upper()
+                    != record["symbol"]
+                    or str(item.get("side") or "").strip().upper()
+                    != normalized_side
+                ):
+                    continue
+                try:
+                    grouped_qty += abs(Decimal(str(item.get("qty") or 0)))
+                except (InvalidOperation, TypeError, ValueError):
+                    continue
+                # Executor execution_id olmadan ayni fill'i yazmissa activity
+                # kimligi farkli diye ikinci kez ekleme.
+                if not str(item.get("execution_id") or "").strip():
+                    try:
+                        if canonical_fill_key(
+                            item.get("symbol"), item.get("side"),
+                            item.get("qty"), item.get("price"),
+                        ) == current_fill_key:
+                            return False
+                    except ValueError:
+                        continue
+            if grouped_qty > 0 and order_fill_key(
+                normalized_order_id,
+                record["symbol"],
+                normalized_side,
+                grouped_qty,
+            ) == target_order_key:
+                return False
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(line)
             handle.flush()

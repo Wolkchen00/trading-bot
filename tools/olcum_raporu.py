@@ -44,6 +44,7 @@ from alpaca.trading.requests import (
 
 from config import PAPER_AGGRESSIVE_CONFIG, STOCK_CONFIG
 from core import fill_ledger, order_journal
+from core.fill_ledger import order_fill_key
 
 
 # R12 (SentAgent isaret duzeltmesi) karar dagilimini degistirdi; olcum epoch'u
@@ -313,7 +314,7 @@ def _canonical_broker_multiset(
                 "filled_qty>0 broker emrinde order_id/symbol/side eksik"
             )
             continue
-        result[(order_id, symbol, side, str(qty))] += 1
+        result[order_fill_key(order_id, symbol, side, qty)] += 1
     return result, problems
 
 
@@ -352,7 +353,7 @@ def _canonical_ledger_multiset(
 
     result: Counter = Counter()
     for (identity, symbol, side), qty in grouped.items():
-        result[(identity, symbol, side, str(qty.normalize()))] += 1
+        result[order_fill_key(identity, symbol, side, qty)] += 1
     return result, anonymous, problems
 
 

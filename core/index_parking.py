@@ -82,6 +82,11 @@ class IndexParkingManager:
             qty = abs(float(getattr(candidate, "filled_qty", 0) or 0))
             price = float(getattr(candidate, "filled_avg_price", 0) or 0)
             if qty <= 0 or price <= 0:
+                logger.warning(
+                    f"  PARK FILL BEKLIYOR: {self.symbol} {side} "
+                    f"order_id={oid or 'bilinmiyor'} henuz broker dolumuyla "
+                    "kanitlanamadi; satir yazilmadi, ledger sweep tamamlayacak"
+                )
                 return
             execution_id = None
             for attr in ("execution_id", "activity_id", "fill_id"):

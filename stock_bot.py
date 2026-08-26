@@ -77,6 +77,8 @@ from core.bear_brain import BearBrain
 from core.streak import update_loss_streak
 from core.signal_queue import SignalQueue
 from core.funnel import DailyFunnel
+from core.agent_stats import AgentStats, build_agent_data_ok
+from core.ledger_sweep import LedgerSweep
 from core.options_engine import OptionsEngine
 from core.options_analyzer import OptionsAnalyzer
 from core.options_executor import OptionsExecutor
@@ -142,6 +144,7 @@ class StockBot:
         self.funnel = DailyFunnel(
             enabled=config.get("funnel_enabled", True)
         )
+        self.agent_stats = AgentStats()
         # Yönetim bayrakları (partial_sold/breakeven_set/highest_price) pozisyon
         # geçici olarak sync'ten düşse bile kaybolmasın diye cache (A6 — cascade önleme)
         self._exit_flag_cache = {}
@@ -178,6 +181,11 @@ class StockBot:
         self.data_client = StockHistoricalDataClient(
             api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY,
         )
+        self.ledger_sweep = LedgerSweep(self.client, config)
+        try:
+            self.ledger_sweep.run()
+        except Exception as e:
+            logger.warning(f"  Baslangic ledger sweep hatasi: {e}")
 
         # Hesap bilgileri
         account = self.client.get_account()
@@ -417,6 +425,12 @@ class StockBot:
 
         while True:
             try:
+                # Muhasebe telemetrisi: karar akisindan bagimsiz, best-effort.
+                try:
+                    self.ledger_sweep.maybe_run()
+                except Exception as e:
+                    logger.warning(f"  Periyodik ledger sweep hatasi: {e}")
+
                 # KillSwitch kontrolü
                 if self.kill_switch.is_active:
                     logger.error(f"🚨 KILL SWITCH AKTİF: {self.kill_switch.kill_reason}")
@@ -1255,7 +1269,7 @@ class StockBot:
             )
 
             # Sentiment data
-            sent_data = {"news_score": 0}
+            sent_data = {"news_score": 0, "article_count": 0}
             try:
                 news = self.news_analyzer.analyze_stock_news(symbol)
                 sent_data = {
@@ -1263,6 +1277,7 @@ class StockBot:
                     "sentiment_label": news.get("signal", "NEUTRAL"),
                     "fear_greed_value": 50,
                     "fear_greed_signal": "NEUTRAL",
+                    "article_count": news.get("article_count", 0),
                 }
             except Exception:
                 pass
@@ -1289,6 +1304,23 @@ class StockBot:
                 symbol, tech_data, fund_data,
                 sent_data, social_data, risk_data
             )
+
+            # R13: yalniz telemetri. Kayit arizasi coordinator sonucunu degistiremez.
+            try:
+                stats = getattr(self, "agent_stats", None)
+                if stats is not None:
+                    stats.record_decision(
+                        decision,
+                        data_ok=build_agent_data_ok(
+                            analysis, sent_data, social_data, risk_data
+                        ),
+                        dynamic_weights=dict(self.coordinator.WEIGHTS),
+                        min_confidence_score=config.get(
+                            "min_confidence_score", 0
+                        ),
+                    )
+            except Exception as e:
+                logger.debug(f"  {symbol} agent stats kayit hatasi: {e}")
 
             # v4.10: ajan tahmini artık BURADA kaydedilmez. Eski kod her taramada
             # (2dk'da bir, işlemsiz) yazıyordu → 4 günde 5.500+ asla çözümlenmeyecek

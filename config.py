@@ -301,6 +301,8 @@ STOCK_CONFIG = {
     # === GOZLEMLENEBILIRLIK (R4) ===
     "funnel_enabled": True,
     "no_trade_alert_business_days": 3,
+    "ledger_sweep_window_hours": 24,
+    "ledger_sweep_interval_minutes": 15,
 
     # === Pozisyon ağırlıkları (tier bazlı) ===
     "tier_weights": {

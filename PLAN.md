@@ -1053,3 +1053,100 @@ uyarlandi ve **hicbiri zayiflatilmadi** (assert sayisi 43 -> 43):
 **Kalan acik:** K1-K6 Ihsan karar maddeleri; sonraki cycle adaylari R13 (dongu
 hizi , bloklayici sleep'ler ana donguyu tasarim hizinin ~%1'ine dusurmus) ve
 R14 (backtest/canli parity harness).
+
+---
+
+## v4.17 , R13: Olcum kor noktalari (2026-08-26)
+
+**Tetikleyici:** R11/R12 canliya alindiktan sonraki ILK piyasa gunu (2026-08-25)
+telemetrisi okundu. Uc yeni gercek cikti.
+
+### R12 uretimde dogrulandi
+- Canli logda `ELEVATED dismissed (negative -12%): sanctions` ,
+  duzeltme oncesi bu dal **matematiksel olarak tetiklenemiyordu** (olu kod).
+- `Haber NVDA: 8 haber, skor=-5` , kotu haber artik negatif skor uretiyor.
+- `signal_sell` 08-21'de 1 iken 08-25'te **47 (canli) / 98 (paper)**.
+
+### R11 telemetrisi: olay sayisi vs benzersiz sembol
+| | olay | benzersiz sembol |
+|---|---|---|
+| canli taranan 08-25 | 1550 | **10** |
+| canli `conf_below_min_buy` | 371 | **3** |
+| paper `gate_block/EMA200` | 799 | **2** |
+| paper `wash_sale_block` | 1509 | **3** |
+
+Evren gunde **5-10 benzersiz sembol**. Paper'da 5 taranan sembolun 3'u wash-sale,
+kalan 2'si EMA200 ile bloklaniyor -> geriye **sifir** kaliyor.
+
+### Olculen duvar (canli, 30 saat, n=2291 koordinator karari)
+```
+guven : medyan 19  p95 37  p99 41  max 53  -> >=50 olan: 1
+|ws|  : medyan 9.4 max 22.2                -> >15 olan: 434
+```
+Esik `min_confidence_score=50`. **2291 kararda 1 kez asildi**, o da EARNINGS
+kapisina takildi. Sinyal uretiliyor, guven kapisi geciimiyor. Mekanizma:
+`weighted_score` agirlikli TOPLAM; 5 ajandan 4'u HOLD dediginde agirlik
+kutlesinin %80'i olu yatiyor ve HOLD katkisi 0.
+
+### R13 kapsami (telemetri + muhasebe; HICBIR karar/esik/agirlik degismedi)
+
+**A , kendi kendini onaran defter**
+- Kanit: 2026-08-25 13:33:47 **SPY SELL 4.916948 @766.47 (emir 9973db0e)**
+  broker'da var, defterde YOK -> uretimde metrik-4 **FAIL**.
+- Kok neden: `core/index_parking.py::_record_parking_fill` emri gonderip HEMEN
+  okuyor; henuz dolmamissa `filled_qty=0` gelip fonksiyon **sessizce** cikiyordu
+  (log yok, alarm yok). Ayni gun PARK BUY +147ms'de yakalandi, PARK SELL yakalanmadi.
+  YARIS , rastgele tekrar eder ve parking'e ozel degil.
+- `core/ledger_sweep.py` (yeni): Alpaca activities FILL akisindan 24 saatlik
+  pencerede periyodik mutabakat (acilista 1 kez + ana donguda 15 dk'da bir).
+  Eksik dolumu `provenance="UNKNOWN"`, `pnl_usd=None`, `source="ledger_sweep"`
+  ile ekler , **TAHMIN YASAGI**. Hata trading akisina sizmaz.
+- **Cift sayim dort katmanda imkansiz:** emir-toplami esitligi, `execution_id`
+  kumesi, execution_id'siz executor satirlari icin icerik-anahtari sayaci, ve
+  `record_fill(reconcile_order_qty=...)` ile dosya kilidi altinda atomik
+  son kontrol.
+- `core/fill_ledger.py`: kanonik anahtar TEK KAYNAK (`canonical_fill_key`,
+  `order_fill_key`). `tools/olcum_raporu.py` artik onu import ediyor , R10
+  mantigi/ciktisi DEGISMEDI, 12 sinir degerinde eski iki ifadeyle byte-esdeger
+  oldugu olculdu (`10 -> 1E+1`, `20.00 -> 2E+1` dahil).
+- `_record_parking_fill` artik sessizce cikmiyor: emir id'sini yazan WARNING.
+
+**B , ajan susmasi olcumu**
+- `core/agent_stats.py` (yeni): ET gun bazli **histogram** (karar basina satir
+  YOK , gunde ~11.000 satir olurdu). Ajan basina oy dagilimi, `data_ok`,
+  guven kovalari, son dinamik agirlik; koordinator icin |ws|/guven kovalari,
+  `guven>=esik`, `ws>15`, `ws<-15`, majority, risk_veto, final_signal.
+- `data_ok` "skor 0" ile "veri yok"u AYIRIR: Fund -> `fundamental_data_ok`,
+  Sent -> `article_count>0` (bu alan `sent_data`'ya yeni gecirildi),
+  Social -> `reddit_posts>0 or x_tweets>0`, Risk -> zorunlu anahtarlar.
+- `tools/ajan_raporu.py` (yeni): gunluk tablo; veri yoksa `veri_yok` der.
+- Kayit hatasi koordinator kararini DEGISTIREMEZ (try/except + test).
+
+### Kanit (hepsi Claude tarafindan kosuldu)
+- `py -m pytest tests/test_r13_*.py -q` -> **19 gecti**
+- `py -m pytest tests/test_r9_ledger.py tests/test_r10_olcum.py -q` -> **37 gecti**
+  (iki dosya da **degistirilmedi**)
+- `py -m pytest tests/ -q` -> **238 gecti** (baseline 219)
+- `py tests/test_full_system.py` -> 115'te **113 gecen / 0 basarisiz**
+- Claude'un bagimsiz dusmanca suiti `adv_r13.py` (47 assert) , ikiz partial,
+  tek-tarafli partial, us gosterimi (`10` vs `1E+1`), pencere disi, defter>broker,
+  bozuk oy nesneleri, esik tam esitligi, bozuk JSON semasi , **hepsi gecti**.
+  R8-R12 dusmanca suitleri de yesil (regresyon yok).
+- **ILK GERCEK KOSU , uretim defterinin kopyasi (1020 satir) + canli paper
+  broker:** supurge **yalniz eksik 4 SPY execution'ini** ekledi (2+1+1+0.916948
+  = 4.916948, broker emriyle birebir); SHOP (8 vs 6+2), MSFT (4 vs 1+2+1) ve
+  SPY BUY **cift yazilmadi**; ikinci kosu **+0**;
+  **metrik-4 FAIL (eksik=1) -> PASS (eksik=0)**.
+
+### Gozlem (kapatilmadi, bilincli)
+- `qty>0` ama `price` yok olan broker kaydi supurgede `debug` ile atlanir
+  (WARNING degil). Sistem seviyesinde sessiz degil: `olcum_raporu` bunu
+  "filled_avg_price eksik" problemi olarak raporlar ve metrik-4 FAIL verir.
+- `AgentStats` kalici yazimi 60 sn'de bir; cokmede en fazla 60 sn'lik histogram
+  kaybi olur (telemetri, karar verisi degil).
+
+### Sonraki
+R14 (backtest/canli parity harness) , guven formulune veya ajan mimarisine
+dokunmadan ONCE her degisikligin yanlislanabilir olmasi gerekiyor. R13'un bir
+haftalik `agent_stats` verisi hangi ajanin olu agirlik oldugunu isimle
+soyleyecek; karar o veriyle verilecek.

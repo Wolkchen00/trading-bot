@@ -1150,3 +1150,84 @@ R14 (backtest/canli parity harness) , guven formulune veya ajan mimarisine
 dokunmadan ONCE her degisikligin yanlislanabilir olmasi gerekiyor. R13'un bir
 haftalik `agent_stats` verisi hangi ajanin olu agirlik oldugunu isimle
 soyleyecek; karar o veriyle verilecek.
+
+---
+
+## v4.18 , R14: Parity harness (2026-08-26)
+
+**Amac:** sapmayi DUZELTMEK degil, KANITLAMAK ve SAYIYA DOKMEK. Hicbir canli
+davranis degismedi , izlenen tek bir dosya bile degismedi, yalniz yeni dosyalar
+eklendi.
+
+### Kanitlanmis kok neden
+`backtest.py` (939 satir) canli cekirdekten YALNIZ iki sey import ediyor:
+`core.trade_gates.plan_exit_pcts` ve `core.protection.should_exit_locally`.
+`_technical_analysis` docstring'i aynen "Basitlestirilmis teknik analiz
+(analyzer.py mantigi)" diyor , canli yol `core/analyzer.py::TechnicalAnalyzer`
+kullanir. Giris/cikis/pozisyon yonetimi de ayri kod.
+
+### ONEMLI DUZELTME , "alti bagimsiz olcum" YANLISTI
+`regime_experiment.py` -> `walk_forward.run_window` -> `backtest.BacktestEngine`.
+Yani **backtest (+2.69%), walk-forward (mean_alpha -11.48%) ve rejim deneyi
+(5/5 mod 0/2) UC AYRI OLCUM DEGIL, AYNI MOTORUN UC KOSUSUDUR** , ve o motor
+canli botun karar yolu degildir. Canli strateji hakkinda kanit olarak
+kullanilamazlar.
+**Gecerliligini koruyan olcumler:** paper 2 ay -1.55% vs SPY +4.36%; canli
+gercek para strateji katkisi ~0; R10 ilk kosusu hesap +2.81% vs SPY +2.94%
+(katki dagilimi %89 SPY parki / %11 strateji). Yani "strateji alfa uretmiyor"
+sonucu AYAKTA , ama arkasindaki kanit alti degil UC olcumdur.
+
+### Uretilen arac
+- `core/decision_trace.py` (yeni): iki yolun ortak, serilestirilebilir karar
+  izi. **Bir kapi bir yolda YOKSA `passed=None` + `reason="kapi_yok"`** ,
+  yokluk basariyla karisamaz, bu kural `__post_init__`'te zorlanir.
+- `tests/fixtures/parity_tape.json` (yeni): **GERCEK** Alpaca IEX gunluk
+  barlari, 8 sembol x 120 bar (217 KB); ajan girdileri sabit fixture.
+- `tools/parity_harness.py` (yeni): ayni bandi iki yoldan gecirir. Canli yol
+  GERCEK `TechnicalAnalyzer` + `AgentCoordinator` + `TradeGates` cagirir.
+  Normal kosuda **AG CAGRISI YAPMAZ** (bozuk anahtarlarla ayni raporu urettigi
+  olculdu). Saat enjekte edilir; iki kosu bit-bit ayni.
+
+### OLCULEN SONUC
+```
+KAPSAM: yalniz CANLI yolda bulunan kapi/asama = 25
+  5 ajanin HEPSI (Tech/Fund/Sent/Social/Risk) + AgentCoordinator: backtest'te YOK
+  wash_sale, sector_rotation, ema200_trend, earnings_gate, multi_timeframe,
+  volatility_gate, pdt_check, kill_switch, loss_streak, partial_profit_exit ...: YOK
+  (backtest'te olup canlida olmayan: long_trend_gate , 1 tane)
+
+NIHAI AKSIYON MUTABAKATI (etiket) : 1/8  = 12.50%
+ETKIN AKSIYON MUTABAKATI (davranis): 8/8 = 100.00%
+ILERIYE-BAKIS: iki yolda da YOK (8/8 karar bozulmus gelecek barlarda degismedi)
+Cikis kodu: 1 (kapsam boslugu sapma sayilir)
+```
+
+### Visionary devraldi (Codex kullanim limitine takildi)
+Codex dort dosyayi yazdi ama hicbir PROOF'u kosamadan limite takildi. Kanitlari
+Claude kosturdu ve **raporda bir yanilti buldu:** basliktaki "12.50% mutabakat"
+davranis sapmasi gibi okunuyordu, oysa `tech_signal` 8/8 AYNI ve iki yol da
+hicbir islem acmiyor , fark ETIKET (BLOCKED vs HOLD), yani SEBEP farki.
+Claude ekledi:
+  - `effective_action()` + **ETKIN AKSIYON MUTABAKATI** blogu (islem acilir mi),
+  - her BLOCKED satirina **`bloklayan=<kapi adlari>`** kolonu (artik "BLOCKED"
+    demekle yetinmiyor, hangi kapinin durdurdugunu yaziyor),
+  - tam mutabakat + etiket farki durumunda acik NOT satiri,
+  - uc yeni test (etiket/davranis ayrimi, bloklayan kapi adi zorunlulugu).
+**Cikis kodu 1 BIRAKILDI** , 25 kapilik kapsam boslugu gercek bir sapmadir,
+arac "TAM MUTABAKAT" DEMEMELIDIR.
+
+### Kanit (hepsi Claude tarafindan kosuldu)
+- `py -m pytest tests/test_r14_parity.py -q` -> **12 gecti** (9 Codex + 3 Claude)
+- `py tools/parity_harness.py` -> tam rapor, **exit 1**
+- `py -m pytest tests/ -q` -> **250 gecti** (R13 sonrasi 238)
+- `py tests/test_full_system.py` -> 115'te **113 gecen / 0 basarisiz**
+- Ag bagimsizligi: bozuk Alpaca anahtarlariyla **birebir ayni rapor**
+- adv_r8..adv_r13 dusmanca suitleri , regresyon yok
+- `git status`: izlenen dosya **degismedi** (canli davranis dokunulmadi)
+
+### Bu ne demek
+Backtest'in bugunku sayilari canli bot hakkinda **yanlislanabilir bir iddia
+tasimiyor**. Guven formulune, ajan agirliklarina veya cikis geometrisine
+dokunmadan once ya (a) backtest canli cekirdegi kullanacak sekilde tasinmali,
+ya da (b) karar R13'un `agent_stats` canli verisiyle verilmeli. Sonraki rock'in
+konusu budur.

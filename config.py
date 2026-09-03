@@ -529,6 +529,12 @@ AV_QUOTA_CONFIG = {
     "ttl_hours": 24,
     "max_stale_hours": 168,   # 7 gün ,  temel veriler çeyreklik değişir
 
+    # Ön-çekim tur başına TAVAN. Bu çağrı ANA İŞLEM DÖNGÜSÜNDE koşuyor; bütün
+    # bütçeyi tek turda harcamak döngüyü ~6 dakika bloklar ve açık pozisyonların
+    # stop/koruma yönetimini geciktirir. 2 sembol/tur, gün boyunca bütçenin
+    # tamamını yine kullanır.
+    "prefetch_max_per_round": 2,
+
     # Gerçek ağ çağrısından sonraki bekleme. Cache hit'te ve kota doluyken
     # ÇALIŞMAZ; eski kod bunu başarısız çağrıda da koşturuyordu.
     "call_sleep_seconds": 15,

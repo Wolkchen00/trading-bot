@@ -390,10 +390,15 @@ def test_coordinator_gercek_ajan_kumesini_logluyor(social, monkeypatch):
 # BULGU: kazanc rezervi bir slotu KALICI olarak bosa yatiriyordu
 # ======================================================================
 
-def test_rezerv_kullanildiktan_sonra_TAMAMEN_serbest(tmp_path):
-    """reserve=1, takvim cagrisini yapinca kalan 11 slotun HEPSI temele acilmali."""
+def test_rezerv_BASARIDAN_sonra_TAMAMEN_serbest(tmp_path):
+    """reserve=1: takvim BASARIYLA tazeleyince kalan 11 slotun HEPSI temele acilir.
+
+    Slot kalici olarak bosa yatmamali (ilk bulgu) AMA basarisiz bir deneme de
+    onu serbest birakmamali (ikinci bulgu). Ikisi birden.
+    """
     q = _store(tmp_path, budget=12, reserve=1)
     assert q.try_reserve("earnings") is True
+    q.mark_earnings_refreshed()
     alinan = 0
     while q.try_reserve("fundamental"):
         alinan += 1

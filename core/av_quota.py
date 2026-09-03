@@ -64,6 +64,24 @@ class LockUnavailable(Exception):
     """Kilit alinamadi , rezervasyon reddedilmeli."""
 
 
+class ReserveReason(str, Enum):
+    """Rezervasyonun NEDEN verilmedigi.
+
+    Hepsini tek bir `False`'a cokertmek yanlisti: kilit ya da yazma hatasi
+    KOTA TUKENMESI degildir, ama analizor onu oyle sayip sembolu gun boyu
+    negatif cache'liyordu (Codex bulgusu).
+    """
+
+    OK = "OK"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"        # kendi gunluk butcemiz doldu
+    PROVIDER_EXHAUSTED = "PROVIDER_EXHAUSTED"    # saglayici tukendi (isaretli)
+    EARNINGS_RESERVED = "EARNINGS_RESERVED"      # slot takvime ayrilmis
+    LOCK_UNAVAILABLE = "LOCK_UNAVAILABLE"        # gecici , negatif cache YOK
+    WRITE_FAILED = "WRITE_FAILED"                # gecici , negatif cache YOK
+    CORRUPT_COUNTER = "CORRUPT_COUNTER"          # bugun kapali, yarin iyilesir
+    UNKNOWN_CONSUMER = "UNKNOWN_CONSUMER"
+
+
 def utc_day(now: Optional[datetime] = None) -> str:
     """Kota gunu , UTC. Yerel saat DEGIL."""
     now = now or datetime.now(timezone.utc)
@@ -223,6 +241,7 @@ class AVQuotaStore:
             "total_used": harcanan,
             "corrupt_recovered": tumu_harcanmis,
             "exhausted_day": None,
+            "earnings_refreshed_day": None,
         }
 
     def _dogrula(self, ham: object, gun: str) -> Optional[dict]:
@@ -235,9 +254,21 @@ class AVQuotaStore:
         if not isinstance(ham, dict):
             return None
         try:
-            if int(ham.get("schema_version", 0)) > SCHEMA_VERSION:
-                return None            # gelecekten gelen sema , okumaya calisma
+            surum = int(ham.get("schema_version"))
         except (TypeError, ValueError):
+            return None                # surum YOK ya da sayi degil , guvenilmez
+        if surum != SCHEMA_VERSION:
+            # Eski surum de gelecek surum de KABUL EDILMEZ. Eski surumu sessizce
+            # okumak, alan anlamlari degistiyse yanlis butce verir; gelecek surumu
+            # okumak zaten imkansiz. Fail-closed: bugun kapali, yarin temiz baslar.
+            return None
+
+        try:
+            kayitli_butce = int(ham.get("budget"))
+        except (TypeError, ValueError):
+            return None
+        if kayitli_butce != self.budget:
+            # Butce config'de degistiyse eski sayac anlamsizdir.
             return None
 
         ham_gun = ham.get("utc_day")
@@ -286,6 +317,7 @@ class AVQuotaStore:
             "total_used": toplam,
             "corrupt_recovered": False,
             "exhausted_day": tuk,
+            "earnings_refreshed_day": ham.get("earnings_refreshed_day"),
         }
 
     def _oku(self) -> dict:
@@ -343,13 +375,17 @@ class AVQuotaStore:
     # -------------------------------------------------- genel API
 
     def try_reserve(self, consumer: str, count: int = 1) -> bool:
-        """Cagridan ONCE kota rezerve eder. False ise AG CAGRISI YAPILMAMALI."""
+        """Geriye uyumlu bool sarmalayici. Sebep gerekiyorsa reserve() kullan."""
+        return self.reserve(consumer, count)[0]
+
+    def reserve(self, consumer: str, count: int = 1):
+        """(verildi_mi, ReserveReason) doner. False ise AG CAGRISI YAPILMAMALI."""
         if consumer not in CONSUMERS:
             logger.warning(
                 f"AV kota: tanimsiz tuketici '{consumer}' , butce disinda kalmasin "
                 f"diye CONSUMERS'a eklenmeli. Simdilik reddediliyor."
             )
-            return False
+            return False, ReserveReason.UNKNOWN_CONSUMER
 
         gun = utc_day(self._now_fn())
         try:
@@ -361,12 +397,12 @@ class AVQuotaStore:
                 # KALICI KILITLENMEYE donusur.
                 if kayit.get("corrupt_recovered"):
                     self._yaz(kayit)
-                    return False
+                    return False, ReserveReason.CORRUPT_COUNTER
 
                 # ANAHTAR GENELI TUKENME: bir tuketici kotanin bittigini ogrendiyse
                 # digerleri bosa cagri yapip 15 sn uyumamali.
                 if kayit.get("exhausted_day") == gun:
-                    return False
+                    return False, ReserveReason.PROVIDER_EXHAUSTED
 
                 if consumer != "earnings":
                     # KAZANC TAKVIMI REZERVI: takvim bir ISLEM KAPISINI besliyor
@@ -379,27 +415,50 @@ class AVQuotaStore:
                     # Onceki surum `reserve - used` yaziyordu ve reserve=2 iken
                     # normal tek cagridan sonra 1 slot kalici olarak bosa
                     # yatiyordu (Codex bulgusu).
+                    # Rezerv, takvim BASARIYLA tazeleyene kadar korunur.
+                    # Onceki surum "herhangi bir cagri denendi" ile serbest
+                    # birakiyordu; basarisiz bir deneme, reklam edilen yeniden
+                    # deneme kapasitesini temel analize kaptiriyordu.
                     ayrilan = (
-                        0 if kayit["used"].get("earnings", 0) > 0
+                        0 if kayit.get("earnings_refreshed_day") == gun
                         else self._earnings_reserve()
                     )
                     if kayit["total_used"] + count > kayit["budget"] - ayrilan:
-                        return False
+                        return (
+                            False,
+                            ReserveReason.EARNINGS_RESERVED if ayrilan
+                            else ReserveReason.BUDGET_EXHAUSTED,
+                        )
 
                 if kayit["total_used"] + count > kayit["budget"]:
-                    return False
+                    return False, ReserveReason.BUDGET_EXHAUSTED
 
                 kayit["used"][consumer] += count
                 kayit["total_used"] += count
                 # Yazma BASARISIZSA rezervasyon verilmez: aksi halde kaydedilmemis
                 # bir ag cagrisi olur ve restart ayni slotu yeniden harcar.
-                return bool(self._yaz(kayit))
+                if self._yaz(kayit):
+                    return True, ReserveReason.OK
+                return False, ReserveReason.WRITE_FAILED
         except LockUnavailable as exc:
             logger.warning(
                 f"AV kota kilidi alinamadi ({exc}) , rezervasyon REDDEDILDI. "
                 f"Kilitsiz devam etmek butce garantisini iptal ederdi."
             )
-            return False
+            return False, ReserveReason.LOCK_UNAVAILABLE
+
+    def mark_earnings_refreshed(self) -> None:
+        """Takvim BASARIYLA tazelendi , ayrilan slot artik serbest."""
+        gun = utc_day(self._now_fn())
+        try:
+            with file_lock(self.lock_path):
+                kayit = self._oku()
+                if kayit.get("corrupt_recovered"):
+                    return
+                kayit["earnings_refreshed_day"] = gun
+                self._yaz(kayit)
+        except LockUnavailable:
+            pass
 
     def mark_exhausted(self) -> None:
         """Kotanin bugun tukendigini PAYLASILAN kayda isle (anahtar geneli)."""
@@ -414,14 +473,20 @@ class AVQuotaStore:
             logger.debug(f"AV tukenme isareti yazilamadi (kilit): {exc}")
 
     def is_exhausted(self) -> bool:
-        """Bugun tukenmis olarak isaretlendi mi (anahtar geneli)."""
+        """Bugun tukenmis olarak isaretlendi mi (anahtar geneli).
+
+        BOZUK kaydi burada da ONARIR: uretimde bu metot try_reserve'den ONCE
+        cagriliyor, dolayisiyla onarim yalniz try_reserve'de olsaydi hic
+        tetiklenmez ve fail-closed KALICI kilitlenmeye donusurdu (Codex bulgusu).
+        """
         gun = utc_day(self._now_fn())
         try:
             with file_lock(self.lock_path):
                 kayit = self._oku()
-                return kayit.get("exhausted_day") == gun or bool(
-                    kayit.get("corrupt_recovered")
-                )
+                if kayit.get("corrupt_recovered"):
+                    self._yaz(kayit)     # yarin UTC gun donusuyle iyilessin
+                    return True
+                return kayit.get("exhausted_day") == gun
         except LockUnavailable:
             return True          # fail-closed
 

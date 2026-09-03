@@ -68,7 +68,9 @@ class FundamentalAnalyzer:
     # 1. ŞİRKET GENEL BAKIŞ
     # ============================================================
 
-    def get_company_overview(self, symbol: str) -> Optional[Dict]:
+    def get_company_overview(
+        self, symbol: str, force_refresh: bool = False
+    ) -> Optional[Dict]:
         """Alpha Vantage Company Overview , kota + disk cache + tipli sonuclar (R16).
 
         Sira onemli ve her adim bir agi/uykuyu ONLUYOR:
@@ -81,7 +83,10 @@ class FundamentalAnalyzer:
         `time.sleep(15)`u basarisiz cagrida bile odeyordu.
         """
         cache_key = f"overview_{symbol}"
-        if self._is_cached(cache_key):
+        # force_refresh: on-cekim yolu BAYAT bir sembolu tazelemek icin cagirir.
+        # Cache dallarini atlamazsa bayat yuku aninda geri dondurur, "basarili"
+        # sayar ve HICBIR SEYI tazelemez , imlec yine olu kalirdi (Codex bulgusu).
+        if not force_refresh and self._is_cached(cache_key):
             return self.cache[cache_key]
 
         # 2) DISK CACHE , bayatlik sozlesmesiyle.
@@ -90,7 +95,7 @@ class FundamentalAnalyzer:
         # bayatlik damgasini kaybediyordu (Codex bulgusu). Disk cache zaten
         # bellekte yuklu bir sozluk; her cagrida yas YENIDEN hesaplanir.
         yuk, yas, bolge = self.disk_cache.get(symbol)
-        if bolge in ("TAZE", "BAYAT") and yuk:
+        if not force_refresh and bolge in ("TAZE", "BAYAT") and yuk:
             yuk = dict(yuk)
             yuk["data_age_hours"] = round(yas, 1)
             yuk["is_stale"] = (bolge == "BAYAT")
@@ -117,10 +122,23 @@ class FundamentalAnalyzer:
         if self.disk_cache.is_negative_cached(symbol):
             return None
 
-        # 4) KOTA REZERVI , cagridan ONCE, surecler arasi kilit altinda
-        if not self.quota.try_reserve("fundamental"):
-            self._kota_uyar(symbol)
-            self.disk_cache.mark_quota_exhausted(symbol)
+        # 4) KOTA REZERVI , cagridan ONCE, surecler arasi kilit altinda.
+        # SEBEBE gore davran: kilit/yazma hatasi KOTA TUKENMESI DEGILDIR ve
+        # sembolu gun boyu negatif cache'lememeli (Codex bulgusu). Onceki surum
+        # dort ayri sebebi tek `False`'a cokertip hepsini tukenme sayiyordu.
+        verildi, sebep = self.quota.reserve("fundamental")
+        if not verildi:
+            from core.av_quota import ReserveReason
+            if sebep in (ReserveReason.BUDGET_EXHAUSTED,
+                         ReserveReason.PROVIDER_EXHAUSTED):
+                self._kota_uyar(symbol)
+                self.disk_cache.mark_quota_exhausted(symbol)
+            else:
+                # GECICI ya da yapisal: negatif cache YOK, ayni gun tekrar denenir.
+                logger.debug(
+                    f"{symbol} temel veri rezervasyonu verilmedi ({sebep.value}) , "
+                    f"gecici sayiliyor, negatif cache yazilmadi"
+                )
             return None
 
         try:
@@ -210,11 +228,19 @@ class FundamentalAnalyzer:
                 rapor["kapsama"] = self.disk_cache.coverage(evren)
                 return rapor
 
-            kalan = self.quota.remaining() if limit is None else int(limit)
+            # TUR BASINA SERT TAVAN , bu cagri ANA ISLEM DONGUSUNDE kosuyor.
+            # Butun butceyi (12 cagri x 15 sn uyku + timeout'lar) tek turda
+            # harcamak dongu ~6 DAKIKA bloklar ve acik pozisyonlarin stop/koruma
+            # yonetimini geciktirir , gercek parada kabul edilemez (Codex bulgusu).
+            # Kucuk bir tavan gun boyunca yine butun butceyi kullanir.
+            tavan = self._prefetch_max_per_round() if limit is None else int(limit)
+            kalan = min(tavan, self.quota.remaining())
             adaylar = self.disk_cache.next_refresh_candidates(evren, kalan)
             for sembol in adaylar:
                 rapor["denenen"] += 1
-                if self.get_company_overview(sembol) is not None:
+                # force_refresh ZORUNLU: aksi halde bayat yuk aninda geri doner,
+                # "basarili" sayilir ve hicbir sey tazelenmez.
+                if self.get_company_overview(sembol, force_refresh=True) is not None:
                     rapor["basarili"] += 1
                 elif self.quota.is_exhausted():
                     rapor["atlanan_kota"] += 1
@@ -224,6 +250,15 @@ class FundamentalAnalyzer:
             # Onceden-cekim BEST-EFFORT: arizasi tarama turunu durduramaz.
             logger.debug(f"Temel veri on-cekimi hatasi: {exc}")
         return rapor
+
+    @staticmethod
+    def _prefetch_max_per_round() -> int:
+        """Tur basina en fazla kac sembol tazelenir (ana dongu bloklamasi)."""
+        try:
+            from config import AV_QUOTA_CONFIG
+            return max(0, int(AV_QUOTA_CONFIG.get("prefetch_max_per_round", 2)))
+        except Exception:
+            return 2
 
     def _kota_uyar(self, symbol: str) -> None:
         """Kota tukenmesi SESSIZ kalmaz , eski kod logger.debug ile yutuyordu."""

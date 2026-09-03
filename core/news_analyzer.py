@@ -249,6 +249,11 @@ class StockNewsAnalyzer:
             if response.status_code == 200:
                 data = response.json()
                 if classify_response(200, response.text, data) is AVOutcome.QUOTA_EXHAUSTED:
+                    # ANAHTAR GENELI isareti BU tuketici de yazar: kotanin
+                    # bittigini kim ogrenirse ogrensin, digerleri bosa cagri
+                    # yapmasin (Codex bulgusu: yalniz FundamentalAnalyzer
+                    # isaretliyordu).
+                    shared_store().mark_exhausted()
                     logger.warning("AV haber: kota tukendi (HTTP 200 + uyari govdesi)")
                     return []
                 feed = data.get("feed", [])

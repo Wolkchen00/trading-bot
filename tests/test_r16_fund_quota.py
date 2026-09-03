@@ -503,16 +503,35 @@ def test_takvim_rezervini_kullanmazsa_serbest_kalmiyor_ama_takvim_alabiliyor(tmp
     assert q.try_reserve("earnings") is True
 
 
-def test_takvim_kullandikca_rezerv_serbest_kaliyor(tmp_path):
-    """Takvim payini kullandiginda tavan geri acilir , slot bosa gitmez."""
+def test_takvim_BASARIYLA_tazeleyince_rezerv_serbest(tmp_path):
+    """Rezerv, takvim BASARIYLA tazeleyene kadar korunur.
+
+    Onceki surum "herhangi bir cagri denendi" ile serbest birakiyordu; basarisiz
+    bir deneme, reklam edilen yeniden deneme kapasitesini temel analize
+    kaptiriyordu (Codex bulgusu).
+    """
     q = AVQuotaStore(path=str(tmp_path / "q.json"), budget=12, profile="paper",
                      now_fn=lambda: T0, earnings_reserve=2)
-    assert q.try_reserve("earnings") is True
-    assert q.try_reserve("earnings") is True   # rezerv tuketildi
+    assert q.try_reserve("earnings") is True      # denendi ama basarili demedik
     alinan = 0
     while q.try_reserve("fundamental"):
         alinan += 1
-    assert alinan == 10, f"rezerv tuketildikten sonra tavan acilmadi: {alinan}"
+    assert alinan == 9, (
+        f"basarisiz denemeden sonra rezerv serbest kaldi: temele {alinan}"
+    )
+
+
+def test_takvim_basarisiz_denemede_rezerv_KORUNUYOR(tmp_path):
+    q = AVQuotaStore(path=str(tmp_path / "q.json"), budget=12, profile="paper",
+                     now_fn=lambda: T0, earnings_reserve=2)
+    q.try_reserve("earnings")                     # deneme, basari YOK
+    alinan = 0
+    while q.try_reserve("fundamental"):
+        alinan += 1
+    # 12 - 1 (takvim denemesi) - 2 (hala korunan rezerv) = 9
+    assert alinan == 9
+    q.mark_earnings_refreshed()                   # simdi basarili
+    assert q.try_reserve("fundamental") is True, "basaridan sonra serbest kalmadi"
 
 
 def test_rezerv_sifirsa_eski_davranis(tmp_path):

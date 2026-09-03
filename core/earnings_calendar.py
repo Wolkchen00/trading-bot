@@ -121,6 +121,29 @@ class EarningsCalendar:
                 },
                 timeout=20,
             )
+            # AV kota tukenmesi burada da ANAHTAR GENELI isaretlenir; eskiden
+            # ayni JSON govdesi "genel hata" sayiliyor ve digerleri bosa cagri
+            # yapmaya devam ediyordu (Codex bulgusu).
+            try:
+                from core.av_quota import AVOutcome, classify_response
+                _govde = resp.text or ""
+                _yuk = {}
+                if _govde.lstrip().startswith("{"):
+                    import json as _json
+                    try:
+                        _yuk = _json.loads(_govde)
+                    except ValueError:
+                        _yuk = {}
+                if classify_response(
+                    resp.status_code, _govde, _yuk
+                ) is AVOutcome.QUOTA_EXHAUSTED:
+                    shared_store().mark_exhausted()
+                    logger.warning(
+                        "Earnings takvimi: AV KOTASI TUKENDI (anahtar geneli isaretlendi)"
+                    )
+            except Exception:
+                pass
+
             if resp.status_code != 200 or not resp.text or resp.text.lstrip().startswith("{"):
                 # JSON dönmesi = hata/limit mesajı (normal yanıt CSV'dir)
                 logger.warning(
@@ -165,6 +188,12 @@ class EarningsCalendar:
 
             self._calendar = new_cal
             self._fetched_at = datetime.now()
+            # R16: takvim BASARIYLA tazelendi , kotada ona ayrilan slot
+            # artik serbest kalabilir (basarisiz deneme serbest birakmaz).
+            try:
+                shared_store().mark_earnings_refreshed()
+            except Exception:
+                pass
             self._warned_no_data = False
             self._save_disk_cache()
             logger.info(

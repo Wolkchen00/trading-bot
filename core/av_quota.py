@@ -80,6 +80,32 @@ class ReserveReason(str, Enum):
     WRITE_FAILED = "WRITE_FAILED"                # gecici , negatif cache YOK
     CORRUPT_COUNTER = "CORRUPT_COUNTER"          # bugun kapali, yarin iyilesir
     UNKNOWN_CONSUMER = "UNKNOWN_CONSUMER"
+    INVALID_REQUEST = "INVALID_REQUEST"          # count <= 0 ya da tamsayi degil
+
+
+def _tam_sayi(deger) -> Optional[int]:
+    """Yalniz GERCEK tamsayi kabul eder.
+
+    `int()` float'i, bool'u ve sayisal string'i sessizce cevirirdi: 1.9 -> 1
+    kirpilip gecerli sayilirdi, True -> 1 olurdu. Bozuk bir sayac boylece
+    "gecerli" gorunup yanlis butce verirdi (Codex bulgusu).
+    """
+    if isinstance(deger, bool):
+        return None
+    if isinstance(deger, int):
+        return deger
+    return None
+
+
+def _gecerli_gun(deger) -> bool:
+    """YYYY-MM-DD bicimini dogrular."""
+    if not isinstance(deger, str) or len(deger) != 10:
+        return False
+    try:
+        datetime.strptime(deger, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
 
 
 def utc_day(now: Optional[datetime] = None) -> str:
@@ -100,17 +126,28 @@ def classify_response(status_code: int, body_text: str, payload: object) -> AVOu
     if status_code != 200:
         return AVOutcome.RETRYABLE_ERROR
 
-    dusuk = (body_text or "").lower()
-    kota_isaretleri = (
-        "rate limit",
-        "api call frequency",
-        "premium",
-        "thank you for using alpha vantage",
-        "higher api call volume",
-        "25 requests per day",
-    )
-    if any(isaret in dusuk for isaret in kota_isaretleri):
-        return AVOutcome.QUOTA_EXHAUSTED
+    ham = (body_text or "").strip()
+
+    # KOTA MESAJI HER ZAMAN KISA BIR JSON'DUR. Alt dizi taramasini gelisiguzel
+    # her govdeye uygulamak tehlikeli: EARNINGS_CALENDAR endpoint'i BINLERCE
+    # satirlik CSV doner ve icinde "Premium Brands Holdings" gibi bir SIRKET ADI
+    # gecerse kota tukenmis sanilir, isaret anahtar genelinde yazilir ve UC
+    # tuketici birden gun boyu susar (Codex bulgusu , olculdu, gercek).
+    json_gorunumlu = ham.startswith("{") or ham.startswith("[")
+    sozluk_yuk = isinstance(payload, dict) and bool(payload)
+
+    if json_gorunumlu or sozluk_yuk:
+        dusuk = ham.lower()
+        kota_isaretleri = (
+            "rate limit",
+            "api call frequency",
+            "premium",
+            "thank you for using alpha vantage",
+            "higher api call volume",
+            "25 requests per day",
+        )
+        if any(isaret in dusuk for isaret in kota_isaretleri):
+            return AVOutcome.QUOTA_EXHAUSTED
 
     if isinstance(payload, dict):
         for anahtar in ("Note", "Information"):
@@ -253,30 +290,24 @@ class AVQuotaStore:
         """
         if not isinstance(ham, dict):
             return None
-        try:
-            surum = int(ham.get("schema_version"))
-        except (TypeError, ValueError):
-            return None                # surum YOK ya da sayi degil , guvenilmez
+        surum = _tam_sayi(ham.get("schema_version"))
+        if surum is None:
+            return None                # surum YOK ya da gercek tamsayi degil
         if surum != SCHEMA_VERSION:
             # Eski surum de gelecek surum de KABUL EDILMEZ. Eski surumu sessizce
             # okumak, alan anlamlari degistiyse yanlis butce verir; gelecek surumu
             # okumak zaten imkansiz. Fail-closed: bugun kapali, yarin temiz baslar.
             return None
 
-        try:
-            kayitli_butce = int(ham.get("budget"))
-        except (TypeError, ValueError):
+        kayitli_butce = _tam_sayi(ham.get("budget"))
+        if kayitli_butce is None:
             return None
         if kayitli_butce != self.budget:
             # Butce config'de degistiyse eski sayac anlamsizdir.
             return None
 
         ham_gun = ham.get("utc_day")
-        if not isinstance(ham_gun, str) or len(ham_gun) != 10:
-            return None
-        try:
-            datetime.strptime(ham_gun, "%Y-%m-%d")
-        except ValueError:
+        if not _gecerli_gun(ham_gun):
             return None
         if ham_gun > gun:
             return None                # GELECEK tarihli kayit , guvenilmez
@@ -289,23 +320,24 @@ class AVQuotaStore:
             return None
         used = {}
         for c in CONSUMERS:
-            try:
-                v = int(ham_used[c])
-            except (KeyError, TypeError, ValueError):
+            # `int()` float'i (1.9 -> 1), bool'u ve sayisal string'i sessizce
+            # cevirirdi; bozuk bir sayac "gecerli" gorunup yanlis butce verirdi.
+            v = _tam_sayi(ham_used.get(c))
+            if v is None or v < 0:
                 return None            # EKSIK/BOZUK sayac , 0 varsaymak yasak
-            if v < 0:
-                return None
             used[c] = v
 
-        try:
-            toplam = int(ham.get("total_used"))
-        except (TypeError, ValueError):
-            return None
-        if toplam != sum(used.values()):
+        toplam = _tam_sayi(ham.get("total_used"))
+        if toplam is None or toplam != sum(used.values()):
             return None                # tutarsiz , guvenilmez
 
+        # Opsiyonel tarih alanlari da BICIM dogrulanir ve kaydin gununden
+        # ileride olamaz; aksi halde uydurma bir dize kalici tukenme yaratirdi.
         tuk = ham.get("exhausted_day")
-        if tuk is not None and not isinstance(tuk, str):
+        if tuk is not None and (not _gecerli_gun(tuk) or tuk > gun):
+            return None
+        tazelendi = ham.get("earnings_refreshed_day")
+        if tazelendi is not None and (not _gecerli_gun(tazelendi) or tazelendi > gun):
             return None
 
         return {
@@ -386,6 +418,12 @@ class AVQuotaStore:
                 f"diye CONSUMERS'a eklenmeli. Simdilik reddediliyor."
             )
             return False, ReserveReason.UNKNOWN_CONSUMER
+
+        # Sifir/negatif count OK donup hic kullanim kaydetmez ya da sayaci
+        # NEGATIFE cekerdi , cagiran hatasi sessizce butceyi bozardi.
+        if _tam_sayi(count) is None or count <= 0:
+            logger.warning(f"AV kota: gecersiz count={count!r} , reddedildi")
+            return False, ReserveReason.INVALID_REQUEST
 
         gun = utc_day(self._now_fn())
         try:

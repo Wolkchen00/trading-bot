@@ -1358,6 +1358,20 @@ class StockBot:
             # değil rastgele geç bir taramayı yakalıyordu (yanlış kredi ataması).
             # Kayıt yalnız işlem gerçekten açılınca yapılır (_record_trade_votes).
 
+            # R18: golge defter merkezi kilit reddinde bu ikisini okuyacak.
+            # Kilit reddi executor'un ICINDE olusuyor ve oraya karar/analiz
+            # parametresi tasimak bes imzayi degistirmek demekti; sembol
+            # bazli son-deger sakla, salt telemetri.
+            try:
+                if not hasattr(self, "_son_karar"):
+                    self._son_karar = {}
+                if not hasattr(self, "_son_analiz"):
+                    self._son_analiz = {}
+                self._son_karar[symbol] = decision
+                self._son_analiz[symbol] = analysis
+            except Exception:
+                pass
+
             return decision
 
         except Exception as e:

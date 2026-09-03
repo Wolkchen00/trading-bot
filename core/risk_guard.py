@@ -35,6 +35,67 @@ def _deny(bot, reason: str) -> tuple[bool, str]:
     return False, reason
 
 
+def _golge_kaydet(bot, config, kind: str, symbol: str) -> None:
+    """R18: R5 kilidiyle reddedilen niyeti golge deftere yaz.
+
+    BURASI TEK NOKTADIR: bes ayri executor (stock/short/option/bear_etf/
+    parking) bu kapidan geciyor, dolayisiyla niyet tek yerde ve TUTARLI
+    sekilde yakalanir. Coordinator kararini kaydetmek yanlis olurdu:
+    asagi-akis kontrollerinde elenecek adaylari da "gonderilecekti" sayardi.
+
+    SALT GOZLEM: kapi kararini DEGISTIRMEZ, arizasi cagirana SIZMAZ.
+    """
+    try:
+        from core.shadow_ledger import shared_ledger
+
+        analysis = getattr(bot, "_son_analiz", {}).get(symbol) or {}
+        decision = getattr(bot, "_son_karar", {}).get(symbol) or {}
+
+        # Piyasa durumu YEREL bir hesap , broker cagrisi yok, hot path guvenli.
+        market = {}
+        mh = getattr(bot, "market_hours", None)
+        if mh is not None:
+            try:
+                market = dict(mh.get_market_status() or {})
+            except Exception:
+                market = {}
+
+        shared_ledger().record_lock_rejection(
+            symbol=symbol,
+            kind=kind,
+            block_reason="LIVE_LOCK_R5",
+            decision=decision,
+            analysis=analysis,
+            market_status=market,
+            quote={
+                "price": analysis.get("price"),
+                "observed_at": None,
+                "note": (
+                    "Giris ani fiyati; bid/ask ve yasam dongusu gozlemleri "
+                    "etiketleyici tarafindan quote_source uzerinden yeniden "
+                    "cekilecek. Tek bir giris fiyati stop/trailing/dolum "
+                    "tekrari icin YETMEZ."
+                ),
+            },
+            order_params={
+                "side": "buy" if kind in ("stock_long", "bear_etf",
+                                          "index_parking") else "sell",
+                "size_usd": None,   # BU NOKTADA HESAPLANMAMISTIR
+                "qty": None,
+                "type": "market",
+                "note": "boyutlandirma kilit reddinden SONRA kosuyor",
+            },
+            state_snapshot={
+                "open_positions": len(getattr(bot, "positions", {}) or {}),
+                "consecutive_losses": getattr(bot, "_consecutive_losses", None),
+                "market_regime": getattr(bot, "_market_regime", None),
+                "floor_block": getattr(bot, "_floor_block", None),
+            },
+        )
+    except Exception:
+        pass   # golge kaydi ASLA kapi kararini etkilemez
+
+
 def can_open_new_risk(
     bot,
     config,
@@ -79,6 +140,11 @@ def can_open_new_risk(
                     except Exception:
                         live_entries_enabled = False
                 if not live_entries_enabled:
+                    # R18: kilit kapaliyken stratejinin NE YAPMAK ISTEDIGINI
+                    # sifir dolar riskle kaydet. Kanit icin islem, islem icin
+                    # acik kilit, kilit icin kanit gerekiyordu , bu kisir
+                    # donguyu kiran tek sey golge kaydidir.
+                    _golge_kaydet(bot, config, kind, symbol)
                     return _deny(bot, "LIVE_LOCK_R5")
 
         return True, ""

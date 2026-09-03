@@ -486,3 +486,56 @@ I reviewed the diff and tests statically; I could not rerun pytest in the read-o
 - [FIX] The earnings reserve is held whenever earnings has made zero calls rather than when refresh is due, then released after any attempted call even if it failed, allowing fundamentals to consume the capacity needed for the advertised retry -> Track successful calendar freshness separately and protect/report a bounded retry slot until valid refresh or terminal exhaustion.
 
 VERDICT: NOT YET```
+
+### Fix round 2 dogrulamasi (Codex, verbatim)
+
+```
+I reviewed the diff statically; I could not rerun pytest in the read-only workspace. The `is_exhausted()` repair and basic `ReserveReason` mapping are sound.
+
+- [FIX] `prefetch_due(limit=...)` bypasses `prefetch_max_per_round`, so the claimed hard latency cap applies only when callers omit `limit` -> Always enforce `min(configured_cap, requested_limit, remaining)`.
+- [FIX] Even the production cap of two permits roughly 60 seconds of blocking per round—two 15-second requests followed by two 15-second sleeps—while open-position management is paused -> Move prefetch outside the safety-critical loop; a configurable `<=3` assertion is not a defensible latency proof.
+- [FIX] The attempt-cursor deferral is unsafe because two failing leading symbols can now monopolize every capped round and consume the whole allowance, while the six-symbol proof uses only successful responses -> Persist attempt time/outcome, advance fairness after every attempt, and stop a batch after bounded retryable failures before building health reporting around coverage.
+- [FIX] A forced refresh is reported TAZE and successful even when `FundamentalsCache.save()` fails, because `put()` mutates memory before ignoring the failed persistence result -> Make `put()` return durability status and distinguish network success from persistently refreshed coverage; test through a new cache instance.
+- [FIX] EarningsCalendar passes every successful CSV body through a classifier containing the generic substring `premium`, so an unrelated company name in the full calendar can falsely mark the provider exhausted -> Apply quota-body classification only to structured JSON/error responses, then parse valid CSV independently.
+- [FIX] EarningsCalendar calls `mark_earnings_refreshed()` before `_save_disk_cache()`, so a failed calendar write releases the reserve although a restart restores stale or missing calendar data -> Atomically persist the calendar first and release the reserve only after durable success.
+- [FIX] Earnings retries remain unbounded per UTC day and bypass the non-earnings reserve check, so a calendar that fails every 30 minutes can consume all 12/13 slots and starve fundamentals -> Cap earnings attempts per day and reserve only a documented bounded number of retries.
+- [FIX] `earnings_refreshed_day` is based on success during the current UTC day rather than whether refresh is actually due, so a fresh prior-day calendar can strand a slot all day while repeated failures can retain it indefinitely -> Persist due/success state explicitly and report reserved, attempted, successful, and released capacity.
+- [FIX] Strict validation still coerces floats, booleans, and numeric strings with `int()`, while `exhausted_day` and `earnings_refreshed_day` are not format-validated, allowing semantically corrupt values such as `1.9` to be truncated and accepted -> Require actual non-boolean integers and validate both optional dates against the record’s UTC day.
+- [FIX] `reserve()` accepts zero or negative `count`, allowing a caller error to return OK while recording no usage or negative usage -> Require a positive integer before acquiring the lock and return a dedicated invalid-request reason.
+- [FIX] News and earnings still use the boolean wrapper, so lock, write, corruption, provider exhaustion, and budget exhaustion are observably collapsed into the same “budget full” message despite the new typed API -> Route all three consumers through `reserve()` and persist the actual reason.
+- [FIX] Deferring source-age propagation beyond R17 would let the new health layer call the decision pipeline healthy while FundAgent is operating on stale or unavailable evidence, and carrying metadata does not itself change thresholds -> Include source timestamp, age, freshness, and reservation outcome as non-behavioral R17 telemetry while leaving scoring unchanged.
+- [DEFER] Converting invariant failures into a persisted DEGRADED entry halt legitimately belongs to R17 because the current ERROR-first HOLD preserves exits and the live-entry lock remains closed -> Make this a non-negotiable R17 acceptance test before any decision-pipeline status can be healthy.
+- [DEFER] Dirty-key cache merging, baseline-SHA enforcement, and executable integration proofs remain real weaknesses but do not themselves loosen the current live gate -> Keep them queued, require cache freshness to remain UNKNOWN when persistence is uncertain, and complete the proof work before future R15/R16 behavioral changes.
+
+VERDICT: NOT YET```
+
+### Fix round 3 , YARIM KALDI (Codex haftalik kotasi bitti)
+
+Codex 48 komut kosturdu ve iki akil yurutme mesaji verdikten sonra
+`turn.failed: usage limit ... try again at Sep 7th, 2026 10:53 AM` ile dustu.
+Bu HAFTALIK limit; dort gun sonrasina kadar Codex yok.
+
+Kurtarilan kismi akil yurutme (verbatim):
+```
+I will verify the relocation against the full run() control flow, then trace attempt
+ordering and persistence across restarts. I will treat "safe to build R17 on"
+separately from "R16 is perfect," since only hazards that undermine R17 foundation
+should block the verdict.
+
+The two riskiest areas are now clear: the prefetch move itself is directionally sound,
+but I am checking whether its proof actually pins the call to the CLOSED branch;
+separately, the earnings reserve still depends on what "saved successfully" really
+means, not merely source-code ordering.
+```
+
+Iki iz de HAKLIYDI ve takip edildi (commit sonrasi):
+- On-cekim tasimasinin kaniti kaynak metninde `prefetch_due` ariyordu; NEREDE
+  oldugunu sinamiyordu. Davranis testine cevrildi: cagri sembol tarama yolunun
+  onceki 40 satirinda OLMAMALI ve CLOSED dalinin govdesinde OLMALI.
+- Kazanc rezervi duzeltmem KOZMETIKTI: `_save_disk_cache` istisnayi yutup None
+  donuyordu, yani sirayi degistirmek yazma basarisizken rezervi yine biraktiriyordu.
+  Artik bool donduruyor ve rezerv YALNIZ gercek kalici yazimda birakiliyor.
+  Davranis testi: disk yazimi basarisizken `earnings_refreshed_day` yazilmiyor.
+
+VERDICT: alinamadi (kota). Son alinan verdict fix round 2'de NOT YET idi ve o
+turun 12 bulgusunun tamami ile bu iki iz kapatildi.

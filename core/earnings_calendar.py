@@ -77,15 +77,25 @@ class EarningsCalendar:
         except Exception as e:
             logger.debug(f"Earnings cache okunamadı: {e}")
 
-    def _save_disk_cache(self):
+    def _save_disk_cache(self) -> bool:
+        """Takvimi diske yazar. KALICI yazildiysa True doner.
+
+        Onceki surum istisnayi yutup None donuyordu; cagiran basariyi
+        goremiyordu. Bu yuzden mark_earnings_refreshed'i disk yaziminin ARDINA
+        almak KOZMETIKTI , yazma basarisiz olsa da rezerv serbest kaliyor, ama
+        restart bayat/eksik takvim buluyor ve earnings_gate fail-open'a dusuyordu
+        (Codex bulgusu; yalniz kaynak SIRASINA bakmak yetmez, DAVRANIS lazim).
+        """
         try:
             with open(self._cache_file, "w") as f:
                 json.dump({
                     "fetched_at": self._fetched_at.isoformat() if self._fetched_at else None,
                     "calendar": self._calendar,
                 }, f)
+            return True
         except Exception as e:
-            logger.debug(f"Earnings cache yazılamadı: {e}")
+            logger.warning(f"Earnings cache YAZILAMADI: {e} , rezerv birakilmiyor")
+            return False
 
     def _cache_age_hours(self) -> float:
         if not self._fetched_at:
@@ -208,16 +218,17 @@ class EarningsCalendar:
             self._calendar = new_cal
             self._fetched_at = datetime.now()
             self._warned_no_data = False
-            self._save_disk_cache()
+            kalici = self._save_disk_cache()
 
-            # R16: rezerv YALNIZ DISK YAZIMI TAMAMLANDIKTAN SONRA serbest
-            # birakilir. Onceki sira, basarisiz bir disk yaziminda rezervi
-            # birakiyordu ama restart bayat/eksik takvim buluyordu ve
-            # earnings_gate fail-open'a dusuyordu (Codex bulgusu).
-            try:
-                shared_store().mark_earnings_refreshed()
-            except Exception:
-                pass
+            # R16: rezerv YALNIZ DISK YAZIMI GERCEKTEN BASARILI OLDUYSA serbest
+            # birakilir. Sirayi degistirmek tek basina yetmiyordu: _save_disk_cache
+            # istisnayi yutup None donuyordu, yani cagiran basarisizligi
+            # GOREMIYORDU ve rezerv yine birakiliyordu.
+            if kalici:
+                try:
+                    shared_store().mark_earnings_refreshed()
+                except Exception:
+                    pass
             logger.info(
                 f"  📅 Earnings takvimi yenilendi: {len(new_cal)} sembol, "
                 f"{sum(len(v) for v in new_cal.values())} rapor tarihi (3 ay)"

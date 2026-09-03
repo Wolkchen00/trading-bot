@@ -305,30 +305,56 @@ def test_maskelenmis_vektorde_etkin_ajan_eksik_kalmiyor(social):
         assert name in w, f"{name} maskelenmis vektorde yok -> 0.15 uydurulur"
 
 
-def test_config_kosu_ortasinda_acilirsa_olcek_bozulmuyor(social):
-    """Ajan kosu ortasinda acilirsa (WEIGHTS eski, maskelenmis) ne olur?
+def test_config_kosu_ortasinda_acilirsa_FAIL_CLOSED(social):
+    """Ajan kosu ortasinda acilirsa agirlik UYDURULMAMALI.
 
-    SocialAgent oy verir ama WEIGHTS'te yoktur -> .get(..., 0.15) devreye girer.
-    Bu senaryonun sonucu BELGELENMIS olmali: toplam 0.85 + 0.15 = 1.0 olur,
-    yani eski bes ajanlik olcege doner. Sessiz bir sisme DEGILDIR, ama
-    farkindaligi kayit altinda olsun diye donduruldu.
+    ONCEKI SURUM BU TESTI YANLIS YAZDI: `WEIGHTS.get(name, 0.15)` davranisini
+    "belgelenmis" diye KUTSUYORDU. Ama uydurulan agirlik sessiz bir olcek
+    degisikligidir , maskeli vektor 0.85 toplarken SocialAgent 0.15 icat edilip
+    toplam 1.0'a cikiyor ve butun esikler gizlice gevsiyor. Tam olarak R15'in
+    onlemek icin var oldugu sey.
+
+    Codex kod incelemesi bunu yakaladi. Dogru davranis fail-closed.
     """
     social(False)
     maskeli = AgentPerformanceTracker().get_dynamic_weights()
-    social(True)  # kosu ortasinda acildi
+    assert "SocialAgent" not in maskeli
+    social(True)  # kosu ortasinda acildi, WEIGHTS hala eski/maskeli
 
     c = AgentCoordinator()
-    c.WEIGHTS = maskeli  # eski, maskelenmis vektor
+    c.WEIGHTS = maskeli
     c.tech_agent = _Stub(_vote("TechAgent", "BUY", 60))
     c.fund_agent = _Stub(_vote("FundAgent"))
     c.sent_agent = _Stub(_vote("SentAgent"))
     c.social_agent = _Stub(_vote("SocialAgent", "BUY", 100))
     c.risk_agent = _Stub(_vote("RiskAgent"))
-    r = c.decide("T", {}, {}, {}, {}, {})
 
-    # SocialAgent 0.15 varsayilanini alir: 0.25*60 + 0.15*100 = 15 + 15 = 30
-    assert r["weighted_score"] == pytest.approx(30.0, abs=1e-9)
-    assert c.social_agent.calls == 1, "acildiginda analyze cagrilmali"
+    with pytest.raises(RuntimeError, match="agirlik vektorunde YOK"):
+        c.decide("T", {}, {}, {}, {}, {})
+
+
+def test_agirlik_sayi_degilse_fail_closed(social):
+    """Bozuk bir agirlik degeri sessizce 0 ya da 0.15 sayilmamali."""
+    social(False)
+    c = AgentCoordinator()
+    c.WEIGHTS = {"TechAgent": "cok", "FundAgent": 0.2, "SentAgent": 0.2,
+                 "RiskAgent": 0.2}
+    c.tech_agent = _Stub(_vote("TechAgent", "BUY", 60))
+    c.fund_agent = _Stub(_vote("FundAgent"))
+    c.sent_agent = _Stub(_vote("SentAgent"))
+    c.social_agent = _Stub(_vote("SocialAgent"))
+    c.risk_agent = _Stub(_vote("RiskAgent"))
+    with pytest.raises(RuntimeError, match="sayi degil"):
+        c.decide("T", {}, {}, {}, {}, {})
+
+
+def test_etkin_ajanlarin_hepsi_vektorde(social):
+    """Uretim yolunda hicbir etkin ajan vektor disinda kalmamali."""
+    social(False)
+    w = AgentPerformanceTracker().get_dynamic_weights()
+    from core.agent_enable import enabled_agents
+    for name in enabled_agents():
+        assert name in w, f"{name} vektorde yok -> karar reddedilir"
 
 
 # ======================================================================

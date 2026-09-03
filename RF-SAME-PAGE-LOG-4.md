@@ -439,3 +439,28 @@ konum varsayimi tum kod tabaninda TEK yerde, `core/agent_coordinator.py:427`.
 `agent_performance.record_prediction` listeyi donguyle geziyor (satir 90),
 `decision_trace.agent_votes` ada gore anahtarlanmis sozluk (satir 48),
 `AGENT_NAMES` isim tabanli. Liste kisalinca kiran baska yer YOK.
+
+## Kod Incelemesi , R15 + R16 (Codex, kota donusu sonrasi)
+
+> Ihsan Kural 1'i asip Codex kotada iken insaata izin verdi; R15 ve R16 CAPRAZ
+> INCELEME OLMADAN yazildi. Codex kotasi donunce gercek diff'i inceledi.
+> Inceleme hedefi: `git diff ae1b034..HEAD` , 20 dosya, +4258/-51.
+
+### Integrator findings (Codex, verbatim)
+
+```
+- [FIX] `AgentCoordinator.decide()` still uses `WEIGHTS.get(name, 0.15)`, and the adversarial test explicitly blesses inventing that nominal weight when a masked vector and enabled votes disagree -> Require an exact, finite weight for every enabled voter and return an explicit fail-closed HOLD on any mismatch.
+- [FIX] A missing or duplicate RiskAgent raises safely but `stock_bot.py:1340-1342` converts it into an ordinary bare HOLD, after which the bot records `scanned` and `signal_hold`, making a dead decision path look functional -> Emit an ERROR-level invariant event, persisted gate-block reason, and decision-pipeline degradation while continuing position protection.
+- [FIX] R15 observability is still false because `AgentCoordinator` logs “5 uzman ajan aktif” and `tools/ajan_raporu.py:67-72` ignores the persisted `disabled` counter and prints `veri_yok` -> Report the actual enabled-agent set and render `DISABLED_BY_POLICY` distinctly.
+- [FIX] The tests labeled as production `stock_bot` integration merely copy its condition and assignment instead of invoking `_get_agent_decision()`, so deleted or broken production wiring would still pass -> Exercise the real method on a minimally constructed bot and assert its resulting votes, weights, and zero Social calls.
+- [FIX] `tools/r15_golden_uret.py` overwrites the supposedly frozen oracle from the current implementation by default, allowing a regression and regenerated fixture to self-bless -> Make generation produce a separate candidate artifact and require explicit baseline-commit provenance before replacing the canonical fixture.
+- [FIX] `core/av_quota.py::_file_lock()` continues without a lock when acquisition fails, directly violating the hard quota guarantee, and its broad exception scope can catch an exception thrown after `yield` and attempt a second yield -> Fail closed on lock acquisition and restrict exception handling to acquisition/release, with injected lock-failure and body-exception tests.
+- [FIX] `AVQuotaStore._yaz()` swallows persistence failures while `try_reserve()` still returns `True`, so an unrecorded network call can occur and restart can spend that slot again -> Make a flushed, fsynced reservation write a prerequisite for returning `True`, otherwise deny the call.
+- [FIX] Parseable but semantically corrupt quota records are treated as fresh allowance because missing/wrong dates or profiles reset the counter and malformed consumer counts become zero -> Strictly validate schema, UTC date, profile, budget, complete nonnegative counters, and total consistency; only a valid prior-day record may reset.
+- [FIX] An HTTP-200 `QUOTA_EXHAUSTED` response is cached only for the current symbol, so subsequent symbols and other consumers can burn every remaining reservation and sleep despite the key already being exhausted -> Persist a shared key/profile-wide exhausted-until-UTC-day marker checked by all three consumers.
+- [FIX] Fundamental cache freshness can be bypassed because loading a disk entry resets the in-memory clock, allowing a 23.9-hour entry to be served unmarked as fresh for another 12 hours and a near-limit entry beyond `max_stale`; future timestamps are also accepted as fresh -> Preserve the source timestamp, recompute age on every access, reject future timestamps, and enforce `max_stale` before every memory hit.
+- [FIX] The claimed refresh cursor is dead production code because `refresh_order()` and `next_refresh_candidates()` are called only by tests, while production immediately returns BAYAT data without revalidation -> Wire a persistent attempt-advancing cursor and retry backoff into the real scan path so repeatedly failing early symbols cannot starve the tail forever.
+- [FIX] Staleness telemetry never reaches decisions because `analyze_fundamentals()` strips `data_age_hours`/`is_stale`, and `coverage()` has no production caller -> Persist source timestamp, age, freshness state, and unique-symbol coverage in the actual decision/funnel reporting path.
+- [FIX] `FundamentalsCache` performs unlocked whole-file replacement even though overlapping same-profile processes are explicitly supported, so one process can erase another’s payloads or negative-cache updates -> Reload and update under an interprocess lock or use per-symbol records/a transactional store.
+- [FIX] `earnings_reserve=2` per profile deliberately strands one slot after the normal single successful daily calendar call, reducing the shared-key result to about 21 fundamental calls plus 2 calendar calls instead of using all 25 -> Reserve capacity only while a refresh or bounded retry is actually due, then release unused capacity and report it.
+VERDICT: NOT YET```

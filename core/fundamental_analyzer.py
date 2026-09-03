@@ -84,17 +84,16 @@ class FundamentalAnalyzer:
         if self._is_cached(cache_key):
             return self.cache[cache_key]
 
-        # 2) DISK CACHE , bayatlik sozlesmesiyle
+        # 2) DISK CACHE , bayatlik sozlesmesiyle.
+        # BELLEK CACHE'I DOLDURULMAZ: doldurulunca last_fetch=now yaziliyor ve
+        # 23.9 saatlik bir kayit bellek cache'inde 12 saat daha "taze" gorunup
+        # bayatlik damgasini kaybediyordu (Codex bulgusu). Disk cache zaten
+        # bellekte yuklu bir sozluk; her cagrida yas YENIDEN hesaplanir.
         yuk, yas, bolge = self.disk_cache.get(symbol)
         if bolge in ("TAZE", "BAYAT") and yuk:
-            if bolge == "BAYAT":
-                # Bayat veri KULLANILIR ama yasi karara ilistirilir; sessizce
-                # taze gibi davranmak yasak.
-                yuk = dict(yuk)
-                yuk["data_age_hours"] = round(yas, 1)
-                yuk["is_stale"] = True
-            self.cache[cache_key] = yuk
-            self.last_fetch[cache_key] = datetime.now()
+            yuk = dict(yuk)
+            yuk["data_age_hours"] = round(yas, 1)
+            yuk["is_stale"] = (bolge == "BAYAT")
             return yuk
         if bolge == "SOURCE_UNAVAILABLE":
             # Cok bayat: veri VAR ama kullanilmaz. Yokluk gibi davranilir.
@@ -106,7 +105,15 @@ class FundamentalAnalyzer:
         if not self.alpha_vantage_key:
             return self._get_yahoo_fallback(symbol)
 
-        # 3) NEGATIF CACHE , kota bugun tukendi, agi hic yorma
+        # 3a) ANAHTAR GENELI TUKENME , bir tuketici kotanin bittigini ogrendiyse
+        # digerleri bosa cagri yapip 15 sn uyumamali. Onceki surumde isaret
+        # yalnizca SEMBOL bazindaydi ve kalan butce her sembol icin yeniden
+        # bosa harcaniyordu (Codex bulgusu).
+        if self.quota.is_exhausted():
+            self._kota_uyar(symbol)
+            return None
+
+        # 3b) SEMBOL BAZLI NEGATIF CACHE
         if self.disk_cache.is_negative_cached(symbol):
             return None
 
@@ -136,6 +143,9 @@ class FundamentalAnalyzer:
             if sonuc is AVOutcome.QUOTA_EXHAUSTED:
                 # HTTP 200 + kota uyari govdesi. Sadece status_code'a bakan kod
                 # bunu "veri yok" sanip her turda yeniden cagirirdi.
+                # Isaret PAYLASILAN kayda yazilir: diger semboller ve diger
+                # tuketiciler de bugun bosa cagri yapmasin.
+                self.quota.mark_exhausted()
                 self._kota_uyar(symbol)
                 self.disk_cache.mark_quota_exhausted(symbol)
                 return None
@@ -179,6 +189,41 @@ class FundamentalAnalyzer:
             # Ag/ayristirma istisnasi GECICI sayilir; negatif cache'lenmez.
             logger.debug(f"Alpha Vantage overview hatası {symbol}: {e}")
         return None
+
+    def prefetch_due(self, universe, limit: int = None) -> dict:
+        """Tur basinda, EN-ESKI-ONCE sirayla bayat sembolleri tazeler.
+
+        Bu, imleci uretime baglayan tek cagri noktasidir. Talep uzerine cekim
+        tek basina yeterli degil: sabit sembol sirasi butceyi her gun bastaki
+        sembollere harcar ve kuyruk HIC tazelenmez.
+
+        Butce kadar cagri yapar, sonra durur. Kota tukendiyse hic cagri yapmaz.
+        Donen sozluk kapsama telemetrisidir; cagiran raporlayabilir.
+        """
+        rapor = {"denenen": 0, "basarili": 0, "atlanan_kota": 0}
+        try:
+            evren = [s for s in universe]
+            if not evren:
+                return rapor
+            if self.quota.is_exhausted():
+                rapor["atlanan_kota"] = 1
+                rapor["kapsama"] = self.disk_cache.coverage(evren)
+                return rapor
+
+            kalan = self.quota.remaining() if limit is None else int(limit)
+            adaylar = self.disk_cache.next_refresh_candidates(evren, kalan)
+            for sembol in adaylar:
+                rapor["denenen"] += 1
+                if self.get_company_overview(sembol) is not None:
+                    rapor["basarili"] += 1
+                elif self.quota.is_exhausted():
+                    rapor["atlanan_kota"] += 1
+                    break          # kota bitti, kalanlari deneme
+            rapor["kapsama"] = self.disk_cache.coverage(evren)
+        except Exception as exc:
+            # Onceden-cekim BEST-EFFORT: arizasi tarama turunu durduramaz.
+            logger.debug(f"Temel veri on-cekimi hatasi: {exc}")
+        return rapor
 
     def _kota_uyar(self, symbol: str) -> None:
         """Kota tukenmesi SESSIZ kalmaz , eski kod logger.debug ile yutuyordu."""
@@ -278,6 +323,9 @@ class FundamentalAnalyzer:
             return {
                 "fundamental_score": 0,
                 "signal": "NEUTRAL",
+                "data_age_hours": None,
+                "is_stale": False,
+                "data_source": "SOURCE_UNAVAILABLE",
                 "metrics": {},
                 "reasons": ["Temel veri bulunamadı"],
             }
@@ -357,6 +405,11 @@ class FundamentalAnalyzer:
         result = {
             "fundamental_score": max(min(score, 30), -30),
             "signal": signal,
+            # R16: veri yasi karara ULASIR. Bayat veriyle verilen karar, bayat
+            # oldugunu bilerek verilmis olmali; sessizce taze saymak yasak.
+            "data_age_hours": overview.get("data_age_hours"),
+            "is_stale": bool(overview.get("is_stale", False)),
+            "data_source": overview.get("source", "alpha_vantage"),
             "metrics": {
                 "pe_ratio": pe,
                 "eps": eps,

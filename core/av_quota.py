@@ -13,23 +13,25 @@ cagirirsa kota sabahin ilk dakikalarinda tukenir ve FundAgent gun boyu kor kalir
 "ANAHTAR GENELI 25" IDDIA EDILMEZ
 --------------------------------
 live ve paper AYRI konteynerlerde AYRI state hacimleriyle kosuyor; paylasilan
-bir sayac fiziksel olarak imkansiz. Iki yerel sayac her biri 25'e izin verirdi.
-Bu yuzden butce DETERMINISTIK olarak bolunur (varsayilan live 13 / paper 12) ve
-her konteyner yalniz kendi payini harcar. Kalici cozum konteyner basina ayri
-anahtardir (RF-ISSUES-4.md::AV-ANAHTARI-IKI-KONTEYNER).
+bir sayac fiziksel olarak imkansiz. Butce DETERMINISTIK bolunur (varsayilan
+live 13 / paper 12) ve her konteyner yalniz kendi payini harcar. Kalici cozum
+konteyner basina ayri anahtardir (RF-ISSUES-4.md::AV-ANAHTARI-IKI-KONTEYNER).
 
-FAIL-CLOSED
------------
-Sayac okunamiyorsa gun TUKENMIS sayilir. Atomik yer degistirme tek basina
-YETMEZ: restart ya da deploy ortusmesinde ayni profilden iki surec eszamanli
-kosabilir ve oku-degistir-yaz yarisir. Bu yuzden rezervasyon SURECLER ARASI
-KILIT altinda ve cagridan ONCE yazilir.
+FAIL-CLOSED (uc ayri yerde)
+---------------------------
+1. Sayac okunamiyorsa ya da SEMANTIK olarak bozuksa gun tukenmis sayilir.
+   Kurtarma kaydi DISKE YAZILIR, yoksa fail-closed kalici kilitlenmeye donusur.
+2. Kilit ALINAMAZSA rezervasyon REDDEDILIR. Kilitsiz devam etmek, modulun tek
+   garantisini (butce asilmaz) sessizce iptal ederdi.
+3. Rezervasyon YAZILAMAZSA `try_reserve` False doner. True donup yazmamak,
+   kaydedilmemis bir ag cagrisina ve restart'ta ayni slotun ikinci kez
+   harcanmasina yol acardi.
 
-SAAT DILIMI
------------
-Kota muhasebesi UTC gun sinirindadir (AV ucretsiz katman sinirinin sifirlandigi
-sinir). Islem-gunu telemetrisi ayri bir alandir ve America/New_York kullanir;
-ikisi birbirine karismaz.
+TUKENME ISARETI ANAHTAR GENELINDE
+---------------------------------
+AV kotasi tukendiginde bunu OGRENEN ilk tuketici, isareti PAYLASILAN kayda
+yazar. Aksi halde her sembol icin ayri ayri ogrenilir: kalan butce boşa
+harcanir ve her biri icin 15 saniye uyunur.
 """
 from __future__ import annotations
 
@@ -44,25 +46,22 @@ from typing import Optional
 
 from utils.logger import logger
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # 2: exhausted_day alani + katı dogrulama
 
-# Butce paylasan tuketiciler. Yeni bir AV cagirani eklenirse BURAYA da eklenmeli,
-# yoksa butce disinda kalir ve sinir sessizce asilir.
 CONSUMERS = ("fundamental", "news", "earnings")
 
 
 class AVOutcome(str, Enum):
-    """Tipli sonuclar , hepsini 'None' yapmak bilgi yok eder.
-
-    Yalniz QUOTA_EXHAUSTED gun sonuna kadar negatif cache'lenir. RETRYABLE_ERROR
-    aynı gun tekrar denenir; ikisini karistirmak gecici bir kaynagi gun boyu
-    susturur.
-    """
+    """Tipli sonuclar , hepsini 'None' yapmak bilgi yok eder."""
 
     OK = "OK"
     QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
     RETRYABLE_ERROR = "RETRYABLE_ERROR"
     NO_DATA = "NO_DATA"
+
+
+class LockUnavailable(Exception):
+    """Kilit alinamadi , rezervasyon reddedilmeli."""
 
 
 def utc_day(now: Optional[datetime] = None) -> str:
@@ -106,11 +105,16 @@ def classify_response(status_code: int, body_text: str, payload: object) -> AVOu
 
 
 @contextmanager
-def _file_lock(lock_path: str):
+def file_lock(lock_path: str):
     """Surecler arasi kilit. Windows msvcrt, POSIX fcntl.
 
+    Kilit ALINAMAZSA `LockUnavailable` firlatir , kilitsiz devam ETMEZ.
     Atomik yazma tek basina yetmez: eszamanli iki surec ayni degeri okuyup ayri
     ayri artirabilir ve butce iki katina cikar.
+
+    Istisna kapsami DARDIR: yalniz kilit ALMA sirasindaki hatalar yakalanir.
+    Govde (yield sonrasi) firlatan istisna yakalanmaz , yakalanirsa generator
+    ikinci kez yield etmeye calisir ve RuntimeError uretir.
     """
     handle = None
     try:
@@ -123,28 +127,33 @@ def _file_lock(lock_path: str):
         else:
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        yield handle
     except Exception as exc:
-        # Kilit mekanizmasi yoksa is durmamali, ama SESSIZ de kalmamali:
-        # kilitsiz kosmak butce asimi riskidir.
-        logger.warning(f"AV kota kilidi alinamadi ({exc}) , kilitsiz devam ediliyor")
-        yield handle
-    finally:
         if handle is not None:
-            try:
-                if sys.platform == "win32":
-                    import msvcrt
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
             try:
                 handle.close()
             except Exception:
                 pass
+        raise LockUnavailable(str(exc)) from exc
+
+    # Buradan sonrasi GOVDE. Istisnalari yakalamiyoruz; yalniz kilidi biraktigimiz
+    # finally var.
+    try:
+        yield handle
+    finally:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            handle.close()
+        except Exception:
+            pass
 
 
 class AVQuotaStore:
@@ -183,12 +192,16 @@ class AVQuotaStore:
         except Exception:
             return "paper"
 
-    def _earnings_reserve(self) -> int:
-        """Kazanc takvimine ayrilan slot sayisi.
+    @classmethod
+    def _default_budget(cls) -> int:
+        try:
+            from config import AV_QUOTA_CONFIG
+            return int(AV_QUOTA_CONFIG["profile_budget"][cls._default_profile()])
+        except Exception:
+            return 12          # config okunamazsa DAR taraf
 
-        Config okunamazsa 0 doner: rezerv YOKMUS gibi davranmak, uydurma bir
-        sayiyla butceyi daraltmaktan iyidir.
-        """
+    def _earnings_reserve(self) -> int:
+        """Kazanc takvimine ayrilan slot sayisi (yalniz yenileme BEKLERKEN)."""
         if self._reserve_override is not None:
             return int(self._reserve_override)
         try:
@@ -196,15 +209,6 @@ class AVQuotaStore:
             return max(0, int(AV_QUOTA_CONFIG.get("earnings_reserve", 0)))
         except Exception:
             return 0
-
-    @classmethod
-    def _default_budget(cls) -> int:
-        try:
-            from config import AV_QUOTA_CONFIG
-            return int(AV_QUOTA_CONFIG["profile_budget"][cls._default_profile()])
-        except Exception:
-            # Config okunamazsa DAR taraf: en kucuk makul pay.
-            return 12
 
     # -------------------------------------------------- kayit
 
@@ -218,48 +222,103 @@ class AVQuotaStore:
             "used": {c: (harcanan if c == CONSUMERS[0] else 0) for c in CONSUMERS},
             "total_used": harcanan,
             "corrupt_recovered": tumu_harcanmis,
+            "exhausted_day": None,
         }
 
-    def _oku(self, handle) -> dict:
-        """Kaydi okur. Bozuksa gun TUKENMIS sayilir (fail-closed)."""
+    def _dogrula(self, ham: object, gun: str) -> Optional[dict]:
+        """Kaydi KATI dogrular. Gecersizse None doner (cagiran fail-closed davranir).
+
+        Ayristirilabilir ama SEMANTIK olarak bozuk kayitlar (tarih yok, profil
+        yanlis, sayac negatif, toplam tutmuyor) 'taze butce' olarak okunmamali;
+        eski kod bunlari gun donusu sanip sayaci sifirliyordu.
+        """
+        if not isinstance(ham, dict):
+            return None
+        try:
+            if int(ham.get("schema_version", 0)) > SCHEMA_VERSION:
+                return None            # gelecekten gelen sema , okumaya calisma
+        except (TypeError, ValueError):
+            return None
+
+        ham_gun = ham.get("utc_day")
+        if not isinstance(ham_gun, str) or len(ham_gun) != 10:
+            return None
+        try:
+            datetime.strptime(ham_gun, "%Y-%m-%d")
+        except ValueError:
+            return None
+        if ham_gun > gun:
+            return None                # GELECEK tarihli kayit , guvenilmez
+
+        if ham.get("profile") != self.profile:
+            return None                # baska profilin dosyasi
+
+        ham_used = ham.get("used")
+        if not isinstance(ham_used, dict):
+            return None
+        used = {}
+        for c in CONSUMERS:
+            try:
+                v = int(ham_used[c])
+            except (KeyError, TypeError, ValueError):
+                return None            # EKSIK/BOZUK sayac , 0 varsaymak yasak
+            if v < 0:
+                return None
+            used[c] = v
+
+        try:
+            toplam = int(ham.get("total_used"))
+        except (TypeError, ValueError):
+            return None
+        if toplam != sum(used.values()):
+            return None                # tutarsiz , guvenilmez
+
+        tuk = ham.get("exhausted_day")
+        if tuk is not None and not isinstance(tuk, str):
+            return None
+
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "utc_day": ham_gun,
+            "profile": self.profile,
+            "budget": self.budget,
+            "used": used,
+            "total_used": toplam,
+            "corrupt_recovered": False,
+            "exhausted_day": tuk,
+        }
+
+    def _oku(self) -> dict:
         gun = utc_day(self._now_fn())
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 ham = json.load(f)
-            if not isinstance(ham, dict):
-                raise ValueError("kayit sozluk degil")
         except FileNotFoundError:
             return self._bos_kayit(gun)
         except Exception as exc:
-            # FAIL-CLOSED: ne kadar harcandigini bilemiyoruz. Bugunu tukenmis
-            # say ve YENI bir kayit yaz ki yarin UTC gun donusuyle kendiliginden
-            # iyilessin (aksi halde kalici kilitlenme olurdu).
             logger.warning(
                 f"AV kota sayaci okunamadi ({exc}) , BUGUN TUKENMIS sayiliyor. "
                 f"Yuk cache'i bundan bagimsizdir ve etkilenmez."
             )
             return self._bos_kayit(gun, tumu_harcanmis=True)
 
-        if str(ham.get("utc_day")) != gun:
-            return self._bos_kayit(gun)          # UTC gun dondu, sayac sifirlanir
-        if str(ham.get("profile")) != self.profile:
-            return self._bos_kayit(gun)          # baska profilin dosyasi
+        kayit = self._dogrula(ham, gun)
+        if kayit is None:
+            logger.warning(
+                "AV kota sayaci SEMANTIK olarak gecersiz (tarih/profil/sayac "
+                "tutarsiz) , BUGUN TUKENMIS sayiliyor."
+            )
+            return self._bos_kayit(gun, tumu_harcanmis=True)
 
-        kayit = self._bos_kayit(gun)
-        kayit["budget"] = self.budget
-        ham_used = ham.get("used", {})
-        if isinstance(ham_used, dict):
-            for c in CONSUMERS:
-                try:
-                    kayit["used"][c] = max(0, int(ham_used.get(c, 0) or 0))
-                except (TypeError, ValueError):
-                    kayit["used"][c] = 0
-        kayit["total_used"] = sum(kayit["used"].values())
-        kayit["corrupt_recovered"] = bool(ham.get("corrupt_recovered", False))
+        if kayit["utc_day"] != gun:
+            # GECERLI bir onceki gun kaydi , sadece bu durumda sifirlanir.
+            yeni = self._bos_kayit(gun)
+            # Tukenme isareti gun bazli; eski gunun isareti tasinmaz.
+            return yeni
         return kayit
 
-    def _yaz(self, kayit: dict) -> None:
-        """Atomik yazma , yarim dosya birakma."""
+    def _yaz(self, kayit: dict) -> bool:
+        """Atomik + fsync'li yazma. BASARIYI DONDURUR , cagiran buna bakmali."""
         try:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
             dizin = os.path.dirname(self.path) or "."
@@ -267,7 +326,10 @@ class AVQuotaStore:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(kayit, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
                 os.replace(gecici, self.path)
+                return True
             except Exception:
                 try:
                     os.unlink(gecici)
@@ -275,60 +337,110 @@ class AVQuotaStore:
                     pass
                 raise
         except Exception as exc:
-            logger.warning(f"AV kota sayaci yazilamadi: {exc}")
+            logger.warning(f"AV kota sayaci YAZILAMADI: {exc} , rezervasyon reddedildi")
+            return False
 
     # -------------------------------------------------- genel API
 
     def try_reserve(self, consumer: str, count: int = 1) -> bool:
-        """Cagridan ONCE kota rezerve eder. False ise AG CAGRISI YAPILMAMALI.
-
-        Rezervasyon cagri oncesi yazilir: sonra yazilsaydi, cagri sirasinda
-        surec olurse kota harcandigi halde sayilmamis olurdu.
-        """
+        """Cagridan ONCE kota rezerve eder. False ise AG CAGRISI YAPILMAMALI."""
         if consumer not in CONSUMERS:
             logger.warning(
                 f"AV kota: tanimsiz tuketici '{consumer}' , butce disinda kalmasin "
                 f"diye CONSUMERS'a eklenmeli. Simdilik reddediliyor."
             )
             return False
-        with _file_lock(self.lock_path) as handle:
-            kayit = self._oku(handle)
 
-            # SIRA ONEMLI: bozuk dosya onarimi HER SEYDEN ONCE gelir.
-            # Baska bir kontrol once erken `return False` yaparsa onarim kaydi
-            # diske yazilmaz, dosya bozuk kalir ve fail-closed KALICI
-            # KILITLENMEYE donusur (kendi testim tam bunu yakaladi).
-            if kayit.get("corrupt_recovered"):
-                self._yaz(kayit)
-                return False
+        gun = utc_day(self._now_fn())
+        try:
+            with file_lock(self.lock_path):
+                kayit = self._oku()
 
-            # KAZANC TAKVIMI REZERVI: takvim bir ISLEM KAPISINI besliyor
-            # (earnings_gate). Temel analiz butcenin tamamini yerse takvim
-            # bayatlar ve kapi fail-open'a duser , yani kazanc gunlerinde islem
-            # acilir. Bu yuzden takvim icin birkac slot ayrilir ve DIGER
-            # tuketiciler o slotlara dokunamaz.
-            if consumer != "earnings":
-                takvim_kullanilan = kayit["used"].get("earnings", 0)
-                ayrilan = max(0, self._earnings_reserve() - takvim_kullanilan)
-                tavan = kayit["budget"] - ayrilan
-                if kayit["total_used"] + count > tavan:
+                # SIRA: bozuk dosya onarimi HER SEYDEN ONCE. Baska bir kontrol
+                # once erken return yaparsa onarim kaydi yazilmaz ve fail-closed
+                # KALICI KILITLENMEYE donusur.
+                if kayit.get("corrupt_recovered"):
+                    self._yaz(kayit)
                     return False
 
-            if kayit["total_used"] + count > kayit["budget"]:
-                return False
-            kayit["used"][consumer] += count
-            kayit["total_used"] += count
-            self._yaz(kayit)
-            return True
+                # ANAHTAR GENELI TUKENME: bir tuketici kotanin bittigini ogrendiyse
+                # digerleri bosa cagri yapip 15 sn uyumamali.
+                if kayit.get("exhausted_day") == gun:
+                    return False
+
+                if consumer != "earnings":
+                    # KAZANC TAKVIMI REZERVI: takvim bir ISLEM KAPISINI besliyor
+                    # (earnings_gate). Temel analiz butcenin tamamini yerse takvim
+                    # bayatlar ve kapi fail-open'a duser , kazanc gunlerinde islem
+                    # acilir. Bu yuzden takvim GUNLUK CAGRISINI YAPANA KADAR bir
+                    # slot ayrilir.
+                    #
+                    # Takvim slotunu kullandiginda rezerv TAMAMEN serbest kalir.
+                    # Onceki surum `reserve - used` yaziyordu ve reserve=2 iken
+                    # normal tek cagridan sonra 1 slot kalici olarak bosa
+                    # yatiyordu (Codex bulgusu).
+                    ayrilan = (
+                        0 if kayit["used"].get("earnings", 0) > 0
+                        else self._earnings_reserve()
+                    )
+                    if kayit["total_used"] + count > kayit["budget"] - ayrilan:
+                        return False
+
+                if kayit["total_used"] + count > kayit["budget"]:
+                    return False
+
+                kayit["used"][consumer] += count
+                kayit["total_used"] += count
+                # Yazma BASARISIZSA rezervasyon verilmez: aksi halde kaydedilmemis
+                # bir ag cagrisi olur ve restart ayni slotu yeniden harcar.
+                return bool(self._yaz(kayit))
+        except LockUnavailable as exc:
+            logger.warning(
+                f"AV kota kilidi alinamadi ({exc}) , rezervasyon REDDEDILDI. "
+                f"Kilitsiz devam etmek butce garantisini iptal ederdi."
+            )
+            return False
+
+    def mark_exhausted(self) -> None:
+        """Kotanin bugun tukendigini PAYLASILAN kayda isle (anahtar geneli)."""
+        gun = utc_day(self._now_fn())
+        try:
+            with file_lock(self.lock_path):
+                kayit = self._oku()
+                kayit["exhausted_day"] = gun
+                kayit["corrupt_recovered"] = False
+                self._yaz(kayit)
+        except LockUnavailable as exc:
+            logger.debug(f"AV tukenme isareti yazilamadi (kilit): {exc}")
+
+    def is_exhausted(self) -> bool:
+        """Bugun tukenmis olarak isaretlendi mi (anahtar geneli)."""
+        gun = utc_day(self._now_fn())
+        try:
+            with file_lock(self.lock_path):
+                kayit = self._oku()
+                return kayit.get("exhausted_day") == gun or bool(
+                    kayit.get("corrupt_recovered")
+                )
+        except LockUnavailable:
+            return True          # fail-closed
 
     def remaining(self) -> int:
-        with _file_lock(self.lock_path) as handle:
-            kayit = self._oku(handle)
-            return max(0, kayit["budget"] - kayit["total_used"])
+        try:
+            with file_lock(self.lock_path):
+                kayit = self._oku()
+                if kayit.get("exhausted_day") == utc_day(self._now_fn()):
+                    return 0
+                return max(0, kayit["budget"] - kayit["total_used"])
+        except LockUnavailable:
+            return 0             # fail-closed
 
     def snapshot(self) -> dict:
-        with _file_lock(self.lock_path) as handle:
-            return self._oku(handle)
+        try:
+            with file_lock(self.lock_path):
+                return self._oku()
+        except LockUnavailable:
+            return self._bos_kayit(utc_day(self._now_fn()), tumu_harcanmis=True)
 
 
 _paylasilan: Optional[AVQuotaStore] = None

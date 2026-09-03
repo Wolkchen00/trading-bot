@@ -317,9 +317,25 @@ def uret() -> dict:
     }
 
 
+ADAY_PATH = ROOT / "tests" / "fixtures" / "r15_golden_ADAY.json"
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description=(
+            "Altin cikti ureteci. VARSAYILAN olarak kanonik fixture'i EZMEZ; "
+            "aday dosya yazar. Kanonigi degistirmek acik onay ister."
+        )
+    )
     ap.add_argument("--goster", action="store_true", help="yazmadan ekrana bas")
+    ap.add_argument(
+        "--onayla", action="store_true",
+        help=(
+            "KANONIK fixture'i EZ. Yalniz DEGISIKLIK ONCESI bir taban commit'te "
+            "kosuluyorsa kullan. Mevcut (degismis) kodda kosulursa altin cikti "
+            "kendi kendini onaylar ve regresyonu kutsar."
+        ),
+    )
     args = ap.parse_args()
 
     data = uret()
@@ -329,10 +345,27 @@ def main() -> int:
         print(metin)
         return 0
 
+    if not args.onayla:
+        # PROVENANCE KAPISI (Codex kod incelemesi bulgusu): uretec varsayilan
+        # olarak kanonigi ezerse, bir regresyon ile onun yeniden uretimi
+        # BIRBIRINI onaylar ve altin cikti anlamini tamamen kaybeder.
+        ADAY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ADAY_PATH.write_text(metin + "\n", encoding="utf-8")
+        print(f"ADAY yazildi: {ADAY_PATH}")
+        print(f"Kanonik DOKUNULMADI: {GOLDEN_PATH}")
+        print()
+        print("Kanonigi degistirmek icin:")
+        print("  1. DEGISIKLIK ONCESI taban commit'te temiz bir worktree ac")
+        print("  2. Orada `py tools/r15_golden_uret.py --onayla` kos")
+        print("  3. Uretilen dosyayi kanonik olarak al")
+        print("Mevcut (degismis) kodda --onayla kullanmak regresyonu kutsar.")
+        return 0
+
     GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     GOLDEN_PATH.write_text(metin + "\n", encoding="utf-8")
-    print(f"Yazildi: {GOLDEN_PATH}")
+    print(f"KANONIK EZILDI: {GOLDEN_PATH}")
     print(f"Senaryo sayisi: {len(data['senaryolar'])}")
+    print("UYARI: bunu yalniz degisiklik ONCESI taban kodda kostuysan dogrudur.")
     return 0
 
 

@@ -687,6 +687,26 @@ class StockBot:
 
                 # Hisse analizi (Equity floor ihlalinde yeni alım yapılmaz — A3)
                 symbols = [] if self._floor_block else self._get_symbols_to_analyze()
+
+                # R16: temel veri ÖN-ÇEKİMİ ,  yenileme imlecinin ÜRETİMDEKİ tek
+                # çağrı noktası. Talep üzerine çekim tek başına yetmez: sabit
+                # sembol sırası günlük bütçeyi her gün baştaki sembollere harcar
+                # ve listenin kuyruğu HİÇ tazelenmez. İmleç en-eski-önce çalışır
+                # ve diske yazıldığı için restart'ı atlatır.
+                # Best-effort: arızası tarama turunu durduramaz.
+                if symbols:
+                    try:
+                        rapor = self.fundamental_analyzer.prefetch_due(symbols)
+                        kapsama = rapor.get("kapsama") or {}
+                        if kapsama:
+                            logger.debug(
+                                f"  Temel veri kapsama: taze={kapsama.get('taze')} "
+                                f"bayat={kapsama.get('bayat')} "
+                                f"verisiz={kapsama.get('verisiz')} "
+                                f"(benzersiz {kapsama.get('benzersiz_sembol')} sembol)"
+                            )
+                    except Exception as e:
+                        logger.debug(f"  Temel veri on-cekimi atlandi: {e}")
                 for symbol in symbols:
                     if len(self.positions) >= max_positions:
                         break

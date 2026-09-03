@@ -66,10 +66,22 @@ def report_lines(days: dict, selected_day: str | None = None) -> list[str]:
             ok = agent.get("data_ok", {}) if isinstance(agent, dict) else {}
             ok_true = int(ok.get("true", 0) or 0)
             ok_false = int(ok.get("false", 0) or 0)
+            ok_disabled = int(ok.get("disabled", 0) or 0)
             ok_total = ok_true + ok_false
-            missing = (
-                f"{ok_false / ok_total * 100:.1f}%" if ok_total else "veri_yok"
-            )
+            # R15: POLITIKA ILE KAPALI, "veri yok"tan farklidir. Ikisini ayni
+            # kovaya koymak, kapatilmis bir ajani kaynagi susmus gibi gosterir ve
+            # kaynak geri geldiginde kimse fark etmez. Rapor bu ayrimi YAZAR.
+            if ok_disabled > 0 and ok_total == 0:
+                missing = f"KAPALI(politika, {ok_disabled} karar)"
+            elif ok_disabled > 0:
+                missing = (
+                    f"{ok_false / ok_total * 100:.1f}% + KAPALI({ok_disabled})"
+                    if ok_total else f"KAPALI({ok_disabled})"
+                )
+            else:
+                missing = (
+                    f"{ok_false / ok_total * 100:.1f}%" if ok_total else "veri_yok"
+                )
             histogram = agent.get("confidence_histogram", {})
             weight = agent.get("last_dynamic_weight")
             weight_text = "veri_yok" if weight is None else f"{float(weight):.4f}"

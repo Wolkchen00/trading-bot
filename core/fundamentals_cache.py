@@ -121,6 +121,52 @@ class FundamentalsCache:
             self.negative = {}
 
     def save(self) -> bool:
+        """Kilit altinda OKU-BIRLESTIR-YAZ.
+
+        Onceki surum tum dosyayi kilitsiz degistiriyordu; ayni profilden ikinci
+        bir surec (restart/deploy ortusmesi) digerinin yuklerini ve negatif
+        cache girdilerini silebiliyordu.
+        """
+        try:
+            from core.av_quota import LockUnavailable, file_lock
+            try:
+                with file_lock(self.path + ".lock"):
+                    self._birlestir_diskten()
+                    return self._yaz()
+            except LockUnavailable as exc:
+                # Cache kaybi guvenlik sorunu degil; kilitsiz yazmaktansa
+                # yazmamak daha guvenli (baskasinin verisini silmeyiz).
+                logger.debug(f"Temel veri cache kilidi alinamadi: {exc}")
+                return False
+        except ImportError:
+            return self._yaz()
+
+    def _birlestir_diskten(self) -> None:
+        """Diskteki guncel hali oku, KENDI degisikliklerimizi ustune koy."""
+        try:
+            if not os.path.exists(self.path):
+                return
+            with open(self.path, "r", encoding="utf-8") as f:
+                ham = json.load(f)
+            if not isinstance(ham, dict):
+                return
+            disk_girdiler = ham.get("entries", {})
+            if isinstance(disk_girdiler, dict):
+                birlesik = {
+                    str(k): v for k, v in disk_girdiler.items()
+                    if isinstance(v, dict)
+                }
+                birlesik.update(self.entries)   # bizimkiler kazanir
+                self.entries = birlesik
+            disk_negatif = ham.get("negative", {})
+            if isinstance(disk_negatif, dict):
+                birlesik_n = {str(k): str(v) for k, v in disk_negatif.items()}
+                birlesik_n.update(self.negative)
+                self.negative = birlesik_n
+        except Exception:
+            pass   # disk bozuksa kendi halimizle devam
+
+    def _yaz(self) -> bool:
         try:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
             dizin = os.path.dirname(self.path) or "."
@@ -150,13 +196,26 @@ class FundamentalsCache:
     # -------------------------------------------------- yas ve bolgeler
 
     def age_hours(self, symbol: str) -> Optional[float]:
+        """Yas HER ZAMAN kaynak zaman damgasindan yeniden hesaplanir.
+
+        GELECEK tarihli damga guvenilmezdir (saat kaymasi ya da bozuk kayit) ve
+        'çok taze' gibi okunup bayatlik kapisini atlardi , None doner, yani veri
+        YOK sayilir.
+        """
         girdi = self.entries.get(symbol)
         if not girdi:
             return None
         alindi = _parse(girdi.get("fetched_at", ""))
         if alindi is None:
             return None
-        return (self._now_fn() - alindi).total_seconds() / 3600.0
+        yas = (self._now_fn() - alindi).total_seconds() / 3600.0
+        if yas < -0.01:
+            logger.warning(
+                f"{symbol} temel veri damgasi GELECEK tarihli ({yas:.1f} saat) , "
+                f"kayit guvenilmez sayiliyor"
+            )
+            return None
+        return max(0.0, yas)
 
     def get(self, symbol: str) -> Tuple[Optional[dict], Optional[float], str]:
         """(yuk, yas_saat, bolge) doner.

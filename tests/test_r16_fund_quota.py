@@ -132,14 +132,24 @@ def test_c_profil_dosyalari_birbirini_etkilemiyor(tmp_path):
     assert paper.remaining() == 12, "profiller birbirinin sayacini tuketiyor"
 
 
-def test_c_baska_profilin_dosyasi_sifirlaniyor(tmp_path):
-    """Ayni yolda baska profilin kaydi varsa sayilmaz, temiz baslanir."""
+def test_c_baska_profilin_dosyasi_FAIL_CLOSED(tmp_path):
+    """Ayni yolda BASKA profilin kaydi varsa TEMIZ BUTCE verilmez.
+
+    Onceki surum bunu "gun donusu" sanip sayaci sifirliyordu, yani yanlis
+    yapilandirilmis bir profil taze 12 cagri kazaniyordu. Uretimde her profilin
+    kendi state dizini var; ayni yolda baska profil gormek bir ANOMALIDIR ve
+    fail-closed davranilmali (Codex kod incelemesi bulgusu).
+    """
     p = tmp_path / "q.json"
-    live = AVQuotaStore(path=str(p), budget=13, profile="live", now_fn=lambda: T0)
+    live = AVQuotaStore(path=str(p), budget=13, profile="live", now_fn=lambda: T0,
+                        earnings_reserve=0)
     for _ in range(13):
         live.try_reserve("fundamental")
-    paper = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: T0)
-    assert paper.remaining() == 12
+    paper = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: T0,
+                         earnings_reserve=0)
+    assert paper.try_reserve("fundamental") is False, (
+        "baska profilin dosyasi taze butce olarak okundu"
+    )
 
 
 # ======================================================================

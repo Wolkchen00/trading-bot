@@ -384,7 +384,14 @@ class AgentCoordinator:
         self.risk_agent = RiskAgent()
         
         self.last_decision = None
-        logger.info("Agent Coordinator baslatildi — 5 uzman ajan aktif")
+        from core.agent_enable import disabled_agents, enabled_agents
+        _etkin = enabled_agents()
+        _kapali = disabled_agents()
+        logger.info(
+            f"Agent Coordinator baslatildi , {len(_etkin)} ajan aktif: "
+            f"{', '.join(_etkin)}"
+            + (f" | KAPALI (politika): {', '.join(_kapali)}" if _kapali else "")
+        )
 
     def decide(self, symbol: str, 
                tech_data: Dict, fund_data: Dict,
@@ -424,7 +431,32 @@ class AgentCoordinator:
         weighted_score = 0
 
         for vote in votes:
-            weight = self.WEIGHTS.get(vote.agent_name, 0.15)
+            # R15: oy veren HER ajanin agirligi VEKTORDE OLMALI. Eskiden
+            # `.get(name, 0.15)` eksik agirligi sessizce UYDURUYORDU; ornegin
+            # ajan kosu ortasinda acilirsa 0.15 icat edilip olcek degisiyordu.
+            # Uydurulan agirlik = sessiz kapi gevsemesi. Fail-closed.
+            if vote.agent_name not in self.WEIGHTS:
+                mesaj = (
+                    f"AJAN INVARYANTI IHLALI: {symbol} icin '{vote.agent_name}' "
+                    f"oy veriyor ama agirlik vektorunde YOK "
+                    f"({sorted(self.WEIGHTS)}). Agirlik uydurulamaz, "
+                    f"karar reddedildi."
+                )
+                logger.error(f"  🚨 {mesaj}")
+                raise RuntimeError(mesaj)
+            weight = self.WEIGHTS[vote.agent_name]
+            try:
+                weight = float(weight)
+            except (TypeError, ValueError):
+                weight = float("nan")
+            if not (weight == weight) or weight in (float("inf"), float("-inf")):
+                mesaj = (
+                    f"AJAN INVARYANTI IHLALI: {symbol} icin '{vote.agent_name}' "
+                    f"agirligi sayi degil ({self.WEIGHTS[vote.agent_name]!r}). "
+                    f"Karar reddedildi."
+                )
+                logger.error(f"  🚨 {mesaj}")
+                raise RuntimeError(mesaj)
             signal_value = {"BUY": 1, "SELL": -1, "HOLD": 0}[vote.signal]
             weighted_score += signal_value * weight * vote.confidence
         
@@ -436,10 +468,19 @@ class AgentCoordinator:
         if len(risk_matches) != 1:
             # Fail-closed: risk vetosunu kaybetmiş bir karar sessizce sürdürülemez.
             # Veto, BUY'ı durduran tek mekanizma; yokluğu "veto yok" demek değildir.
-            raise RuntimeError(
-                f"RiskAgent oyu tam olarak bir tane olmali, {len(risk_matches)} bulundu. "
-                f"Oy kumesi: {[v.agent_name for v in votes]}"
+            #
+            # ÖNCE ERROR LOGLA, SONRA fırlat. stock_bot.py:1340 bu istisnayı
+            # `logger.debug` ile yakalayıp sıradan bir HOLD döndürüyor; yalnız
+            # fırlatmak "fail-closed" değil fail-SESSİZ olurdu ve ölü bir karar
+            # yolu normal HOLD gibi görünürdü (Codex kod incelemesi bulgusu).
+            mesaj = (
+                f"AJAN INVARYANTI IHLALI: {symbol} icin RiskAgent oyu tam olarak "
+                f"bir tane olmali, {len(risk_matches)} bulundu. "
+                f"Oy kumesi: {[v.agent_name for v in votes]}. "
+                f"Risk vetosu DOGRULANAMIYOR, karar reddedildi."
             )
+            logger.error(f"  🚨 {mesaj}")
+            raise RuntimeError(mesaj)
         risk_vote = risk_matches[0]
         risk_veto = False
 

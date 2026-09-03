@@ -518,9 +518,11 @@ AV_QUOTA_CONFIG = {
         in ("1", "true", "yes")
     ),
 
-    # Kazanç takvimi günde ~1 toplu çağrı yapar ve temel analiz payını azaltır.
-    # Bütçeden ayrılan pay açıkça yazılır, koda gömülmez.
-    "earnings_reserve": 2,
+    # Kazanç takvimi günde ~1 toplu çağrı yapar ve earnings_gate'i besler.
+    # Temel analiz bütçenin tamamını yerse takvim bayatlar ve kapı fail-open'a
+    # düşer. Bu yüzden takvim günlük çağrısını yapana kadar 1 slot ayrılır;
+    # yaptıktan sonra rezerv TAMAMEN serbest kalır (slot boşa yatmaz).
+    "earnings_reserve": 1,
 
     # Bayatlık sözleşmesi. ttl içinde TAZE; ttl ile max_stale arasında BAYAT
     # (kullanılır ama yaşı karara iliştirilir); max_stale üstü KULLANILMAZ.

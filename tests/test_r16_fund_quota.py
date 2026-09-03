@@ -38,12 +38,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 T0 = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
 
-def _store(tmp_path, budget=12, profile="paper", now=T0):
+def _store(tmp_path, budget=12, profile="paper", now=T0, reserve=0):
+    """Varsayilan rezerv 0: butce mekanigi testleri rezervden bagimsiz olsun.
+
+    Rezerv davranisi ayri testlerde ACIKCA verilerek sinanir; ortuk config'e
+    guvenen bir test, config degisince alakasiz yerde kirilir.
+    """
     return AVQuotaStore(
         path=str(tmp_path / "av_quota.json"),
         budget=budget,
         profile=profile,
         now_fn=lambda: now,
+        earnings_reserve=reserve,
     )
 
 
@@ -74,8 +80,11 @@ def test_b_uc_tuketici_ayni_butceyi_paylasiyor(tmp_path):
 
 
 def test_b_takvim_payi_temel_payini_azaltiyor(tmp_path):
-    """Kazanc takvimi cagrisi temel analize kalan payi GERCEKTEN azaltir."""
-    q = _store(tmp_path, budget=12)
+    """Kazanc takvimi cagrisi temel analize kalan payi GERCEKTEN azaltir.
+
+    Rezerv 0: burada olculen sey PAYLASILAN BUTCE, rezerv korumasi degil.
+    """
+    q = _store(tmp_path, budget=12, reserve=0)
     assert q.try_reserve("earnings") is True
     assert q.try_reserve("earnings") is True
     kalan_temel = 0
@@ -99,11 +108,11 @@ def test_c_iki_profil_toplami_25(tmp_path):
     """live 13 + paper 12 = 25. Ayri state hacimleri, ayri dosyalar."""
     live = AVQuotaStore(
         path=str(tmp_path / "live" / "av_quota.json"),
-        budget=13, profile="live", now_fn=lambda: T0,
+        budget=13, profile="live", now_fn=lambda: T0, earnings_reserve=0,
     )
     paper = AVQuotaStore(
         path=str(tmp_path / "paper" / "av_quota.json"),
-        budget=12, profile="paper", now_fn=lambda: T0,
+        budget=12, profile="paper", now_fn=lambda: T0, earnings_reserve=0,
     )
     l = sum(1 for _ in iter(lambda: live.try_reserve("fundamental"), False))
     p = sum(1 for _ in iter(lambda: paper.try_reserve("fundamental"), False))
@@ -114,9 +123,9 @@ def test_c_iki_profil_toplami_25(tmp_path):
 
 def test_c_profil_dosyalari_birbirini_etkilemiyor(tmp_path):
     live = AVQuotaStore(path=str(tmp_path / "l.json"), budget=13,
-                        profile="live", now_fn=lambda: T0)
+                        profile="live", now_fn=lambda: T0, earnings_reserve=0)
     paper = AVQuotaStore(path=str(tmp_path / "p.json"), budget=12,
-                         profile="paper", now_fn=lambda: T0)
+                         profile="paper", now_fn=lambda: T0, earnings_reserve=0)
     for _ in range(13):
         live.try_reserve("fundamental")
     assert live.remaining() == 0
@@ -149,7 +158,7 @@ def test_d_eszamanli_ayni_profil_surecleri_butceyi_asmiyor(tmp_path):
         import sys, json
         sys.path.insert(0, r"{ROOT}")
         from core.av_quota import AVQuotaStore
-        q = AVQuotaStore(path="{qpath}", budget=12, profile="paper")
+        q = AVQuotaStore(path="{qpath}", budget=12, profile="paper", earnings_reserve=0)
         n = 0
         for _ in range(40):
             if q.try_reserve("fundamental"):
@@ -180,7 +189,8 @@ def test_d_eszamanli_ayni_profil_surecleri_butceyi_asmiyor(tmp_path):
 def test_g_bozuk_sayac_yeni_cagriya_izin_vermiyor(tmp_path):
     p = tmp_path / "av_quota.json"
     p.write_text("{bozuk json degil bu", encoding="utf-8")
-    q = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: T0)
+    q = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: T0,
+                     earnings_reserve=0)
     assert q.try_reserve("fundamental") is False, "bozuk sayacta yeni cagri acildi"
     assert q.remaining() == 0
 
@@ -189,11 +199,12 @@ def test_g_bozuk_sayac_ertesi_gun_kendiliginden_iyilesiyor(tmp_path):
     """Fail-closed kalici kilitlenmeye donusmemeli."""
     p = tmp_path / "av_quota.json"
     p.write_text("bozuk", encoding="utf-8")
-    bugun = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: T0)
+    bugun = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: T0,
+                         earnings_reserve=0)
     assert bugun.try_reserve("fundamental") is False
 
     yarin = AVQuotaStore(path=str(p), budget=12, profile="paper",
-                         now_fn=lambda: T0 + timedelta(days=1))
+                         now_fn=lambda: T0 + timedelta(days=1), earnings_reserve=0)
     assert yarin.try_reserve("fundamental") is True, "ertesi gun iyilesmedi"
 
 
@@ -311,14 +322,15 @@ def test_i_max_bayatlik_asilinca_KULLANILMAZ(tmp_path):
 def test_j_utc_gun_sinirinda_sifirlaniyor(tmp_path):
     p = tmp_path / "q.json"
     aksam = datetime(2026, 9, 3, 23, 59, tzinfo=timezone.utc)
-    q1 = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: aksam)
+    q1 = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: aksam,
+                      earnings_reserve=0)
     for _ in range(12):
         q1.try_reserve("fundamental")
     assert q1.remaining() == 0
 
     gece_yarisi = datetime(2026, 9, 4, 0, 1, tzinfo=timezone.utc)
     q2 = AVQuotaStore(path=str(p), budget=12, profile="paper",
-                      now_fn=lambda: gece_yarisi)
+                      now_fn=lambda: gece_yarisi, earnings_reserve=0)
     assert q2.remaining() == 12, "UTC gun donusunde sayac sifirlanmadi"
 
 
@@ -333,10 +345,12 @@ def test_j_yerel_saat_sinirinda_SIFIRLANMIYOR(tmp_path):
     # LA 2026-09-03 23:00 PDT = UTC 2026-09-04 06:00 , UTC gunu yine 09-04
     la_aksam = datetime(2026, 9, 3, 20, 0, tzinfo=timezone.utc)   # LA 13:00
     la_gece = datetime(2026, 9, 3, 22, 0, tzinfo=timezone.utc)    # LA 15:00
-    q1 = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: la_aksam)
+    q1 = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: la_aksam,
+                      earnings_reserve=0)
     for _ in range(12):
         q1.try_reserve("fundamental")
-    q2 = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: la_gece)
+    q2 = AVQuotaStore(path=str(p), budget=12, profile="paper", now_fn=lambda: la_gece,
+                      earnings_reserve=0)
     assert q2.remaining() == 0, "ayni UTC gununde sayac sifirlandi"
 
 
@@ -440,3 +454,69 @@ def test_l_kapsama_yas_dagilimi(tmp_path):
     assert k["cok_bayat_kullanilmaz"] == 1
     assert k["verisiz"] == 1
     assert k["yas_saat_max"] >= 299
+
+
+# ======================================================================
+# KAZANC TAKVIMI REZERVI , olu config degil, gercek koruma
+# ======================================================================
+
+def test_takvim_rezervi_temel_analizce_yenilemiyor(tmp_path):
+    """Takvim bir ISLEM KAPISINI besliyor (earnings_gate).
+
+    Temel analiz butcenin tamamini yerse takvim bayatlar ve kapi fail-open'a
+    duser , yani kazanc gunlerinde islem acilir. Ayrilan slotlara diger
+    tuketiciler DOKUNAMAMALI.
+    """
+    q = AVQuotaStore(path=str(tmp_path / "q.json"), budget=12, profile="paper",
+                     now_fn=lambda: T0, earnings_reserve=2)
+    alinan = 0
+    while q.try_reserve("fundamental"):
+        alinan += 1
+    assert alinan == 10, f"temel analiz rezervi yedi: {alinan}"
+    # Ayrilan iki slot TAKVIM icin hala duruyor
+    assert q.try_reserve("earnings") is True
+    assert q.try_reserve("earnings") is True
+    assert q.try_reserve("earnings") is False
+
+
+def test_takvim_rezervini_kullanmazsa_serbest_kalmiyor_ama_takvim_alabiliyor(tmp_path):
+    """Rezerv, takvim kullanmadigi surece bosta bekler , kasitli.
+
+    Amac takvimin HER ZAMAN yer bulmasi. Bosa gitmesi kabul edilen maliyettir.
+    """
+    q = AVQuotaStore(path=str(tmp_path / "q.json"), budget=12, profile="paper",
+                     now_fn=lambda: T0, earnings_reserve=2)
+    for _ in range(10):
+        assert q.try_reserve("fundamental") is True
+    assert q.try_reserve("fundamental") is False
+    assert q.try_reserve("news") is False, "haber de rezerve dokunmamali"
+    assert q.try_reserve("earnings") is True
+
+
+def test_takvim_kullandikca_rezerv_serbest_kaliyor(tmp_path):
+    """Takvim payini kullandiginda tavan geri acilir , slot bosa gitmez."""
+    q = AVQuotaStore(path=str(tmp_path / "q.json"), budget=12, profile="paper",
+                     now_fn=lambda: T0, earnings_reserve=2)
+    assert q.try_reserve("earnings") is True
+    assert q.try_reserve("earnings") is True   # rezerv tuketildi
+    alinan = 0
+    while q.try_reserve("fundamental"):
+        alinan += 1
+    assert alinan == 10, f"rezerv tuketildikten sonra tavan acilmadi: {alinan}"
+
+
+def test_rezerv_sifirsa_eski_davranis(tmp_path):
+    q = AVQuotaStore(path=str(tmp_path / "q.json"), budget=12, profile="paper",
+                     now_fn=lambda: T0, earnings_reserve=0)
+    alinan = 0
+    while q.try_reserve("fundamental"):
+        alinan += 1
+    assert alinan == 12
+
+
+def test_config_rezervi_gercekten_okunuyor():
+    """earnings_reserve OLU CONFIG olmamali , config'deki deger etkili mi."""
+    from config import AV_QUOTA_CONFIG
+    assert AV_QUOTA_CONFIG["earnings_reserve"] >= 1
+    q = AVQuotaStore(path="/olmayan/yol/q.json", budget=12, profile="paper")
+    assert q._earnings_reserve() == AV_QUOTA_CONFIG["earnings_reserve"]

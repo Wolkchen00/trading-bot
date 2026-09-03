@@ -21,10 +21,12 @@ from core.fundamentals_cache import FundamentalsCache
 T0 = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
 
-def _store(tmp_path, budget=12, now=T0):
+def _store(tmp_path, budget=12, now=T0, reserve=0):
+    """Rezerv varsayilan 0: bu dosya CAGRI YOLLARINI olcuyor, rezerv korumasini
+    degil. Rezerv davranisi test_r16_fund_quota.py'de acikca sinaniyor."""
     return AVQuotaStore(
         path=str(tmp_path / "av_quota.json"), budget=budget,
-        profile="paper", now_fn=lambda: now,
+        profile="paper", now_fn=lambda: now, earnings_reserve=reserve,
     )
 
 

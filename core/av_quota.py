@@ -156,12 +156,14 @@ class AVQuotaStore:
         budget: Optional[int] = None,
         profile: Optional[str] = None,
         now_fn=None,
+        earnings_reserve: Optional[int] = None,
     ) -> None:
         self.path = path or self._default_path()
         self.lock_path = self.path + ".lock"
         self.budget = int(budget if budget is not None else self._default_budget())
         self.profile = profile or self._default_profile()
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+        self._reserve_override = earnings_reserve
 
     # -------------------------------------------------- varsayilanlar
 
@@ -180,6 +182,20 @@ class AVQuotaStore:
             return "live" if TRADING_MODE == "live" else "paper"
         except Exception:
             return "paper"
+
+    def _earnings_reserve(self) -> int:
+        """Kazanc takvimine ayrilan slot sayisi.
+
+        Config okunamazsa 0 doner: rezerv YOKMUS gibi davranmak, uydurma bir
+        sayiyla butceyi daraltmaktan iyidir.
+        """
+        if self._reserve_override is not None:
+            return int(self._reserve_override)
+        try:
+            from config import AV_QUOTA_CONFIG
+            return max(0, int(AV_QUOTA_CONFIG.get("earnings_reserve", 0)))
+        except Exception:
+            return 0
 
     @classmethod
     def _default_budget(cls) -> int:
@@ -278,13 +294,25 @@ class AVQuotaStore:
         with _file_lock(self.lock_path) as handle:
             kayit = self._oku(handle)
 
-            # Bozuk dosyadan kurtarilan kayit DISKE YAZILMALI. Yazilmazsa dosya
-            # bozuk kalir, her gun yeniden "bugun tukenmis" okunur ve fail-closed
-            # KALICI KILITLENMEYE donusur. Yazinca yarin UTC gun donusuyle
-            # kendiliginden iyilesir.
+            # SIRA ONEMLI: bozuk dosya onarimi HER SEYDEN ONCE gelir.
+            # Baska bir kontrol once erken `return False` yaparsa onarim kaydi
+            # diske yazilmaz, dosya bozuk kalir ve fail-closed KALICI
+            # KILITLENMEYE donusur (kendi testim tam bunu yakaladi).
             if kayit.get("corrupt_recovered"):
                 self._yaz(kayit)
                 return False
+
+            # KAZANC TAKVIMI REZERVI: takvim bir ISLEM KAPISINI besliyor
+            # (earnings_gate). Temel analiz butcenin tamamini yerse takvim
+            # bayatlar ve kapi fail-open'a duser , yani kazanc gunlerinde islem
+            # acilir. Bu yuzden takvim icin birkac slot ayrilir ve DIGER
+            # tuketiciler o slotlara dokunamaz.
+            if consumer != "earnings":
+                takvim_kullanilan = kayit["used"].get("earnings", 0)
+                ayrilan = max(0, self._earnings_reserve() - takvim_kullanilan)
+                tavan = kayit["budget"] - ayrilan
+                if kayit["total_used"] + count > tavan:
+                    return False
 
             if kayit["total_used"] + count > kayit["budget"]:
                 return False

@@ -232,8 +232,13 @@ class StockNewsAnalyzer:
         gunluk butceyi paylasir; ayri bir sayac tutmak butceyi iki katina cikarirdi.
         """
         # Kota rezervi cagridan ONCE. Reddedilirse AG CAGRISI YAPILMAZ.
-        if not shared_store().try_reserve("news"):
-            logger.debug(f"AV haber {symbol}: kota butcesi dolu, cagri yapilmadi")
+        verildi, sebep = shared_store().reserve("news")
+        if not verildi:
+            # TIPLI SEBEP: bool sarmalayici kilit/yazma/bozukluk/tukenme
+            # durumlarini ayni "butce dolu" mesajina cokertiyordu.
+            logger.debug(
+                f"AV haber {symbol}: rezervasyon verilmedi ({sebep.value})"
+            )
             return []
         try:
             url = "https://www.alphavantage.co/query"

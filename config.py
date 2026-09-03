@@ -529,6 +529,10 @@ AV_QUOTA_CONFIG = {
     "ttl_hours": 24,
     "max_stale_hours": 168,   # 7 gün ,  temel veriler çeyreklik değişir
 
+    # Ön-çekim ARALIK KAPISI: piyasa kapalı dalı her ~60 saniyede bir koşuyor;
+    # her turda ağa gitmenin anlamı yok. Temel veriler çeyreklik değişir.
+    "prefetch_interval_minutes": 30,
+
     # Ön-çekim tur başına TAVAN. Bu çağrı ANA İŞLEM DÖNGÜSÜNDE koşuyor; bütün
     # bütçeyi tek turda harcamak döngüyü ~6 dakika bloklar ve açık pozisyonların
     # stop/koruma yönetimini geciktirir. 2 sembol/tur, gün boyunca bütçenin

@@ -44,6 +44,7 @@ class FundamentalAnalyzer:
         self.quota = quota if quota is not None else shared_store()
         self.disk_cache = disk_cache if disk_cache is not None else FundamentalsCache()
         self._kota_uyarildi = False
+        self._son_yazim_kalici = None   # son disk yaziminin kaliciligi
         try:
             from core.funnel import DailyFunnel
             self._funnel = funnel if funnel is not None else DailyFunnel()
@@ -200,7 +201,10 @@ class FundamentalAnalyzer:
 
             self.cache[cache_key] = overview
             self.last_fetch[cache_key] = datetime.now()
-            self.disk_cache.put(symbol, overview)   # restart'i atlatsin
+            # Dayanikliligi SAKLA: bellek cache'i yazma basarisiz olsa da
+            # guncelleniyor, bu yuzden disk_cache.get() ile OLCULEMEZ
+            # (kendi dusmanca testim bu boslugu yakaladi).
+            self._son_yazim_kalici = bool(self.disk_cache.put(symbol, overview))
             return overview
 
         except Exception as e:
@@ -233,18 +237,50 @@ class FundamentalAnalyzer:
             # harcamak dongu ~6 DAKIKA bloklar ve acik pozisyonlarin stop/koruma
             # yonetimini geciktirir , gercek parada kabul edilemez (Codex bulgusu).
             # Kucuk bir tavan gun boyunca yine butun butceyi kullanir.
-            tavan = self._prefetch_max_per_round() if limit is None else int(limit)
-            kalan = min(tavan, self.quota.remaining())
+            # TAVAN HER ZAMAN GECERLI: onceki surumde acik bir `limit`
+            # config tavanini ATLIYORDU, yani gecikme garantisi yalniz
+            # cagiran limit vermediginde tutuyordu (Codex bulgusu).
+            config_tavani = self._prefetch_max_per_round()
+            istenen = config_tavani if limit is None else int(limit)
+            kalan = max(0, min(config_tavani, istenen, self.quota.remaining()))
             adaylar = self.disk_cache.next_refresh_candidates(evren, kalan)
+            basarisiz_ardisik = 0
             for sembol in adaylar:
                 rapor["denenen"] += 1
-                # force_refresh ZORUNLU: aksi halde bayat yuk aninda geri doner,
-                # "basarili" sayilir ve hicbir sey tazelenmez.
-                if self.get_company_overview(sembol, force_refresh=True) is not None:
-                    rapor["basarili"] += 1
+                # DENEME KAYDI cagridan ONCE: basarisiz bir sembol de
+                # imlecte ilerlemeli, yoksa hep en eski kalir ve TAVANLI
+                # her turu tekellestirip kuyrugu ac birakir. Tavan ekledigim
+                # icin bu risk arttiginden erteleme guvensiz hale geldi
+                # (Codex bulgusu).
+                self.disk_cache.mark_attempt(sembol)
+
+                # force_refresh ZORUNLU: aksi halde bayat yuk aninda geri
+                # doner, "basarili" sayilir ve hicbir sey tazelenmez.
+                self._son_yazim_kalici = None
+                yuk = self.get_company_overview(sembol, force_refresh=True)
+                if yuk is not None:
+                    # DAYANIKLILIK: ag basarili olsa bile DISK yazimi
+                    # basarisizsa kapsama artmamistir; restart veriyi bulamaz.
+                    # Bellek cache'i her halukarda guncellendigi icin bunu
+                    # disk_cache.get() ile olcmek MUMKUN DEGIL , put()'un
+                    # dondurdugu kalicilik durumuna bakilir.
+                    if self._son_yazim_kalici is True:
+                        rapor["basarili"] += 1
+                        basarisiz_ardisik = 0
+                    else:
+                        rapor["kalici_olmayan"] = rapor.get("kalici_olmayan", 0) + 1
+                        basarisiz_ardisik += 1
                 elif self.quota.is_exhausted():
                     rapor["atlanan_kota"] += 1
                     break          # kota bitti, kalanlari deneme
+                else:
+                    basarisiz_ardisik += 1
+
+                # SINIRLI YENIDEN DENEME: ardisik hatalarda partiyi kes,
+                # kalan butceyi bozuk sembollere yedirme.
+                if basarisiz_ardisik >= 2:
+                    rapor["erken_kesildi"] = True
+                    break
             rapor["kapsama"] = self.disk_cache.coverage(evren)
         except Exception as exc:
             # Onceden-cekim BEST-EFFORT: arizasi tarama turunu durduramaz.

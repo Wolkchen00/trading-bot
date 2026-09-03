@@ -36,6 +36,7 @@ class EarningsCalendar:
     CACHE_TTL_HOURS = 24      # takvim bu sıklıkta tazelenir (1 AV çağrısı/gün)
     STALE_OK_DAYS = 7         # fetch başarısızken bayat cache'e tolerans
     RETRY_MINUTES = 30        # başarısız fetch'i bu aralıkla yeniden dene
+    MAX_DAILY_ATTEMPTS = 3    # R16: gunluk AV deneme tavani (butceyi yemesin)
 
     def __init__(self):
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_KEY", "")
@@ -104,12 +105,30 @@ class EarningsCalendar:
         # R16: UCUNCU AV tuketicisi. Ayni anahtarin gunluk butcesinden gecmek
         # ZORUNDA; gecmezse temel analizle yarisir ve sinir sessizce asilir.
         # Rezervasyon cagridan ONCE, surecler arasi kilit altinda.
-        if not shared_store().try_reserve("earnings"):
+        # GUNLUK DENEME TAVANI: 30 dakikada bir basarisiz olan bir takvim,
+        # gun boyu 20+ deneme yapip butun butceyi yiyerek temel analizi ac
+        # birakabilirdi (Codex bulgusu).
+        bugun = datetime.now().strftime("%Y-%m-%d")
+        if getattr(self, "_deneme_gunu", None) != bugun:
+            self._deneme_gunu = bugun
+            self._gunluk_deneme = 0
+        if self._gunluk_deneme >= self.MAX_DAILY_ATTEMPTS:
+            logger.debug(
+                f"Earnings takvimi: gunluk deneme tavani "
+                f"({self.MAX_DAILY_ATTEMPTS}) doldu, bugun tekrar denenmiyor"
+            )
+            return
+
+        verildi, sebep = shared_store().reserve("earnings")
+        if not verildi:
+            # TIPLI SEBEP: kilit/yazma hatasi ile kota dolmasi ayni sey degil;
+            # bool sarmalayici hepsini "butce dolu" diye gosteriyordu.
             logger.warning(
-                "Earnings takvimi: AV kota butcesi dolu, cagri YAPILMADI , "
+                f"Earnings takvimi: rezervasyon verilmedi ({sebep.value}) , "
                 f"{'bayat cache ile devam' if self._calendar else 'gate fail-open'}"
             )
             return
+        self._gunluk_deneme += 1
 
         try:
             resp = requests.get(
@@ -188,14 +207,17 @@ class EarningsCalendar:
 
             self._calendar = new_cal
             self._fetched_at = datetime.now()
-            # R16: takvim BASARIYLA tazelendi , kotada ona ayrilan slot
-            # artik serbest kalabilir (basarisiz deneme serbest birakmaz).
+            self._warned_no_data = False
+            self._save_disk_cache()
+
+            # R16: rezerv YALNIZ DISK YAZIMI TAMAMLANDIKTAN SONRA serbest
+            # birakilir. Onceki sira, basarisiz bir disk yaziminda rezervi
+            # birakiyordu ama restart bayat/eksik takvim buluyordu ve
+            # earnings_gate fail-open'a dusuyordu (Codex bulgusu).
             try:
                 shared_store().mark_earnings_refreshed()
             except Exception:
                 pass
-            self._warned_no_data = False
-            self._save_disk_cache()
             logger.info(
                 f"  📅 Earnings takvimi yenilendi: {len(new_cal)} sembol, "
                 f"{sum(len(v) for v in new_cal.values())} rapor tarihi (3 ay)"

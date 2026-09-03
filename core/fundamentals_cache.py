@@ -74,6 +74,7 @@ class FundamentalsCache:
         self._now_fn = now_fn or _now
         self.entries: Dict[str, dict] = {}
         self.negative: Dict[str, str] = {}   # symbol -> tukendigi UTC gun
+        self.attempts: Dict[str, str] = {}   # symbol -> son DENEME zamani
         self._load()
 
     @staticmethod
@@ -110,6 +111,9 @@ class FundamentalsCache:
             negatif = ham.get("negative", {})
             if isinstance(negatif, dict):
                 self.negative = {str(k): str(v) for k, v in negatif.items()}
+            denemeler = ham.get("attempts", {})
+            if isinstance(denemeler, dict):
+                self.attempts = {str(k): str(v) for k, v in denemeler.items()}
         except Exception as exc:
             # Yuk cache'i bozuksa TEMIZ baslanir. Bu bir veri kaybidir, guvenlik
             # sorunu degil: kota sayaci ayri dosyada ve fail-closed kaliyor.
@@ -119,6 +123,7 @@ class FundamentalsCache:
             )
             self.entries = {}
             self.negative = {}
+            self.attempts = {}
 
     def save(self) -> bool:
         """Kilit altinda OKU-BIRLESTIR-YAZ.
@@ -163,6 +168,11 @@ class FundamentalsCache:
                 birlesik_n = {str(k): str(v) for k, v in disk_negatif.items()}
                 birlesik_n.update(self.negative)
                 self.negative = birlesik_n
+            disk_deneme = ham.get("attempts", {})
+            if isinstance(disk_deneme, dict):
+                birlesik_d = {str(k): str(v) for k, v in disk_deneme.items()}
+                birlesik_d.update(self.attempts)
+                self.attempts = birlesik_d
         except Exception:
             pass   # disk bozuksa kendi halimizle devam
 
@@ -178,6 +188,7 @@ class FundamentalsCache:
                             "schema_version": SCHEMA_VERSION,
                             "entries": self.entries,
                             "negative": self.negative,
+                            "attempts": self.attempts,
                         },
                         f,
                     )
@@ -234,13 +245,19 @@ class FundamentalsCache:
             return yuk, yas, "BAYAT"
         return None, yas, "SOURCE_UNAVAILABLE"
 
-    def put(self, symbol: str, payload: dict) -> None:
+    def put(self, symbol: str, payload: dict) -> bool:
+        """Yuku yazar. DISKE KALICI yazildiysa True doner.
+
+        Onceki surum bellegi degistirip save() sonucunu YOK SAYIYORDU:
+        disk yazimi basarisiz olsa bile cagiran TAZE goruyor, ama restart
+        veriyi bulamiyordu , kapsama yalan soyluyordu (Codex bulgusu).
+        """
         self.entries[symbol] = {
             "payload": payload,
             "fetched_at": self._now_fn().isoformat(),
         }
         self.negative.pop(symbol, None)
-        self.save()
+        return bool(self.save())
 
     # -------------------------------------------------- negatif cache
 
@@ -259,6 +276,23 @@ class FundamentalsCache:
 
     # -------------------------------------------------- yenileme imleci
 
+    def mark_attempt(self, symbol: str) -> None:
+        """Bir tazeleme DENEMESI yapildi (basarili olsun olmasin).
+
+        Adalet DENEME uzerinden ilerler: yoksa surekli basarisiz olan bir
+        sembol hep en eski kalir, tavanli her turu tekellestirir ve
+        kuyrugu ac birakir.
+        """
+        self.attempts[symbol] = self._now_fn().isoformat()
+        self.save()
+
+    def attempt_age_hours(self, symbol: str):
+        alindi = _parse(self.attempts.get(symbol, ""))
+        if alindi is None:
+            return None
+        yas = (self._now_fn() - alindi).total_seconds() / 3600.0
+        return None if yas < -0.01 else max(0.0, yas)
+
     def refresh_order(self, universe: Iterable[str]) -> List[str]:
         """En-eski-once sira. Hic cekilmemisler EN BASTA.
 
@@ -266,10 +300,18 @@ class FundamentalsCache:
         harcayip kuyrugu hic tazelemezdi.
         """
         semboller = [s for s in universe]
+
         def anahtar(s):
+            # ADALET DENEME UZERINDEN: son DENEME zamani varsa onu kullan.
+            # Yalniz veri yasina bakmak, surekli basarisiz olan bir sembolu
+            # sonsuza dek en onde tutar (Codex bulgusu).
+            deneme = self.attempt_age_hours(s)
+            if deneme is not None:
+                return (2, -deneme)
             yas = self.age_hours(s)
-            # Hic cekilmemis (-1) en once; sonra en eski (buyuk yas) once.
+            # Hic denenmemis ve hic cekilmemis en once; sonra en eski veri.
             return (0, 0) if yas is None else (1, -yas)
+
         return sorted(semboller, key=anahtar)
 
     def next_refresh_candidates(

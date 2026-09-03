@@ -483,6 +483,19 @@ class StockBot:
                     wait_secs = min(self.market_hours.seconds_until_open(), 300)
                     if self._heartbeat_counter % 60 == 0:
                         logger.info(f"  Piyasa kapalı ({market_status['reason']}) — {wait_secs//60}dk bekleniyor")
+
+                    # R16: temel veri ON-CEKIMI burada kosar, islem dongusunde
+                    # DEGIL. On-cekim aga gidip her istekten sonra 15 sn uyuyor;
+                    # islem dongusune konuldugunda bir sonraki turun stop/koruma
+                    # yonetimini geciktiriyordu (Codex bulgusu, gercek para riski).
+                    # Piyasa kapaliyken yonetilecek dolum yok, gecikme zararsiz.
+                    # Temel veriler zaten ceyreklik degisir; kapali donemde
+                    # tazelenmeleri gun ici tazelenmelerinden daha uygundur.
+                    try:
+                        self._prefetch_fundamentals_if_idle()
+                    except Exception as e:
+                        logger.debug(f"  Temel veri on-cekimi atlandi: {e}")
+
                     self._reset_main_loop_error_counts()
                     time.sleep(min(wait_secs, 60))
                     continue
@@ -688,25 +701,6 @@ class StockBot:
                 # Hisse analizi (Equity floor ihlalinde yeni alım yapılmaz — A3)
                 symbols = [] if self._floor_block else self._get_symbols_to_analyze()
 
-                # R16: temel veri ÖN-ÇEKİMİ ,  yenileme imlecinin ÜRETİMDEKİ tek
-                # çağrı noktası. Talep üzerine çekim tek başına yetmez: sabit
-                # sembol sırası günlük bütçeyi her gün baştaki sembollere harcar
-                # ve listenin kuyruğu HİÇ tazelenmez. İmleç en-eski-önce çalışır
-                # ve diske yazıldığı için restart'ı atlatır.
-                # Best-effort: arızası tarama turunu durduramaz.
-                if symbols:
-                    try:
-                        rapor = self.fundamental_analyzer.prefetch_due(symbols)
-                        kapsama = rapor.get("kapsama") or {}
-                        if kapsama:
-                            logger.debug(
-                                f"  Temel veri kapsama: taze={kapsama.get('taze')} "
-                                f"bayat={kapsama.get('bayat')} "
-                                f"verisiz={kapsama.get('verisiz')} "
-                                f"(benzersiz {kapsama.get('benzersiz_sembol')} sembol)"
-                            )
-                    except Exception as e:
-                        logger.debug(f"  Temel veri on-cekimi atlandi: {e}")
                 for symbol in symbols:
                     if len(self.positions) >= max_positions:
                         break
@@ -1421,6 +1415,47 @@ class StockBot:
     # ============================================================
     # POZİSYON YÖNETİMİ
     # ============================================================
+
+    def _prefetch_fundamentals_if_idle(self):
+        """Temel veri on-cekimi , YALNIZ piyasa kapaliyken cagrilir.
+
+        Bu cagri aga gidip her istekten sonra 15 sn uyuyor. Islem dongusune
+        konuldugunda bir sonraki turun stop/koruma yonetimini geciktiriyordu;
+        acik pozisyon varken gercek para riski (Codex bulgusu). Piyasa
+        kapaliyken yonetilecek dolum yok.
+
+        ARALIK KAPISI: kapali donem saatlerce surer ve bu dal her ~60 saniyede
+        bir kosar; her turda aga gitmenin anlami yok.
+        """
+        try:
+            from config import AV_QUOTA_CONFIG
+            aralik_dk = float(AV_QUOTA_CONFIG.get("prefetch_interval_minutes", 30))
+        except Exception:
+            aralik_dk = 30.0
+
+        simdi = datetime.now()
+        son = getattr(self, "_son_prefetch", None)
+        if son is not None and (simdi - son).total_seconds() < aralik_dk * 60:
+            return
+        self._son_prefetch = simdi
+
+        try:
+            evren = list(STOCK_CONFIG.get("symbols", list(STOCK_IDS.keys())))
+        except Exception:
+            evren = []
+        if not evren:
+            return
+
+        rapor = self.fundamental_analyzer.prefetch_due(evren)
+        kapsama = rapor.get("kapsama") or {}
+        if kapsama:
+            logger.info(
+                f"  Temel veri on-cekimi: {rapor.get('basarili', 0)}/"
+                f"{rapor.get('denenen', 0)} tazelendi | kapsama "
+                f"taze={kapsama.get('taze')} bayat={kapsama.get('bayat')} "
+                f"verisiz={kapsama.get('verisiz')} "
+                f"(benzersiz {kapsama.get('benzersiz_sembol')} sembol)"
+            )
 
     def _manage_positions(self, config: Dict):
         """Açık pozisyonları yönet — trailing stop, take profit, break-even."""

@@ -188,9 +188,23 @@ class SweepWatermark:
 
         isaret = self.read()
         if isaret is None:
-            taban = _as_utc(bootstrap_from) or (
-                until - timedelta(hours=min_window_hours)
-            )
+            taban = _as_utc(bootstrap_from)
+            if taban is None:
+                # NEMOTRON BULGUSU: sessizce 24 saatlik pencereye dusmek,
+                # bu modulun onlemek icin var oldugu KALICI DELIGI
+                # bootstrap kenarinda geri getiriyordu: bot 24 saatten
+                # uzun kapali kaldiysa aradaki dolumlar kacar ve BIR
+                # SONRAKI COMMIT isareti onlarin otesine tasir.
+                #
+                # Taban verilmediyse RETANSIYON SINIRINDAN baslanir
+                # (elde edilebilecek en genis pencere) ve durum ayri
+                # raporlanir , sessiz varsayim YOK.
+                logger.warning(
+                    "  SUPURGE ILK ACILIS: isaret yok ve taban verilmedi , "
+                    f"retansiyon sinirindan ({self.retention_days:.0f} gun) "
+                    "taraniyor. Sessiz 24 saat varsayimi KALICI delik birakirdi."
+                )
+                return retansiyon_siniri, "ILK_ACILIS_TABANSIZ", True
             # Ilk acilista bile retansiyonun disina cikma
             cutoff = max(taban, retansiyon_siniri)
             eksiksiz = taban >= retansiyon_siniri

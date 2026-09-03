@@ -331,11 +331,53 @@ def test_i_ilk_acilis_tanimli_sinirdan_basliyor(tmp_path):
     assert eksiksiz is True
 
 
-def test_i_ilk_acilis_taban_yoksa_min_pencere(tmp_path):
+def test_i_taban_YOKSA_sessiz_24_saate_DUSMUYOR(tmp_path):
+    """NEMOTRON BAGIMSIZ INCELEME BULGUSU.
+
+    Onceki surum taban verilmeyince sessizce 24 saatlik pencereye dusuyordu ve
+    bu, modulun ONLEMEK ICIN VAR OLDUGU kalici deligi bootstrap kenarinda geri
+    getiriyordu: bot 24 saatten uzun kapali kaldiysa aradaki dolumlar kacar ve
+    BIR SONRAKI COMMIT isareti onlarin otesine tasirdi.
+
+    Artik en genis pencereden (retansiyon siniri) taranir ve durum AYRI
+    raporlanir , sessiz varsayim yok.
+    """
+    wm = _wm(tmp_path, retention=90)
+    cutoff, durum, eksiksiz = wm.plan_window(T0, min_window_hours=24)
+    assert durum == "ILK_ACILIS_TABANSIZ"
+    assert cutoff == T0 - timedelta(days=90), (
+        f"sessiz 24 saat varsayimi geri geldi: {cutoff}"
+    )
+    assert cutoff < T0 - timedelta(hours=24), "pencere hala dar"
+
+
+def test_i_taban_VERILINCE_ondan_basliyor(tmp_path):
+    """Defterdeki son dolum gibi DOGRULANMIS bir sinir verilirse ondan baslar."""
     wm = _wm(tmp_path)
-    cutoff, durum, _ = wm.plan_window(T0, min_window_hours=24)
+    taban = T0 - timedelta(hours=50)
+    cutoff, durum, eksiksiz = wm.plan_window(T0, bootstrap_from=taban)
     assert durum == "ILK_ACILIS"
-    assert cutoff == T0 - timedelta(hours=24)
+    assert cutoff == taban
+    assert eksiksiz is True
+
+
+def test_i_ledger_sweep_tabani_defterden_turetiyor(tmp_path, monkeypatch):
+    """Uretim baglantisi: bootstrap_from verilmezse defterden TURETILMELI."""
+    import core.ledger_sweep as ls
+    monkeypatch.setattr(ls, "read_fills", lambda *a, **k: [
+        {"ts_utc": "2026-09-01T10:00:00+00:00"},
+        {"ts_utc": "2026-09-02T15:30:00+00:00"},
+        {"ts_utc": "2026-08-30T09:00:00+00:00"},
+    ])
+    taban = ls.LedgerSweep._defterden_taban()
+    assert taban is not None, "defterden taban turetilmedi"
+    assert taban.isoformat().startswith("2026-09-02T15:30"), taban
+
+
+def test_i_defter_bossa_taban_None(monkeypatch):
+    import core.ledger_sweep as ls
+    monkeypatch.setattr(ls, "read_fills", lambda *a, **k: [])
+    assert ls.LedgerSweep._defterden_taban() is None
 
 
 def test_j_retansiyondan_eski_kesinti_DEGRADED(tmp_path):
@@ -368,7 +410,8 @@ def test_bozuk_isaret_dosyasi_ilk_acilisa_dusuyor(tmp_path):
     wm = _wm(tmp_path)
     assert wm.read() is None
     _, durum, _ = wm.plan_window(T0)
-    assert durum == "ILK_ACILIS"
+    # Taban verilmedigi icin GENIS pencere , sessiz 24 saat DEGIL
+    assert durum == "ILK_ACILIS_TABANSIZ"
 
 
 # ======================================================================

@@ -119,8 +119,32 @@ class LedgerSweep:
         )
         # Ilk acilista isaret yoksa nereden baslanacagi (olcum epoch'u ya da
         # dogrulanmis backfill siniri). None ise min pencere kullanilir.
-        self.bootstrap_from = bootstrap_from
+        # Taban verilmediyse DEFTERDEKI SON DOLUMDAN turet: dogrulanmis
+        # backfill siniri odur. Ondan sonrasi potansiyel olarak eksiktir.
+        self.bootstrap_from = bootstrap_from or self._defterden_taban()
         self.last_plan: dict = {}
+
+    @staticmethod
+    def _defterden_taban() -> datetime | None:
+        """Defterdeki EN SON dolum zamani , dogrulanmis backfill siniri.
+
+        Nemotron bagimsiz incelemesi: taban verilmeyince plan_window
+        sessizce 24 saatlik pencereye dusuyordu ve bot daha uzun kapali
+        kaldiysa aradaki dolumlar KALICI olarak kaciyordu.
+
+        Defterin son kaydi dogal sinirdir: ondan oncesini zaten biliyoruz,
+        ondan sonrasi supurulmeli.
+        """
+        try:
+            satirlar = read_fills() or []
+            zamanlar = []
+            for s in satirlar:
+                ts = _as_utc(s.get("ts_utc"))
+                if ts is not None:
+                    zamanlar.append(ts)
+            return max(zamanlar) if zamanlar else None
+        except Exception:
+            return None
 
     def _activity_pages(self, cutoff: datetime, until: datetime) -> list[Any]:
         """Sayfalari cek. EKSIK kalirsa `self._pages_complete` False olur.

@@ -117,3 +117,44 @@ bölüyor. Kalıcı çözüm: konteyner başına ayrı anahtar.
 salt okunur kumda (Codex review ortamı) koşturulamıyor. Review eden modelin
 baseline'ı kendi doğrulayamaması bir gözlemlenebilirlik eksiği. Testleri
 salt okunur ortamda da koşabilir hale getirmek küçük ama faydalı iş.
+
+## R15/R16 KOD INCELEMESINDEN ACIK KALANLAR (2026-09-03)
+
+Codex iki tur kod incelemesi yapti (14 + 14 bulgu). Kapatilanlar commit
+54c8dbf ve 9f60062'de. Asagidakiler BILINCLI olarak acik birakildi , cogu R17'nin
+(durust aletler) dogal kapsamina giriyor, ikisi ayri bir tur inceleme istiyor.
+
+### KARAR-HATTI-DEGRADED-DURUMU (R17 kapsamina)
+`stock_bot.py:1360` coordinator invaryant ihlalini siradan bir HOLD'a ceviriyor ve
+`scanned` + `signal_hold` sayaclarini artiriyor. ERROR logu eklendi ama saglik
+telemetrisi hala "normal" gorunuyor. R17'nin `decision_pipeline` boyutu bunu
+DEGRADED olarak raporlamali ve giris yetkisini durdurmali (pozisyon korumasi devam).
+
+### BAYATLIK-KARARA-ULASSIN-AMA-ESIK-DEGISMESIN (yarim)
+`analyze_fundamentals` artik `data_age_hours` / `is_stale` / `data_source`
+donduruyor, AMA FundAgent bunlari kullanmiyor ve `stock_bot` karar telemetrisine
+tasimiyor. Tasinmali; ancak Codex'in uyarisi gecerli: bu yapilirken islem
+esikleri SESSIZCE degistirilmemeli. Ayri bir rock, ayri inceleme.
+
+### ON-CEKIM-DENEME-IMLECI (yeni, R16'dan devir)
+Basarisiz ya da desteklenmeyen bastaki semboller icin kalici DENEME kaydi ve
+geri-cekilme yok; her turda yine ilk sirada geliyorlar ve gunluk butceyi
+tuketip kuyrugu ac birakabilirler. Sembol basina deneme zamani/sonucu
+kaydedilmeli ve adalet DENEME uzerinden ilerlemeli.
+
+### CACHE-KIRLI-ANAHTAR-TAKIBI (yeni, R16'dan devir)
+`FundamentalsCache.save()` kilit altinda birlestiriyor ama surecin TUM
+anlik goruntusunu diskin ustune koyuyor; sonraki alakasiz bir save, baska bir
+surecin ayni sembol icin daha YENI degerini geri alabilir ve silme
+yayilamaz. Kirli anahtar + tombstone takibi, ayni sembol catismasinda kaynak
+zaman damgasina gore cozum gerekiyor.
+
+### ALTIN-CIKTI-SHA-DOGRULAMASI (kucuk)
+`--onayla` yalniz uyari destekli bir anahtar; mevcut (degismis) checkout'tan da
+kanonigi ezebilir. Taban SHA'yi gomup `HEAD` ve ilgili dosyalarin temizligini
+dogrulamali, uyusmazlikta reddetmeli.
+
+### ENTEGRASYON-TESTLERI-HALA-ZAYIF (kucuk)
+R15 "uretim entegrasyonu" testi agirlik atamasini ELLE kopyaliyor; R16 testi
+kaynak metninde cagri ariyor (yorum satirina alinmis bir cagri icin de gecerdi).
+Gercek `_get_agent_decision()` ve minimal bir tarama iterasyonu kosulmali.

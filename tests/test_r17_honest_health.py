@@ -429,3 +429,67 @@ def test_bayatlik_analysis_sozlugune_tasiniyor():
     for alan in ("fundamental_data_age_hours", "fundamental_is_stale",
                  "fundamental_data_source"):
         assert f'analysis["{alan}"]' in kaynak, f"{alan} analysis'e tasinmiyor"
+
+
+def test_karar_tazeligi_dosya_yazim_zamanindan(tmp_path):
+    """GRANULARITE duzeltmesi (uretimde gorulldu).
+
+    Gun kovasi basini kullanmak muhafazakar ama COK KABA: 3 saat once karar
+    vermis saglikli bir bot "23 saat" diye okunuyordu ve boyut kullanissiz
+    hale geliyordu.
+    """
+    import os
+    import time
+    from tools.saglik import profil_sagligi
+
+    (tmp_path / "heartbeat.json").write_text(
+        json.dumps({"ts": datetime.now(timezone.utc).isoformat()}), encoding="utf-8"
+    )
+    (tmp_path / "agent_stats.json").write_text(
+        json.dumps({
+            "schema_version": 2,
+            "days": {"2026-09-03": {"coordinator": {"decisions": 12}}},
+        }),
+        encoding="utf-8",
+    )
+    # Dosya AZ ONCE yazildi -> hat TAZE sayilmali
+    p = profil_sagligi("paper", str(tmp_path), datetime.now(timezone.utc))
+    assert p.decision_pipeline.durum is Durum.SAGLIKLI, (
+        f"taze yazim bayat okundu: {p.decision_pipeline}"
+    )
+
+
+def test_bayat_dosya_yazimi_SESSIZ(tmp_path):
+    import os
+    from tools.saglik import profil_sagligi
+
+    simdi = datetime.now(timezone.utc)
+    (tmp_path / "heartbeat.json").write_text(
+        json.dumps({"ts": simdi.isoformat()}), encoding="utf-8"
+    )
+    yol = tmp_path / "agent_stats.json"
+    yol.write_text(
+        json.dumps({"days": {"2026-09-03": {"coordinator": {"decisions": 5}}}}),
+        encoding="utf-8",
+    )
+    # Yazim zamanini 30 saat geriye al
+    eski = (simdi - timedelta(hours=30)).timestamp()
+    os.utime(yol, (eski, eski))
+
+    p = profil_sagligi("paper", str(tmp_path), simdi)
+    assert p.decision_pipeline.durum is Durum.SESSIZ
+
+
+def test_karar_yoksa_UNKNOWN_kaliyor(tmp_path):
+    """Gun kovasi var ama karar sayisi 0 -> olculemedi."""
+    from tools.saglik import profil_sagligi
+    simdi = datetime.now(timezone.utc)
+    (tmp_path / "heartbeat.json").write_text(
+        json.dumps({"ts": simdi.isoformat()}), encoding="utf-8"
+    )
+    (tmp_path / "agent_stats.json").write_text(
+        json.dumps({"days": {"2026-09-03": {"coordinator": {"decisions": 0}}}}),
+        encoding="utf-8",
+    )
+    p = profil_sagligi("paper", str(tmp_path), simdi)
+    assert p.decision_pipeline.durum is Durum.UNKNOWN

@@ -80,22 +80,42 @@ def profil_sagligi(profil: str, state_dir: str, simdi: datetime) -> ProfilSaglig
     )
 
     # --- decision_pipeline: karar telemetrisi (R13 agent_stats) tazeligi
-    stats, stats_hata = _oku_json(os.path.join(state_dir, "agent_stats.json"))
+    #
+    # GRANULARITE: agent_stats GUN KOVALARI tutuyor. Gun basini kullanmak
+    # muhafazakar ama COK KABA: 3 saat once karar vermis saglikli bir bot
+    # "23 saat" diye okunuyor ve boyut kullanissiz hale geliyordu (uretimde
+    # birebir gorulldu). Dosyanin YAZIM ZAMANI cok daha iyi bir vekil: agent_stats
+    # her karar turunda persist ediliyor.
+    stats_yolu = os.path.join(state_dir, "agent_stats.json")
+    stats, stats_hata = _oku_json(stats_yolu)
     son_karar = None
     if isinstance(stats, dict):
         gunler = stats.get("days") or {}
+        var_mi_karar = False
         if isinstance(gunler, dict) and gunler:
             try:
                 en_son_gun = max(gunler)
-                # Gun bazli toplam; gun sonu 23:59 varsayilir (muhafazakar:
-                # gercek karar daha erken olabilir, yani BAYATLIK KUCUK GORUNMEZ)
-                son_karar = _ts(f"{en_son_gun}T00:00:00+00:00")
-                if (gunler.get(en_son_gun) or {}).get("coordinator", {}).get("decisions"):
-                    pass
-                else:
-                    son_karar = None    # gun var ama karar yok
+                var_mi_karar = bool(
+                    (gunler.get(en_son_gun) or {})
+                    .get("coordinator", {})
+                    .get("decisions")
+                )
             except Exception:
-                son_karar = None
+                var_mi_karar = False
+
+        if var_mi_karar:
+            try:
+                # Dosya yazim zamani , gercek tazelik
+                son_karar = datetime.fromtimestamp(
+                    os.path.getmtime(stats_yolu), tz=timezone.utc
+                )
+            except Exception:
+                # Vekil okunamazsa gun basina dus (muhafazakar: bayatlik
+                # KUCUK gorunmez, buyuk gorunur)
+                try:
+                    son_karar = _ts(f"{max(gunler)}T00:00:00+00:00")
+                except Exception:
+                    son_karar = None
 
     kill, kill_hata = _oku_json(os.path.join(state_dir, "kill_switch.json"))
     kill_aktif = bool(kill.get("killed")) if isinstance(kill, dict) else False

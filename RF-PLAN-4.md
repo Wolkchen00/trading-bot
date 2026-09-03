@@ -1,7 +1,8 @@
-# RF-PLAN-4.md , Clarity Break #4: ölü ağırlığı kaldır, kapıyı ölçüye bağla
+# RF-PLAN-4.md , Clarity Break #4: ölü ağırlığı kaldır, kanıtı gölgede topla, kapıyı ölçüye bağla
 
 > Tarih: 2026-09-03 (Los Angeles). Sürücü: Claude (Visionary) + Codex (Integrator).
-> Baseline: `git HEAD = 5aea694`, `py -m pytest tests/ -q` -> **250 passed**.
+> Baseline: `git HEAD = aa70225`, `py -m pytest tests/ -q` -> **250 passed** (Claude koştu, 9.39s).
+> **Revizyon 4** , Codex Round 1-3 bulgularından sonra. Kayıt: RF-SAME-PAGE-LOG-4.md.
 > Önceki döngüler: RF-PLAN.md, RF-PLAN-2.md, RF-PLAN-3.md (R1..R14 tamamlandı).
 
 ## CORE FOCUS (tek cümle)
@@ -9,145 +10,230 @@
 **Canlı hesabın değerini ölçülmüş alfa ile büyütmek; ölçüm kapısı geçmeden canlı
 giriş kilidi açılmaz ve hiçbir araç "çalışıyor" diye yalan söylemez.**
 
-## Bu döngünün teşhisi (2026-09-03, hepsi bu oturumda doğrulandı)
+---
+
+## TEŞHİS (2026-09-03, hepsi koda karşı doğrulandı)
 
 Canlı hesap $494.69, 7 gündür 0 işlem. Sebep arıza değil, `LIVE_LOCK_R5` kilidi
 (`core/risk_guard.py:82`, `config.py:466`). Kilit önceki döngüde kondu çünkü
-strateji alfa üretmiyordu. Alfanın neden üretilmediğinin mekanizması:
+strateji alfa üretmiyordu (paper 2 ay -%1.55 vs SPY +%4.36; canlı strateji katkısı ~0).
 
-| Ajan | Ağırlık | Ölçülen durum |
-|---|---|---|
-| TechAgent | 0.25 | Sağlam |
-| **FundAgent** | **0.20** | AV ücretsiz kota 25/gün; başarısızlık cache'lenmiyor, her tur yeniden çağrı |
-| SentAgent | 0.20 | Sağlam (R12'de işaret hatası düzeltildi) |
-| **SocialAgent** | **0.15** | Reddit HTTP 403 (189KB HTML), Nitter ölü. Kalıcı kör |
-| RiskAgent | 0.20 | Sağlam, ama telemetride BUY=0 |
+### Doğrulanmış ölçümler (bu oturum)
 
-Bu oturumda alınan ölçümler:
 - `GET reddit.com/r/wallstreetbets/search.json` -> **HTTP 403**, 189908 bayt HTML.
-- `GET query1.finance.yahoo.com/v10/finance/quoteSummary/AAPL` -> **HTTP 401**
-  (koddaki `_get_yahoo_fallback` yedeği ölü; ayrıca yalnız anahtar YOKSA çağrılıyor).
-- `GET alphavantage.co OVERVIEW AAPL` -> **HTTP 200, gerçek veri**. Kaynak ölü değil,
+- `GET query1.finance.yahoo.com/v10/.../AAPL` -> **HTTP 401**. `_get_yahoo_fallback`
+  iki kat ölü: Yahoo cevap vermiyor VE yalnız anahtar YOKSA çağrılıyor
+  (`fundamental_analyzer.py:54-55`), yani kota tükendiğinde asla devreye girmiyor.
+- `GET alphavantage.co OVERVIEW AAPL` -> **HTTP 200, gerçek veri**. Kaynak sağlam,
   bütçe israf ediliyor.
 - Üretim telemetrisi (26 Ağu, PLAN.md): FundAgent veri_yok=%100, SocialAgent veri_yok=%100.
+- `py -m pytest tests/ -q` -> 250 passed.
 
-**Sonuç:** ensemble ağırlığının %35'i anlaşmazlıktan değil veri yokluğundan HOLD
-diyor. Üstüne `agent_coordinator.py:436` çoğunluk kapısı `buy_count >= 3` istiyor;
-5 ajandan 2'si kalıcı susmuşken yaşayan 3 ajanın oybirliği gerekiyor ve RiskAgent
-telemetride hiç BUY demiyor. Çoğunluk pratikte imkansız. Eşikler (paper 30 /
-canlı 50) 5 oy veren ajana göre kalibre edilmiş, gerçekte 3 oy veriyor.
+### DÜZELTMELER , ilk teşhisimdeki üç hata (Codex yakaladı, hepsi doğrulandı)
 
-**Yan hasar:** `fundamental_analyzer.py:65` `time.sleep(15)` başarısız çağrıda da
-koşuyor; `social_sentiment.py:188` `time.sleep(1)` 403'te de koşuyor (12 istek).
-Hiç gelmeyen veri için sembol başına ~27 saniye bloklayıcı uyku.
+**1. "Çoğunluk kapısı işlemleri engelliyor" YANLIŞTI.** Çoğunluk kapı değil.
+`agent_coordinator.py:436` `buy_count >= 3` bir `elif` zincirinin ilk dalı;
+satır 442 `weighted_score > 15` çoğunluk olmadan da işlem açar. Çoğunluğun tek
+etkisi satır 475 `confidence *= 1.2`. Bu döngüde çoğunluğa DOKUNULMAZ.
 
-## İhsan'ın bu döngü için verdiği iki karar
+**2. `WEIGHTS` sınıf sabiti üretimde ÖLÜ.** `stock_bot.py:1298` her sembolde
+`coordinator.WEIGHTS = dynamic_weights` yapıyor; `agent_performance.py:219-221`
+performansa göre ayarlanmış ham ağırlıkları toplamı 1.0 olacak şekilde normalize
+ediyor. **Sonuç: SocialAgent'ın normalize payı SABİT 0.15 DEĞİL**, performansla
+değişir. Sabit sayıya dayanan her invaryant yanlıştır.
 
-1. **Canlı kilit:** önce onar, sonra aç. Ölçüm kapısı geçene kadar
-   `LIVE_ENTRIES_ENABLED` kapalı kalır. Hesap o zamana kadar SPY parkında durur.
-2. **SocialAgent:** kaldır, ağırlığı yaşayan ajanlara dağıt. Reddit OAuth yok.
+**3. `tools/olcum_raporu.py` toplayıcısının yeri.** Satır 77-88 yalnız `Status`
+enum'u ve çıkış kodları. Gerçek toplayıcı **`gate_status()`, satır 1160**, ve
+zaten fail-closed: `FAIL` varsa FAIL, `UNKNOWN` ya da bilinmeyen durum varsa
+UNKNOWN, `strategy_trade_count < 20 or elapsed_days < 30` ise NOT_READY, ancak
+tam 4 metrik ve hepsi PASS ise PASS.
 
-## ROCK'LAR (bağımlılık sırasında)
+### Ağırlık ölçeği hakkında kritik gerçek
+
+`weighted_score` HAM bir toplamdır, toplam ağırlığa hiç bölünmez:
+
+```python
+weighted_score += signal_value * weight * vote.confidence   # satır 419-423
+elif weighted_score > 15:                                    # satır 442 , MUTLAK eşik
+confidence = abs(weighted_score) * 2.0                       # satır 473
+```
+
+Kapatılan bir ajanın payını kalanlara dağıtmak **her giriş kapısını gizlice
+gevşetir.** Ölçülmüş örnek: tek başına TechAgent BUY conf 60 -> `ws = 0.25*60 = 15`
+-> `> 15` değil -> HOLD. Ağırlıklar renormalize edilirse `ws = 0.294*60 = 17.65`
+-> BUY, `confidence = 35.3` -> paper eşiği 30'u geçer. Aynı kanıt, farklı karar.
+**Bu döngüde renormalizasyon YASAK.**
 
 ---
 
-### R15 , Ölü ağırlığı kaldır, oyu yaşayan ajanlara ver
+## İHSAN'IN KARARLARI
 
-**Neden:** Ağırlığın %15'i kalıcı sıfır ve çoğunluk kapısı 5 ajanlık ölçekte
-sabitlenmiş. İkisi birlikte girişleri yapısal olarak boğuyor.
+1. **Canlı kilit:** önce onar, sonra aç. `LIVE_ENTRIES_ENABLED` bu döngü boyunca kapalı.
+2. **SocialAgent:** kaldır, Reddit OAuth yok.
+3. **AV kotası:** AV haberi kapatılsın, 25 çağrının tamamı temel analize gitsin,
+   haber Marketaux'tan gelsin, ikinci anahtar alınmasın.
+
+---
+
+## ROCK'LAR (bağımlılık sırasında)
+
+### R15 , SocialAgent'ı maskele, ölçeği BOZMA, listeyi ÇÖKERTME
+
+**Neden:** 0.15 nominal ağırlık kalıcı sıfır ve sembol başına 12 saniye bloklayıcı
+uyku ödeniyor. Ama ölçek korunmalı ve liste kısalınca kod çökmemeli.
+
+**ÖNCE DÜZELTİLMESİ GEREKEN ÇÖKME:** `core/agent_coordinator.py:427`
+`risk_vote = votes[4]  # RiskAgent her zaman son`. SocialAgent oy kümesinden
+çıkınca liste 4 elemana düşer ve bu satır **IndexError** fırlatır, her kararda.
+-> RiskAgent **ada göre** bulunur; tam olarak bir RiskAgent oyu yoksa fail-closed
+davranılır (kararı sessizce sürdürmez).
 
 **Kapsam:**
-- `config.py`: yeni anahtar `AGENT_CONFIG["social_agent_enabled"]`, varsayılan
-  **False** (ölçülmüş 403 sebebiyle). Env ile açılabilir kalsın, kod silinmesin.
-- `core/agent_coordinator.py`: `WEIGHTS` tek gerçek kaynak kalsın ama kapalı
-  ajanlar oy kümesinden çıkarılsın ve kalan ağırlıklar **toplamı 1.0 olacak
-  şekilde yeniden normalize edilsin** (0.25/0.20/0.20/0.20 -> /0.85). Normalizasyon
-  runtime'da hesaplansın, config'e sabit sayı yazılmasın.
-- Çoğunluk kapısı `>= 3` sabiti **yaşayan ajan sayısından türetilsin**:
-  `esik = (yasayan // 2) + 1` (5 ajan -> 3, 4 ajan -> 3). Sabit sayı kalmasın.
-- `stock_bot.py:1286-1288`: ajan kapalıyken `analyze_social` **hiç çağrılmasın**
-  (sadece skoru 0'lamak yetmez, 12 saniyelik uyku maliyeti kalkmalı).
-- `AgentVote` üretilmeyen ajan için R13 `agent_stats` telemetrisi `veri_yok`
-  değil **`kapali`** olarak ayrışsın. Yokluk susmayla karışmasın (R14 kuralı).
+- `config.py`: `AGENT_CONFIG["social_agent_enabled"]`, varsayılan **False**,
+  env ile açılabilir. Kod silinmez.
+- `agent_coordinator.py:427` indeks erişimi ada göre aramayla değiştirilir.
+- **Maskeleme, renormalizasyon değil.** Önce mevcut BEŞ ajanlık normalize vektör
+  DEĞİŞTİRİLMEDEN hesaplanır, SONRA SocialAgent maskelenir. Payı dağıtılmaz.
+- **İki invaryant birlikte (biri tek başına yetmez):**
+  1. `active_sum == 1.0 - maskeleme_oncesi_SocialAgent_agirligi`;
+  2. **her etkin ajanın maskeleme sonrası ağırlığı, maskeleme öncesi normalize
+     ağırlığına EŞİT** (tolerans dahilinde). Birinci invaryant tek başına,
+     ağırlıkların kendi aralarında yeniden dağıtılmasına izin verir (toplam
+     korunurken Tech 0.25 -> 0.30 olabilir); ikincisi bunu kapatır.
+- Tek "enable-aware" ağırlık çözücü, hem `AgentCoordinator` hem
+  `AgentPerformanceTracker` tarafından kullanılır.
+- `stock_bot.py:1286-1288`: ajan kapalıyken `analyze_social` **hiç çağrılmaz**.
+- `core/agent_stats.py`: şema sürümlenir ve göç ettirilir; `data_ok` üçe çıkar:
+  `ok` / `SOURCE_UNAVAILABLE` / `DISABLED_BY_POLICY`.
+- Çoğunluk mantığına DOKUNULMAZ.
 
-**Done looks like:** SocialAgent kapalıyken 4 ajan oy veriyor, ağırlık toplamı
-tam 1.0, çoğunluk eşiği 3, `analyze_social` çağrı sayısı 0, telemetri `kapali`
-diyor. Açıldığında (env ile) eski 5 ajanlık davranış birebir geri geliyor.
+**Done looks like:** SocialAgent kapalıyken bot çökmüyor, 4 ajan oy veriyor, her
+etkin ajanın ağırlığı birebir korunuyor, `analyze_social` çağrısı 0, telemetri
+`DISABLED_BY_POLICY` diyor, ve üretimdeki bugünkü karar çıktısı birebir aynı.
 
 **PROOF:**
 ```
 py -m pytest tests/ -q
 py -m pytest tests/test_r15_agent_weights.py -q
 ```
-Yeni suite şunları kanıtlamalı: (a) kapalıyken ağırlık toplamı 1.0 +- 1e-9,
-(b) çoğunluk eşiği yaşayan sayıdan türüyor, (c) `analyze_social` çağrılmıyor
-(mock çağrı sayacı 0), (d) telemetride `kapali` != `veri_yok`, (e) env ile
-açıldığında 5 ajanlık ağırlıklar birebir eski değerlere dönüyor.
+Yeni suite:
+(a) **SocialAgent kapalıyken `decide()` IndexError fırlatmıyor**; RiskAgent ada
+    göre bulunuyor; RiskAgent oyu 0 ya da 2 olduğunda fail-closed;
+(b) iki invaryant birden: `active_sum` doğru VE **her etkin ajanın ağırlığı
+    maskeleme öncesiyle birebir aynı** (yeniden dağıtım yakalanıyor);
+(c) **DONMUŞ ALTIN ÇIKTI regresyonu**, R15 ÖNCESİ üretim davranışından alınmış
+    beklenen değerlere karşı (iki yeni yolun birbiriyle karşılaştırılması DEĞİL).
+    Donmuş alanlar: `signal`, `confidence`, **`weighted_score` (yuvarlanmış hali
+    dahil)**, `majority`, `risk_veto` ve **her etkin ajanın ağırlığı**.
+    `weighted_score` ayrıca `stock_bot.py:972`'de BearBrain piyasa-genişliği
+    bileşenini besliyor; yalnız signal/confidence eşitliği bu kaymayı kaçırır.
+    Senaryolar zorunlu: **`ws = +15` ve `ws = -15` tam sınırları**, çoğunluk
+    var/yok, RiskAgent veto, VIX short boost, `confidence` 100 doygunluğu;
+(d) **`MIN_TRADES_FOR_EVAL = 5` geçiş sınırı** (`agent_performance.py:26,177-179`):
+    her ajan için 4 ve 5 çözümlenmiş örnekli geçmişlerle, hem varsayılan ağırlık
+    dalı hem hesaplanan dal donduruluyor;
+(e) `analyze_social` mock çağrı sayacı 0 VE `time.sleep` çağrı sayacı 0;
+(f) `DISABLED_BY_POLICY != SOURCE_UNAVAILABLE`, `ajan_raporu` çıktısında ayrı;
+(g) eski şemalı `agent_stats.json` göç ediyor, çökmüyor;
+(h) **entegrasyon: gerçek `stock_bot.py:1298` ağırlık atama yolundan** geçen test.
 
 ---
 
-### R16 , FundAgent'ı 25/gün kotasına sığdır
+### R16 , AV kotası: ÜÇ tüketici, profil bütçesi, süreçler arası kilit
 
-**Neden:** Kaynak sağlam (bugün HTTP 200 ölçtüm), israf edilen bütçe. Temel
-veriler çeyreklik değişir, tarama turu başına değil. 24 saatlik disk cache ile
-25 çağrı/gün tam ~25 sembole yeter. Bu, 0.20 ağırlığı bedavaya geri kazandırır.
+**Neden:** Kaynak sağlam, bütçe israf. `fundamental_analyzer.py:65` `time.sleep(15)`
+başarısız çağrıda da koşuyor, başarısızlık cache'lenmiyor.
+
+**ÜÇ TÜKETİCİ, iki değil.** Aynı `ALPHA_VANTAGE_KEY` şuralarda okunuyor:
+`core/fundamental_analyzer.py` (OVERVIEW), `core/news_analyzer.py:92`
+(NEWS_SENTIMENT), **`core/earnings_calendar.py:40,107` (EARNINGS_CALENDAR)**.
+Üçüncüsü planın önceki sürümünde atlanmıştı; hesaba katılmazsa bütçe aşılır.
 
 **Kapsam:**
-- `core/fundamental_analyzer.py`:
-  - **Disk cache**, `config.state_path("fundamentals_cache.json")`. TTL 24 saat.
-    Süreç yeniden başlasa da hayatta kalmalı (bellek cache'i konteyner restart'ında
-    ölüyor, kota da onunla birlikte yeniden yanıyor).
-  - **Negatif cache:** kota tükendiğinde dönen `return None` de yazılsın
-    (ayrı TTL, gün sonuna kadar). Aynı sembol aynı gün ikinci kez AV'yi çağırmasın.
-  - **Günlük çağrı sayacı**, `av_calls_YYYY-MM-DD`. 25'e ulaşınca ağ çağrısı
-    yapılmasın, doğrudan cache/None dönsün.
-  - `time.sleep(15)` **yalnız gerçekten ağ çağrısı yapıldığında** koşsun. Cache
-    hit'te ve sayaç doluyken uyku sıfır.
-  - Ölü `_get_yahoo_fallback`: Yahoo bugün HTTP 401 veriyor. Ya kaldırılsın ya da
-    çağrıldığında dürüstçe `None` + tek seferlik WARN log versin. Sessiz ölü kod kalmasın.
-- Kota tükenmesi `logger.debug` ile yutulmasın: ardışık N başarısızlıkta **WARN**
-  ve R11 funnel'ına `fund_source_quota` etiketi.
+- **AV haberi kapatılır** (İhsan kararı); haber Marketaux'tan gelir.
+- **HER AV çağıranı aynı profil-bütçe rezervasyonundan geçer**, kazanç takvimi dahil.
+  Takvim çağrıları temel analiz payını azaltır: profil başına toplam sabit, temel
+  analize kalan **en fazla ~23** (takvim payı düşüldükten sonra) ve bu sayı
+  config'de açık yazılır, koda gömülmez.
+- **KONTEYNER-BELİRLİ KALICI BÜTÇE:** live 13 / paper 12 = 25. Paylaşımlı sayaç
+  imkansız (ayrı state hacimleri), bu yüzden "anahtar geneli 25" İDDİA EDİLMEZ.
+- **Süreçler arası kilit.** Atomik yer değiştirme tek başına YETMEZ: restart ya da
+  deploy örtüşmesinde aynı profilden iki süreç eşzamanlı koşabilir ve
+  oku-değiştir-yaz rezervasyonu yarışır. Rezervasyon bir interprocess lock
+  altında yapılır.
+- **Yenileme imleci (round-robin / en-eski-önce), kalıcı**, restart'ı atlatır.
+- **Bayat veri sözleşmesi:** `stale-while-revalidate`, her karara kaynak zaman
+  damgası + yaş, **maksimum bayatlık yaşı**, aşılınca `SOURCE_UNAVAILABLE`.
+- **Tipli sonuçlar:** `OK` / `QUOTA_EXHAUSTED` / `RETRYABLE_ERROR` / `NO_DATA`.
+  Yalnız `QUOTA_EXHAUSTED` gün sonuna kadar negatif cache'lenir. HTTP 200 + kota
+  uyarı gövdesi `QUOTA_EXHAUSTED` sayılır.
+- **Fail-closed sayaç:** okunamıyorsa tükenmiş sayılır; yük cache'i bağımsız ve
+  temiz kurtarılır.
+- **Kota muhasebesi UTC**, işlem-günü telemetrisi ayrıca America/New_York.
+- `time.sleep(15)` yalnız gerçek ağ çağrısında.
+- `fund_source_quota` `DailyFunnel.STAGES`'te (`core/funnel.py:23-38`) YOK; ya
+  eklenip göç ettirilir ya `gate_block` sebebi olarak kaydedilir. Kanıt kalıcı
+  üretim çıktısını okur.
+- Ölü `_get_yahoo_fallback` kaldırılır ya da dürüstçe `NO_DATA` + tek WARN verir.
 
-**Done looks like:** Bir tarama turunda aynı sembol için en fazla 1 AV çağrısı,
-günde en fazla 25 AV çağrısı, cache hit'te 0 saniye uyku, kota tükendiğinde
-sessizlik değil WARN. FundAgent `veri_yok` oranı ölçülebilir biçimde düşüyor.
+**Done looks like:** Üç AV tüketicisi de aynı bütçeden geçiyor, her profil kendi
+payında kalıyor, eşzamanlı süreçler yarışmıyor, imleç her sembolü sırayla
+tazeliyor, bayat veri yaşıyla raporlanıyor ve maksimum yaşı aşınca kullanılmıyor.
 
 **PROOF:**
 ```
 py -m pytest tests/ -q
 py -m pytest tests/test_r16_fund_quota.py -q
 ```
-Yeni suite: (a) cache hit'te `requests.get` çağrılmıyor VE `time.sleep` çağrılmıyor,
-(b) 26. çağrı ağa çıkmıyor, (c) negatif cache aynı gün ikinci çağrıyı engelliyor,
-(d) disk cache dosyası bozuk/boş/eksik JSON ise çökmüyor, temiz başlıyor,
-(e) TTL dolduğunda yeniden çağırıyor.
+Yeni suite:
+(a) cache hit'te `requests.get` VE `time.sleep` çağrı sayacı 0;
+(b) **ÜÇ tüketici (fundamental + news + earnings calendar) toplamı profil
+    bütçesini geçmiyor**; takvim çağrısı temel payını gerçekten azaltıyor;
+(c) **İKİ BAĞIMSIZ SÜREÇ** (live+paper) toplamı 25'i geçmiyor;
+(d) **AYNI PROFİLDEN İKİ EŞZAMANLI SÜREÇ** (restart örtüşmesi) bütçeyi aşmıyor
+    , interprocess lock kanıtı, yalnız atomik yazma değil;
+(e) AV haberi kapalıyken haber yolunun AV sayacı 0, Marketaux çalışıyor, ve haber
+    zorla açılırsa aynı rezervasyondan geçiyor;
+(f) imleç: restart'lar boyunca her uygun sembol belirtilen ufukta tazeleniyor;
+(g) bozuk/okunamaz sayaç -> yeni ağ çağrısı 0, yük cache'i okunabiliyor;
+(h) HTTP 200 kota gövdesi `QUOTA_EXHAUSTED`, timeout `RETRYABLE_ERROR` ve
+    ikincisi aynı gün tekrar deneniyor;
+(i) maksimum bayatlık yaşı aşılınca `SOURCE_UNAVAILABLE`;
+(j) UTC gün sınırında sayaç sıfırlanıyor;
+(k) `fund_source_quota` kalıcı funnel çıktısında gerçekten görünüyor;
+(l) kapsama sayıları BENZERSİZ SEMBOL sayıyor, yaş dağılımı profil başına.
 
 ---
 
-### R17 , Yalan söyleyen aletleri düzelt
+### R17 , Yalan söyleyen aletleri düzelt: TEK SKALER DEĞİL, ÜÇ BOYUT
 
 **Neden:** İhsan bir haftadır botu bozuk sandı çünkü `health_check.py` "🔴 BOT
-CALISMIYOR" diyordu. Bot çalışıyordu, kilitliydi. Ölçüm aleti yanlış okuyorsa
-bütün döngü kör uçuyor. Ayrıca PLAN.md'de açık bırakılmış gerçek bir veri
-kaybı riski var.
+CALISMIYOR" diyordu; bot çalışıyordu, kilitliydi. Ama tersi de tuzak: tek bir
+skaler durum kullanırsam **`KILITLI`, ölü bir karar hattını maskeler.** Kilitli
+VE bayat bir bot yalnızca "kilitli" diye raporlanamaz.
 
 **Kapsam:**
-- `health_check.py`: tek "çalışmıyor" kovası yerine **dört ayrı durum**:
-  1. `KAPALI` , süreç/konteyner yok ya da son heartbeat eski.
-  2. `KILITLI` , bot koşuyor ama canlı modda `live_entries_enabled=False`.
-     Mesaj kilidi ve açma şartını söylesin, "bozuk" demesin.
-  3. `SESSIZ` , bot koşuyor, kilit açık, ama N gündür sinyal yok.
-  4. `SAGLIKLI` , son işlem taze.
-  Paper ve live ayrı ayrı raporlansın (tek `TRADING_MODE` okuyup tek hesap
-  göstermek yanıltıcı; bugün ikisi taban tabana zıt durumda).
-- **Süpürge penceresi deliği** (PLAN.md v4.18'de "ACIK KALAN RISK" olarak yazılı):
-  açılış süpürgesi geniş pencere (varsayılan 72 saat, config'lenebilir), periyodik
-  süpürge 24 saatte kalsın. Bot 24 saatten uzun kapalı kalırsa dolumlar menzil
-  dışında kalıyor ve defterde **kalıcı delik** oluşuyor.
+- **Üç BAĞIMSIZ boyut, tek skaler yerine:**
+  1. `runtime` , süreç/konteyner ayakta mı, heartbeat taze mi;
+  2. `decision_pipeline` , karar telemetrisi taze mi (tarama ve karar üretiliyor mu);
+  3. `entry_authorization` , canlı giriş kilidi açık mı (`live_entries_enabled`).
+  Her boyut kendi durumunu taşır; özet, üçünü birden gösterir ve
+  **kilitli + bayat kombinasyonu asla yalnız `KILITLI` olarak özetlenmez.**
+- **Fail-closed:** her boyutta belirsizlik `UNKNOWN`'a düşer, `SAGLIKLI`'ya değil.
+  Bozuk/gelecek tarihli heartbeat, broker hatası, kill-switch/risk-halt, ardışık
+  başarısız tarama -> `DEGRADED`.
+- **Dolum sağlık kanıtı değildir.** Park, manuel işlem ya da çıkış olabilir (canlı
+  hesapta bugün birebir bu durum). Dolumlar ayrı boyut, provenance ile.
+- **Profil ayrımı dürüst:** tek süreç iki konteyneri gözleyemez; okunamayan profil
+  `UNKNOWN` olur.
+- **Süpürge , taahhüt edilmiş, örtüşme-güvenli yüksek-su işareti.** İşaret yalnız
+  her broker sayfası eksiksiz VE gereken bütün defter yazmaları başarılı olduktan
+  sonra ilerler. İlk açılışta işaret yoksa ölçüm epoch'undan/doğrulanmış backfill
+  sınırından başlar; kesinti broker retansiyonundan eskiyse `DEGRADED`/`UNKNOWN`.
 
-**Done looks like:** `py health_check.py` dört durumu ayırt ediyor, kilitli botu
-"bozuk" diye raporlamıyor, paper ve live'ı ayrı gösteriyor. Açılış süpürgesi
-72 saatlik pencereyle koşuyor, periyodik 24 saatte kalıyor.
+**Done looks like:** Kilitli bot "bozuk" diye raporlanmıyor AMA kilitli+ölü bot da
+"sadece kilitli" diye raporlanmıyor; belirsizlik yeşil yanmıyor; süpürge işareti
+yalnız tam başarıda ilerliyor.
 
 **PROOF:**
 ```
@@ -155,94 +241,174 @@ py -m pytest tests/ -q
 py -m pytest tests/test_r17_honest_health.py -q
 py health_check.py
 ```
-Yeni suite: dört durumun her biri için bir test (sahte broker/state ile), artı
-açılış süpürgesi 72s pencere kullanıyor ve periyodik 24s kullanıyor testi.
+Yeni suite:
+(a) **kilitli VE karar telemetrisi bayat -> özet `KILITLI` DEĞİL**, iki sorun da
+    görünüyor (bu, tek skalerin maskeleme hatasını yakalar);
+(b) üç boyutun her biri için durum testleri, ve proof'ta geçen her durum şemada
+    tanımlı (şema/test uyumu doğrulanıyor);
+(c) gelecek tarihli / bozuk heartbeat -> `DEGRADED`, asla `SAGLIKLI`;
+(d) yalnız park dolumu + bayat karar telemetrisi -> `SAGLIKLI` değil;
+(e) ikinci profil okunamıyor -> `UNKNOWN`;
+(f) sayfa ortası broker hatası -> işaret İLERLEMİYOR, yeniden denemede boşluk yok;
+(g) defter yazma hatası -> işaret İLERLEMİYOR;
+(h) 73 saatlik kesinti -> işaretten başlıyor, 0 dolum kaçırıyor;
+(i) işaret yok (ilk açılış) -> tanımlı sınırdan başlıyor;
+(j) kesinti broker retansiyonundan eski -> `DEGRADED`/`UNKNOWN`, sessiz başarı yok.
 
 ---
 
-### R18 , Yeni ağırlıklarla eşik kalibrasyonu (ölçüm aracı, uydurma yok)
+### R18 , GÖLGE TOPLAYICI: EKLE-SADECE niyet/olay kaydı
 
-**Neden:** Eşikler (paper 30 / canlı 50) 5 oy veren ajana göre kalibre edilmişti.
-R15 ve R16 sonrası oy dağılımı değişiyor. Yeni eşiği hisle değil ölçüyle koymak
-lazım. R14 dersi: yanlış yeşil üretmektense "n yetersiz" demek.
+**Neden:** `LIVE_LOCK_R5` girişleri kesiyor ama stratejinin açılınca ne yapacağını
+kanıtlamıyor. Kanıt için işlem, işlem için açık kilit, kilit için kanıt gerekiyor.
+Bu kısır döngüyü kıran tek şey gölge kaydıdır.
+
+**KAPSAM DÜZELTMESİ (Codex Round 3):** Önceki sürüm "durumlu gölge portföy" istiyordu
+ama çıkış tekrarı ertelenmişken bu İMKANSIZ: nakdin ne zaman serbest kalacağını,
+PDT sayacının ne zaman düşeceğini, kayıp serisinin ne zaman ilerleyeceğini bilmenin
+yolu yok. Durum geçişleri çıkışa bağlıdır. -> R18 **EKLE-SADECE (append-only)
+niyet/olay toplayıcısı** olur; varsayımsal portföy geçişleri
+RF-ISSUES-4.md `GOLGE-SONUC-ETIKETLEME` sözleşmesine taşınır.
 
 **Kapsam:**
-- `tools/esik_kalibrasyon.py` (yeni, salt okunur): R13 `agent_stats.json` üretim
-  verisi + `tests/fixtures/parity_tape.json` gerçek bandı üzerinden, YENİ
-  ağırlıklarla her eşik değeri için (30, 35, 40, 45, 50, 55, 60) kaç giriş sinyali
-  üretildiğini tablolar.
-- **Dört durumlu sözleşme** (R10 disiplini): `PASS` / `FAIL` / `NOT_READY` /
-  `UNKNOWN`. Örnek sayısı yetersizse **NOT_READY** dönsün ve bir eşik ÖNERMESIN.
-  Sahte kesinlik üretmek yasak.
-- Araç emir vermesin, broker'a yazmasın. Salt okunur.
-- Çıktı `logs/esik_kalibrasyon_<tarih>.json` + insan okur özet.
+- `core/shadow_ledger.py` (yeni), ekle-sadece.
+- **Niyet MERKEZİ KİLİT REDDİNDE yakalanır**, coordinator kararında değil.
+  `LIVE_LOCK_R5` stock/queue/short/option/bear-ETF yollarını farklı aşağı-akış
+  kontrollerinden sonra koruyor; niyet, gerçek çalıştırmanın kullandığı AYNI
+  deterministik emir planlama mantığı koşturulduktan sonra kaydedilir.
+- **ŞİMDİ kaydedilmesi zorunlu alanlar** (sonra yeniden yazmamak için):
+  kalıcı **`intent_id`**, **olay sırası (event sequence)**, kaynak zaman
+  damgaları, **varlık yetenekleri** (fractionable, shortable, easy_to_borrow vb.),
+  emir parametreleri (tip, limit, TIF, boyut), o anki durum anlık görüntüsü,
+  ortak karar örneği (ajan oyları + güvenleri + ağırlıklar + veri erişilebilirliği
+  + `weighted_score` + sinyal + güven + bloklayan kapılar), ve **şema-sürümlü
+  etiket referansı** (etiketleyici sonra buraya bağlanacak).
+- **Değişmez fiyat kaynağı ŞİMDİ adlandırılıp doğrulanır.** Yalnız giriş anındaki
+  bid/ask, sonraki stop/trailing/kısmi-çıkış/dolum tekrarı için YETMEZ. Ya yaşam
+  döngüsü boyunca gereken piyasa gözlemleri şimdi kaydedilir, ya da toplama
+  başlamadan ÖNCE değişmez bir tarihsel kote kaynağı adlandırılır ve
+  erişilebilirliği doğrulanır. Bu, toplamanın ön koşuludur.
+- **Kimlik bağlama, eksiksiz olmazsa geçersiz:** `commit_sha` + `epoch_id` +
+  etkin canlı karar profilinin kanonik hash'i (env, ajan, short, option, rejim,
+  kapı ayarları dahil). Eksikse kayıt **kapı-uygunsuz** işaretlenir.
+- **Sınırlı ve sürümlü, ama YANLI OLMADAN:** boyut tavanı mevcut epoch içinde de
+  uygulanır; düşürme rastgele değil **deterministik tabakalı örnekleme** ile
+  yapılır, kapsama eşiği tanımlıdır, düşürülen örnek sayısı açıkça kaydedilir ve
+  **kapsama eşiği tutmuyorsa kayıt kümesi eksik işaretlenir** (sonraki kapı bunu
+  `UNKNOWN` saymak zorunda).
+- **Salt gözlem:** hiçbir emir metodu çağrılmaz, hiçbir kapı değiştirilmez.
+  Kayıt arızası kararı DEĞİŞTİREMEZ (R13 disiplini).
+- **İDDİA EDİLMEYEN:** sonuç, getiri, dolum, çıkış, SPY karşılaştırması, portföy
+  durumu, kapanmış episode.
 
-**Done looks like:** Araç koşuyor, yeni ağırlıklarla eşik/sinyal tablosunu
-üretiyor, veri yetersizse NOT_READY diyor ve öneri vermiyor. Yeterliyse
-gerekçeli bir eşik öneriyor.
+**Done looks like:** Kilit kapalıyken, gerçek emir planlama mantığından geçmiş
+niyetler, sonradan etiketlenebilecek eksiksiz alan kümesiyle, tam kimlikle ve
+yanlılık yaratmayan sınırla diske ekleniyor.
 
 **PROOF:**
 ```
 py -m pytest tests/ -q
-py -m pytest tests/test_r18_kalibrasyon.py -q
-py tools/esik_kalibrasyon.py
+py -m pytest tests/test_r18_shadow.py -q
 ```
-Yeni suite: (a) n<esik_minimum iken NOT_READY ve öneri alanı boş, (b) yeterli
-sentetik veride tablo doğru sayıyor, (c) araç hiçbir emir metodu çağırmıyor
-(mock broker'da çağrı sayacı 0), (d) bozuk/eksik agent_stats.json'da çökmüyor.
+Yeni suite:
+(a) kilit kapalıyken kayıt üretiliyor ve **emir metodu çağrı sayacı 0**;
+(b) niyet merkezi kilit reddinde yakalanıyor: aşağı-akış kontrollerinde elenen
+    aday gölgeye yazılmıyor;
+(c) **`intent_id` kalıcı ve benzersiz**, olay sırası monoton, aynı niyet iki kez
+    yazılmıyor (ekle-sadece idempotency);
+(d) ortak örnek + varlık yetenekleri + emir parametreleri + durum anlık görüntüsü
+    tek kayıtta; şema sürümü ve etiket referansı alanı mevcut;
+(e) `commit_sha`/profil hash'i değişince epoch sıfırlanıyor; kimliği eksik kayıt
+    **kapı-uygunsuz** işaretleniyor;
+(f) **kayıt yazma hatası fırlatıldığında coordinator kararı değişmiyor**;
+(g) boyut tavanı mevcut epoch içinde uygulanıyor, **düşürme deterministik tabakalı**
+    ve kapsama eşiği tutmuyorsa küme **eksik** işaretleniyor;
+(h) değişmez kote kaynağı adlandırılmış ve **erişilebilirliği testte doğrulanıyor**;
+(i) bozuk/eksik dosyada çökmüyor.
 
 ---
 
-### R19 , Canlı kilit açma kapısı: şart yazılı ve otomatik kontrol edilebilir
+### R19 , CANLI-CONFIG PAPER EPOCH'U: çalıştırma kanıtını ÜRETEN taraf
 
-**Neden:** Bugün kilidin açılma şartı PLAN.md'de düzyazı ("20 işlem / 4 metrik
-4/4 PASS"). Düzyazı şart, ölçülemeyen şarttır. İhsan'ın kararı "önce onar sonra
-aç" olduğuna göre "sonra"nın ne demek olduğu makinece kontrol edilebilmeli.
+**Neden (Codex Round 3 CLARIFY'ına Visionary cevabı):** Codex haklı olarak sordu:
+canlı-config paper çalıştırma kanıtını KİM üretecek? Mevcut paper botu
+`PAPER_AGGRESSIVE` profiliyle koşuyor ve `tools/olcum_raporu.py:1179-1203`
+`measured_profile()` bunu sabitliyor; rapor bu profilin canlı kanıtı olmadığını
+kendisi söylüyor. Üretici yoksa kapı **kalıcı olarak** `NOT_READY` kalır, kilit
+hiç açılmaz ve Core Focus çöker.
+
+**Ve kapının kendisi bu döngüde YAPILMAZ.** Codex'in DEFER'i kabul edildi: girdileri
+var olmayan, sonucu garanti `NOT_READY` olan bir kapıyı şimdi yazmak, üreticiler
+gelince değişecek bir arayüzü erkenden dondurur. Kapı sözleşmesi RF-ISSUES-4.md'ye
+taşındı. Bu döngüde **tüketici değil ÜRETİCİ** inşa ediliyor.
 
 **Kapsam:**
-- `tools/olcum_raporu.py` içine ya da yanına **`kilit_kapisi` kontrolü**: dört
-  metriğin durumunu okuyup tek bir karar döndürsün, `AC` / `ACMA` / `NOT_READY`.
-- Kapı **fail-closed**: veri eksik, dosya bozuk, tarih tutarsız ya da metrik
-  belirsizse `ACMA` değil **`NOT_READY`** dönsün ve asla `AC` demesin.
-- `LIVE_ENTRIES_ENABLED` bu kapıya bağlanmasın (otomatik açma YOK). Kapı yalnız
-  **rapor eder**; env'i açmak İhsan'ın elinde kalır. Kilit açma insan kararıdır.
-- README niteliğinde kısa bir bölüm: kapı `AC` dediğinde Coolify'da hangi env
-  set edilecek, hangi sırayla restart edilecek, ilk 24 saat neye bakılacak.
+- **Canlı-config paper profili:** paper broker'ında, ama `PAPER_AGGRESSIVE_CONFIG`
+  yerine **canlı karar profiliyle** (eşikler, boyutlandırma, kapılar) koşan bir
+  çalıştırma modu. Gerçek Alpaca paper dolumları üretir: gerçek kısmi dolumlar,
+  gerçek stop davranışı, gerçek broker-defter mutabakatı , **sıfır dolar riskle**.
+  Bu, gölge defterin üretemeyeceği tek kanıt türüdür.
+- **`measured_profile()` gerçeği söylesin:** sabitlenmiş `PAPER_AGGRESSIVE` yerine
+  o an gerçekten yürürlükte olan profili raporlasın; profil kimliği R18'in
+  kanonik hash'iyle aynı üretilsin ki iki eksen eşleştirilebilsin.
+- **Epoch kimliği:** bu profilin gözlemleri kendi `epoch_id`'siyle etiketlenir ve
+  `PAPER_AGGRESSIVE` gözlemleriyle **karışamaz**.
+- **Mevcut paper botuna dokunulmaz.** Agresif paper profili olduğu gibi kalır;
+  canlı-config epoch'u ayrı ve açıkça işaretli koşar.
+- **Canlı hesaba hiçbir emir gitmez.** R5 kilidi kapalı kalır.
 
-**Done looks like:** `py tools/olcum_raporu.py --kilit-kapisi` üç durumdan birini
-döndürüyor, eksik veride asla `AC` demiyor, ve env'i kendi kendine değiştirmiyor.
+**Done looks like:** Paper broker'ında canlı karar profiliyle koşan, kendi
+epoch'uyla etiketlenmiş bir çalıştırma var; `measured_profile()` gerçek profili
+raporluyor; agresif paper gözlemleriyle karışma yok.
 
 **PROOF:**
 ```
 py -m pytest tests/ -q
-py -m pytest tests/test_r19_kilit_kapisi.py -q
-py tools/olcum_raporu.py --kilit-kapisi
+py -m pytest tests/test_r19_live_config_paper.py -q
+py tools/olcum_raporu.py
 ```
-Yeni suite: (a) dört metrik PASS -> `AC`, (b) bir metrik FAIL -> `ACMA`,
-(c) metrik dosyası yok/bozuk/gelecek tarihli -> `NOT_READY` (asla `AC`),
-(d) araç `LIVE_ENTRIES_ENABLED`'i yazmıyor (env yazma çağrısı sayacı 0).
+Yeni suite:
+(a) canlı-config paper modunda kullanılan eşik/boyut/kapı değerleri **canlı
+    profille birebir aynı**, `PAPER_AGGRESSIVE` değil;
+(b) `measured_profile()` sabit dönmüyor; yürürlükteki profili raporluyor;
+(c) profil kimliği R18'in kanonik hash'iyle **aynı algoritmadan** üretiliyor
+    (iki eksen eşleşebiliyor);
+(d) canlı-config epoch'u ile `PAPER_AGGRESSIVE` epoch'u **ayrı** ve gözlemler
+    karışmıyor;
+(e) bu modda **canlı broker istemcisine hiçbir emir çağrısı yapılmıyor**
+    (canlı emir metodu çağrı sayacı 0);
+(f) mevcut agresif paper davranışı regresyona uğramıyor (donmuş karşılaştırma).
 
----
 
-## KAPSAM DIŞI (bu döngüde YOK)
+## KAPSAM DISI (bu dongude YOK)
 
-- `LIVE_ENTRIES_ENABLED` açmak. İhsan'ın kararı: önce onar, sonra aç.
-- Reddit OAuth ile SocialAgent'ı diriltmek. İhsan'ın kararı: kaldır.
-- Backtest motorunu canlı çekirdeğe taşımak (R14'ün işaret ettiği büyük iş).
-  RF-ISSUES-4.md'ye ertelenir.
-- Güven formülüne, çıkış geometrisine, pozisyon boyutlandırmaya dokunmak.
-  R18 ölçümü gelmeden bunlara dokunmak kör atıştır.
-- Yeni strateji, yeni sembol, yeni varlık sınıfı eklemek.
+- `LIVE_ENTRIES_ENABLED` acmak.
+- **Kilit kapisi araci (eski R19).** Codex Round 3 DEFER kabul edildi: girdileri
+  (golge etiketleyici + calistirma kaniti) var olmayan, sonucu garanti
+  `NOT_READY` olan bir kapiyi simdi yazmak, ureticiler gelince degisecek bir
+  arayuzu erkenden dondurur. Tam sozlesmesiyle RF-ISSUES-4.md'de. Kaybedilen tek
+  sey erken CLI iskelesi; R5 kilidi guvenle kapali kaliyor.
+- **Golge sonuc etiketleme:** dolum/dolmama kurallari, spread, gecikme, ret,
+  kismi dolum, ucretler, gercek stop/TP/trailing/kismi-cikis durum makinesinin
+  tekrari, benchmark hizalama, olgunlasma ve ileriye-bakis testleri. Varsayimsal
+  portfoy gecisleri (nakit serbest birakma, PDT, kayip serisi) de buraya ait.
+  Tam sozlesmesiyle RF-ISSUES-4.md'de.
+- **Esik kalibrasyonu.** Gerceklesmis sonuc/PnL/benchmark olmadan esik onerilemez.
+- Cogunluk mantigi (teshis yanlisti) ve agirlik renormalizasyonu (kapilari gevsetir).
+- Reddit OAuth ile SocialAgent'i diriltmek.
+- Backtest motorunu canli cekirdege tasimak.
+- Guven formulu, cikis geometrisi, pozisyon boyutlandirma.
 
-## RİSKLER
+## RISKLER
 
-1. **R15 ağırlık normalizasyonu davranışı değiştirir.** Paper'da canlı bir bot
-   koşuyor; deploy sonrası ilk turlarda oy dağılımı değişecek. Bu istenen etki,
-   ama R18 ölçümü gelmeden "daha iyi" denemez.
-2. **R16 disk cache'i state dizinine yazar.** Live/paper izolasyonu
-   `state_path()` ile korunmalı; ortak dosya iki modu birbirine karıştırır.
-3. **R17 süpürge penceresini genişletmek** daha çok broker sorgusu demek.
-   Açılışta bir kez koştuğu için maliyet kabul edilebilir, ama sorgu sayısı
-   loglanmalı.
-4. **Hiçbir rock canlı hesaba emir göndermiyor.** R5 kilidi bu döngü boyunca
-   kapalı kalıyor, bu kasıtlı.
+1. **R15 olcegi KORUYOR, tek basina islem sayisini artirmaz.** Kasitli.
+   Kazanc: cokme duzeltmesi (`votes[4]`), 12 sn/sembol olu uyku, durust telemetri.
+2. **AV butcesi 13/12 bolunuyor ve ucuncu tuketici (kazanc takvimi) payi azaltiyor.**
+   Kapsama imlecle siraya girer; her sembolun ne siklikla tazelendigi raporlanir.
+3. **R18 disk yaziyor.** Boyut tavani mevcut epoch icinde de uygulanir ve dusurme
+   deterministik tabakali olur; kapsama esigi tutmazsa kume eksik isaretlenir.
+4. **R18 yalniz TOPLUYOR.** Bu dongu sonunda alfa hakkinda hicbir iddia YOK.
+   Bu beklenen ve durust sonuc, kusur degil.
+5. **R19 kanit URETIYOR, kanit DEGERLENDIRMIYOR.** Canli-config paper epoch'u
+   dolum uretmeye baslar; o dolumlarin kapiya donusmesi sonraki dongudur.
+6. **Hicbir rock canli hesaba emir gondermiyor.** R5 kilidi kapali kaliyor.

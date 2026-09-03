@@ -21,6 +21,7 @@ from core.fill_ledger import (
     read_fills,
     record_fill,
 )
+from core.sweep_watermark import SweepWatermark
 from utils.logger import logger
 
 
@@ -88,6 +89,8 @@ class LedgerSweep:
         *,
         now_fn: Callable[[], datetime] | None = None,
         monotonic_fn: Callable[[], float] | None = None,
+        watermark: Any = None,
+        bootstrap_from: datetime | None = None,
     ) -> None:
         config = config or {}
         self.client = client
@@ -107,7 +110,25 @@ class LedgerSweep:
         self._monotonic_fn = monotonic_fn or time.monotonic
         self._last_run_monotonic = 0.0
 
+        # R17: SABIT PENCERE YERINE TAAHHUT EDILMIS YUKSEK-SU ISARETI.
+        # Sabit 24s (ya da 72s) pencere, o sureden uzun her kesintide
+        # KALICI defter deligi birakiyordu; pencereyi buyutmek 73 saatlik
+        # kesintide ayni deligi acar. Isaret yalniz TAM BASARIDA ilerler.
+        self.watermark = watermark if watermark is not None else SweepWatermark(
+            now_fn=self._now_fn
+        )
+        # Ilk acilista isaret yoksa nereden baslanacagi (olcum epoch'u ya da
+        # dogrulanmis backfill siniri). None ise min pencere kullanilir.
+        self.bootstrap_from = bootstrap_from
+        self.last_plan: dict = {}
+
     def _activity_pages(self, cutoff: datetime, until: datetime) -> list[Any]:
+        """Sayfalari cek. EKSIK kalirsa `self._pages_complete` False olur.
+
+        R17: sayfa ortasi hata sessizce kismi sonuc dondururse, isaret
+        ilerletildiginde alinmamis dolumlar SONSUZA DEK atlanir.
+        """
+        self._pages_complete = True
         custom = getattr(self.client, "get_account_activities", None)
         if callable(custom):
             try:
@@ -133,7 +154,14 @@ class LedgerSweep:
             }
             if page_token:
                 params["page_token"] = page_token
-            response = raw_get("/account/activities/FILL", params)
+            try:
+                response = raw_get("/account/activities/FILL", params)
+            except Exception:
+                # SAYFA ORTASI HATA: elimizdeki kismi sonucu kullanabiliriz
+                # ama isaret ILERLEMEMELI, yoksa alinmamis sayfalardaki
+                # dolumlar sonsuza dek atlanir.
+                self._pages_complete = False
+                raise
             if isinstance(response, dict):
                 page = response.get("activities", [])
             else:
@@ -146,6 +174,9 @@ class LedgerSweep:
             if not next_token or next_token == page_token:
                 break
             page_token = next_token
+        else:
+            # 100 sayfa tavanina dayandik , daha fazlasi olabilir.
+            self._pages_complete = False
         return result
 
     def _filled_orders(self, cutoff: datetime, until: datetime) -> list[Any]:
@@ -284,7 +315,21 @@ class LedgerSweep:
         """Bir mutabakat turu kos; hata trading akisina asla sizmaz."""
         self._last_run_monotonic = self._monotonic_fn()
         until = _as_utc(now or self._now_fn()) or datetime.now(timezone.utc)
-        cutoff = until - timedelta(hours=self.window_hours)
+
+        # R17: araligi ISARET belirler, sabit pencere degil.
+        cutoff, plan_durum, eksiksiz = self.watermark.plan_window(
+            until,
+            bootstrap_from=self.bootstrap_from,
+            min_window_hours=self.window_hours,
+        )
+        self.last_plan = {
+            "cutoff": cutoff.isoformat(),
+            "until": until.isoformat(),
+            "durum": plan_durum,
+            "eksiksiz_kurtarilabilir": eksiksiz,
+        }
+        self._pages_complete = True
+        writes_ok = True
         try:
             broker_rows = self._broker_rows(cutoff, until)
             ledger_rows = read_fills()
@@ -336,6 +381,9 @@ class LedgerSweep:
                     reconcile_order_qty=broker_total,
                 )
                 if not was_added:
+                    # Defter yazimi BASARISIZ: isaret ILERLEMEMELI, yoksa bu
+                    # dolum bir daha hic taranmaz.
+                    writes_ok = False
                     continue
                 added += 1
                 symbols[fill["symbol"]] += 1
@@ -356,18 +404,42 @@ class LedgerSweep:
                     f"  LEDGER SWEEP OZET: {added} kayip dolum eklendi | "
                     f"semboller: {symbol_text}"
                 )
+            # R17: ISARETI YALNIZ TAM BASARIDA ILERLET.
+            # Ortusme zararsizdir (dedupe var); BOSLUK kalicidir.
+            ilerledi = self.watermark.commit(
+                until,
+                pages_complete=bool(self._pages_complete),
+                writes_ok=bool(writes_ok),
+            )
             return {
                 "seen": len(broker_rows),
                 "added": added,
                 "symbols": dict(symbols),
                 "error": None,
+                "plan": dict(self.last_plan),
+                "pages_complete": bool(self._pages_complete),
+                "writes_ok": bool(writes_ok),
+                "watermark_advanced": bool(ilerledi),
+                "degraded": not eksiksiz,
             }
         except Exception as exc:
             logger.warning(
                 "  LEDGER SWEEP HATASI: broker/defter mutabakati yapilamadi; "
                 f"bot akisi devam ediyor: {exc}"
             )
-            return {"seen": 0, "added": 0, "symbols": {}, "error": str(exc)}
+            # Hata halinde isaret ILERLEMEZ , bir sonraki kosu ayni araligi
+            # yeniden tarar.
+            return {
+                "seen": 0,
+                "added": 0,
+                "symbols": {},
+                "error": str(exc),
+                "plan": dict(self.last_plan),
+                "pages_complete": bool(getattr(self, "_pages_complete", False)),
+                "writes_ok": False,
+                "watermark_advanced": False,
+                "degraded": True,
+            }
 
     def maybe_run(self) -> dict | None:
         """Config araligindan daha sik broker okumasi yapma."""

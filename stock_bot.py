@@ -1282,6 +1282,15 @@ class StockBot:
             analysis["fundamental_data_ok"] = bool(
                 isinstance(metrics, dict) and metrics
             )
+            # R17: VERI YASI KARARA ULASIR. Codex uyarisi: metadata tasimak
+            # esikleri DEGISTIRMEZ, ama tasimamak saglik katmaninin bayat
+            # kanitla calisan bir hatti SAGLIKLI ilan etmesine yol acar.
+            # Skorlama bu alanlari OKUMAZ , yalniz telemetri tasir.
+            analysis["fundamental_data_age_hours"] = fund_data.get("data_age_hours")
+            analysis["fundamental_is_stale"] = bool(fund_data.get("is_stale", False))
+            analysis["fundamental_data_source"] = fund_data.get(
+                "data_source", "alpha_vantage"
+            )
 
             # Sentiment data
             sent_data = {"news_score": 0, "article_count": 0}
@@ -1352,8 +1361,46 @@ class StockBot:
             return decision
 
         except Exception as e:
-            logger.debug(f"  {symbol} ajan karar hatası: {e}")
+            # R17: AJAN INVARYANTI ihlali siradan bir HOLD gibi
+            # gorunemez. Onceki davranis her istisnayi logger.debug ile
+            # yutup HOLD donduruyordu; saglik telemetrisi hatti NORMAL
+            # sayiyordu (Codex bulgusu, R17 kabul sarti).
+            mesaj = str(e)
+            if "AJAN INVARYANTI IHLALI" in mesaj:
+                logger.error(
+                    f"  🚨 {symbol} KARAR HATTI BOZUK , invaryant ihlali: {mesaj}"
+                )
+                self._invaryant_ihlali_kaydet(symbol, mesaj)
+            else:
+                logger.debug(f"  {symbol} ajan karar hatası: {e}")
             return {"signal": "HOLD", "confidence": 0}
+
+    def _invaryant_ihlali_kaydet(self, symbol: str, mesaj: str) -> None:
+        """Invaryant ihlalini KALICI olarak isaretle.
+
+        Saglik raporu (tools/saglik.py) bunu okuyup decision_pipeline'i
+        DEGRADED raporlar. Yalniz ERROR loglamak yetmez: log dosyasi
+        rotasyona ugrar ve kimse bakmaz.
+        """
+        try:
+            from config import state_path
+            import json as _json
+            yol = state_path("invariant_violations.json")
+            try:
+                with open(yol, "r", encoding="utf-8") as f:
+                    kayit = _json.load(f)
+                if not isinstance(kayit, dict):
+                    kayit = {}
+            except Exception:
+                kayit = {}
+            kayit["son_ihlal_ts"] = datetime.now().isoformat()
+            kayit["son_sembol"] = symbol
+            kayit["son_mesaj"] = mesaj[:500]
+            kayit["toplam"] = int(kayit.get("toplam", 0) or 0) + 1
+            with open(yol, "w", encoding="utf-8") as f:
+                _json.dump(kayit, f, indent=2)
+        except Exception:
+            pass   # telemetri arizasi karari DEGISTIREMEZ (R13 disiplini)
 
     def _record_trade_votes(self, symbol: str, decision: Dict):
         """Gerçekleşen işlemin ajan oylarını kaydet (v4.10).

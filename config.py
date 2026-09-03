@@ -21,8 +21,21 @@ TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" veya "live"
 # (mod/endpoint ile anahtar tutarli olur; yanlis anahtar -> 401 hatasi onlenir).
 _use_live = (_key_prefix == "LIVE") or (not _key_prefix and TRADING_MODE == "live")
 _use_paper = (_key_prefix == "PAPER") or (not _key_prefix and TRADING_MODE != "live")
+# R19: ikinci paper hesabi. Canli-config epoch'u (paper broker + canli karar
+# profili) mevcut agresif paper botuyla AYNI hesapta kosarsa iki bot birbirinin
+# pozisyonlariyla kavga eder. PAPER2 ayri bir Alpaca paper hesabi demektir.
+_use_paper2 = _key_prefix == "PAPER2"
 
-if _use_live:
+if _use_paper2:
+    ALPACA_API_KEY = (
+        os.getenv("ALPACA_PAPER2_API_KEY", "")
+        or os.getenv("ALPACA_PAPER_API_KEY", "")
+    )
+    ALPACA_SECRET_KEY = (
+        os.getenv("ALPACA_PAPER2_SECRET_KEY", "")
+        or os.getenv("ALPACA_PAPER_SECRET_KEY", "")
+    )
+elif _use_live:
     ALPACA_API_KEY = os.getenv("ALPACA_LIVE_API_KEY", "") or os.getenv("ALPACA_API_KEY", "")
     ALPACA_SECRET_KEY = os.getenv("ALPACA_LIVE_SECRET_KEY", "") or os.getenv("ALPACA_SECRET_KEY", "")
 elif _use_paper:

@@ -53,7 +53,54 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ============================================================
+  # CONTAINER 3: PAPER + CANLI KARAR PROFILI (R19) , OPT-IN
+  # ------------------------------------------------------------
+  # Kilit kapisinin ihtiyaci olan CALISTIRMA KANITINI ureten servis:
+  # paper broker'inda ama CANLI karar profiliyle (esik 50, max 3 pozisyon,
+  # 30sn tarama) kosar. Gercek dolum, gercek kismi dolum, gercek stop
+  # davranisi, gercek broker-defter mutabakati , SIFIR DOLAR RISKLE.
+  # Golge defter (R18) 'ne yapardim' der; bu servis 'ne oldu' der.
+  #
+  # NEDEN OTOMATIK BASLAMIYOR:
+  # Ayni Alpaca paper hesabinda iki bot birbirinin pozisyonlariyla kavga eder.
+  # Bu servis AYRI bir paper anahtar cifti ister:
+  #   ALPACA_PAPER2_API_KEY / ALPACA_PAPER2_SECRET_KEY
+  # Alpaca birden cok paper hesabina izin verir; ikincisini acip anahtarlari
+  # .env'e ekledikten sonra su komutla baslatilir:
+  #   docker compose --profile livecfg up -d trading-paper-livecfg
+  #
+  # Baslatilana kadar R19 kapisi PAPER_AGGRESSIVE gozlemlerini KANIT SAYMAZ
+  # (core/run_profile.kapi_icin_gecerli) , yani kilit kapali kalir. Kasitli.
+  # ============================================================
+  trading-paper-livecfg:
+    image: trading-bot:latest
+    profiles: ["livecfg"]          # varsayilan `up` bunu BASLATMAZ
+    depends_on:
+      trading-live:
+        condition: service_started
+    container_name: trading-bot-paper-livecfg
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TRADING_MODE=paper
+      - BOT_MODE=both
+      - PAPER_PROFILE=live_config   # R19: agresif override UYGULANMAZ
+      - ALPACA_KEY_PREFIX=PAPER2    # AYRI hesap , mevcut paper botuyla cakismaz
+      - PYTHONUNBUFFERED=1
+      - FINBERT_CACHE_DIR=/app/models/finbert
+    volumes:
+      - state-paper-livecfg:/app/state_paper   # AYRI state , epoch karismasin
+      - ./logs/livecfg:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 # Named volume'lar — container'dan bağımsız, redeploy'da KORUNUR (state kalıcılığı).
 volumes:
   state-live:
   state-paper:
+  state-paper-livecfg:

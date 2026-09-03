@@ -412,3 +412,64 @@ Yeni suite:
 5. **R19 kanit URETIYOR, kanit DEGERLENDIRMIYOR.** Canli-config paper epoch'u
    dolum uretmeye baslar; o dolumlarin kapiya donusmesi sonraki dongudur.
 6. **Hicbir rock canli hesaba emir gondermiyor.** R5 kilidi kapali kaliyor.
+
+---
+
+## DONGU KAPANISI , 2026-09-03 (Ihsan otonom komuta verdi)
+
+Bes rock da tamamlandi. Ihsan "R19'a kadar durmadan calis, deploy edip
+calistirmadan gelme" dedi; bu bolum ne yapildigini ve NE YAPILMADIGINI kaydeder.
+
+### Tamamlananlar
+
+| Rock | Ne yapti | Kanit |
+|---|---|---|
+| R15 | SocialAgent maskelendi, olcek KORUNDU, `votes[4]` cokmesi duzeltildi | 68 + 48 test |
+| R16 | AV kotasi: uc tuketici tek butce, surecler arasi kilit, disk cache, imlec | 51 + 27 + 24 + 7 test |
+| R17 | Uc boyutlu durust saglik + taahhut edilmis supurge yuksek-su isareti | 40 test |
+| R18 | Golge toplayici: ekle-sadece niyet kaydi, sifir dolar riskle | 26 test |
+| R19 | Canli-config paper epoch'u , calistirma kanitini URETEN taraf | 26 test |
+
+Toplam: `py -m pytest tests/ -q` -> **586 gecti** (dongü basi: 250).
+`py tests/test_full_system.py` -> 113 gecen / 0 basarisiz.
+`py tools/parity_harness.py` -> exit 1 (tasarim), regresyon yok.
+R15 altin ciktisi -> 20/20 birebir.
+
+### KILIT ACILMADI , kasitli
+
+`LIVE_ENTRIES_ENABLED` hala kapali. Ihsan'in kendi karari "once onar, sonra ac"
+idi ve R19'un tasarimi zaten "kapi rapor eder, kilidi Ihsan acar" seklinde.
+Bir test bunu acikca dogruluyor (`test_f_canli_esikler_degismedi`).
+
+### R19 URETICISI HENUZ BASLAMADI , sebep ve cozum
+
+Canli-config epoch'u UCUNCU bir konteyner ister. Ayni Alpaca paper hesabinda
+iki bot birbirinin pozisyonlariyla kavga eder, dolayisiyla servis
+`docker-compose.yml`'e OPT-IN olarak eklendi (`profiles: ["livecfg"]`) ve
+AYRI bir paper anahtar cifti bekliyor:
+
+    ALPACA_PAPER2_API_KEY / ALPACA_PAPER2_SECRET_KEY
+
+Alpaca birden cok paper hesabina izin verir. Ikinci hesap acilip anahtarlar
+.env'e eklendikten sonra:
+
+    docker compose --profile livecfg up -d trading-paper-livecfg
+
+Baslatilana kadar kapi PAPER_AGGRESSIVE gozlemlerini KANIT SAYMAZ
+(`core/run_profile.kapi_icin_gecerli` -> False), yani kilit kapali kalir.
+Bu bir eksiklik degil, sozlesmenin kendisi: agresif override'lar (esik 30,
+pozisyon $9000, tarama 15sn) canli davranisi TEMSIL ETMEZ.
+
+### Deploy ile HEMEN baslayan sey
+
+Golge defter (R18) canli konteynerde ANINDA toplamaya baslar: R5 kilidi orada
+her reddettiginde stratejinin ne yapmak istedigi ortak karar ornegiyle diske
+yazilir. Bu, kilidi acmak icin gereken ALFA ekseninin ham verisidir ve sifir
+dolar riskle birikir.
+
+### SIRADAKI DONGU , RF-ISSUES-4.md'de tam sozlesmeleriyle
+
+1. `GOLGE-SONUC-ETIKETLEME` , dolum/cikis/benchmark modellemesi
+2. `KILIT-KAPISI-ARACI` , iki eksenli kapi (golge-alfa + calistirma)
+3. `KALIBRASYON-VERI-BEKLIYOR` , esik kalibrasyonu
+4. `ON-CEKIM-DENEME-IMLECI` ve `CACHE-KIRLI-ANAHTAR-TAKIBI` , R16 devri

@@ -101,31 +101,14 @@ def commit_sha() -> str:
 def profil_hash() -> str:
     """ETKIN karar profilinin kanonik hash'i.
 
-    Config hash TEK BASINA yetmez ve commit TEK BASINA yetmez: v4.16'da paper
-    config degismedi ama davranis degisti. Ikisi birlikte epoch'u ayirir.
-    Kapsam: env bayraklari + ajan + short + option + rejim + kapi ayarlari.
+    R19 ile AYNI fonksiyondan gelir (core/run_profile). Iki eksen
+    (golge-alfa ve calistirma) sonradan ancak kimlikleri AYNI
+    algoritmayla uretildiyse eslestirilebilir , ayri hash'ler
+    eslestirmeyi imkansiz kilardi (Codex sarti).
     """
     try:
-        from config import (
-            AGENT_CONFIG,
-            AV_QUOTA_CONFIG,
-            SHORT_CONFIG,
-            STOCK_CONFIG,
-            TRADING_MODE,
-        )
-        yuk = {
-            "trading_mode": TRADING_MODE,
-            "stock": {
-                k: STOCK_CONFIG.get(k) for k in sorted(STOCK_CONFIG)
-                if not callable(STOCK_CONFIG.get(k))
-            },
-            "short": {k: SHORT_CONFIG.get(k) for k in sorted(SHORT_CONFIG)},
-            "agent": dict(sorted(AGENT_CONFIG.items())),
-            "av_quota": {
-                k: AV_QUOTA_CONFIG.get(k) for k in sorted(AV_QUOTA_CONFIG)
-            },
-        }
-        return hashlib.sha256(_kanonik(yuk).encode("utf-8")).hexdigest()
+        from core.run_profile import profil_hash as _ph
+        return _ph()
     except Exception as exc:
         logger.debug(f"Golge defter profil hash'i uretilemedi: {exc}")
         return "UNKNOWN"

@@ -1199,13 +1199,35 @@ def measured_profile() -> ProfileInfo:
             or os.environ.get("BOT_COMMIT_SHA")
             or "UNKNOWN"
         ).strip() or "UNKNOWN"
-    return ProfileInfo(
-        name="PAPER_AGGRESSIVE",
+    # R19: profil adi ARTIK SABITLENMIYOR. Onceki surum her zaman
+    # "PAPER_AGGRESSIVE" diyordu; raporun kendisi bu profilin canli kanit
+    # OLMADIGINI soyluyor, dolayisiyla olcum kapisi KALICI olarak
+    # NOT_READY kalirdi ve kilit hic acilmazdi.
+    try:
+        from core.run_profile import aktif_profil, kapi_icin_gecerli
+        from core.run_profile import profil_hash as _profil_hash
+        _profil = aktif_profil()
+        _ad = _profil.upper()
+        _gecerli = kapi_icin_gecerli(_profil)
+        _phash = _profil_hash(_profil)
+    except Exception:
+        _ad, _gecerli, _phash = "PAPER_AGGRESSIVE", False, "UNKNOWN"
+
+    info = ProfileInfo(
+        name=_ad,
         is_live=False,
         config_hash=hashlib.sha256(payload).hexdigest(),
         git_sha=git_sha,
         config=config,
     )
+    # Kapi bu bayraga UYMAK ZORUNDA: agresif paper gozlemleri canli
+    # kilidi acmak icin kanit SAYILMAZ.
+    try:
+        object.__setattr__(info, "gate_eligible", _gecerli)
+        object.__setattr__(info, "profile_hash", _phash)
+    except Exception:
+        pass
+    return info
 
 
 def fetch_account_return(

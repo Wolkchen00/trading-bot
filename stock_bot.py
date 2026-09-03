@@ -160,7 +160,24 @@ class StockBot:
         # equity_floor ve KillSwitch bu dict'ten beslenir. Eski yeri (KillSwitch
         # kurulumundan SONRA) yüzünden paper'ın max_daily_loss_pct /
         # equity_floor_pct override'ları sessizce UYGULANMIYORDU.
-        if is_paper:
+        # R19: agresif override YALNIZ `paper_aggressive` profilinde.
+        # `paper_live_config` profili paper broker'inda ama CANLI karar
+        # profiliyle kosar , kilit kapisinin ihtiyaci olan GERCEK dolum,
+        # kismi dolum ve stop davranisini SIFIR DOLAR RISKLE uretir.
+        # Mevcut agresif paper botu DEGISMEDI (varsayilan aggressive).
+        from core.run_profile import (
+            agresif_override_uygulanir_mi,
+            profil_ozeti,
+        )
+        _profil = profil_ozeti()
+        logger.info(
+            f"  CALISMA PROFILI: {_profil['profil']} "
+            f"(kapi icin gecerli: {_profil['kapi_icin_gecerli']}) , "
+            f"{_profil['aciklama']}"
+        )
+        self.run_profile = _profil
+
+        if is_paper and agresif_override_uygulanir_mi():
             for key, value in PAPER_AGGRESSIVE_CONFIG.items():
                 if key.startswith("short_"):
                     SHORT_CONFIG[key] = value  # Short ayarları SHORT_CONFIG'a

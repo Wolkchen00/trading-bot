@@ -495,6 +495,44 @@ AGENT_CONFIG = {
 }
 
 # ============================================================
+# ALPHA VANTAGE KOTASI (R16)
+# ============================================================
+# Ücretsiz katman ANAHTAR BAŞINA 25 çağrı/gün. Aynı anahtarı ÜÇ tüketici
+# paylaşıyor: fundamental_analyzer (OVERVIEW), news_analyzer (NEWS_SENTIMENT),
+# earnings_calendar (EARNINGS_CALENDAR).
+#
+# "Anahtar geneli 25" İDDİA EDİLMİYOR: live ve paper ayrı konteynerlerde ayrı
+# state hacimleriyle koşuyor, paylaşılan bir sayaç fiziksel olarak imkansız.
+# Bütçe deterministik bölünür ve her konteyner yalnız kendi payını harcar.
+# Toplam 13 + 12 = 25. Kalıcı çözüm konteyner başına ayrı anahtardır.
+#
+# İhsan kararı (2026-09-03): AV haberi KAPALI, 25 çağrının tamamı temel analize.
+# Haber Marketaux'tan gelmeye devam eder (_marketaux_max_daily = 50).
+AV_QUOTA_CONFIG = {
+    "profile_budget": {"live": 13, "paper": 12},
+
+    # AV haber yolu. Kapalıyken haber Marketaux + Google News RSS'ten gelir.
+    # Açılırsa aynı bütçeden geçmek ZORUNDA (kapatma tek başına yeterli sayılmaz).
+    "av_news_enabled": (
+        os.getenv("AV_NEWS_ENABLED", "false").strip().lower()
+        in ("1", "true", "yes")
+    ),
+
+    # Kazanç takvimi günde ~1 toplu çağrı yapar ve temel analiz payını azaltır.
+    # Bütçeden ayrılan pay açıkça yazılır, koda gömülmez.
+    "earnings_reserve": 2,
+
+    # Bayatlık sözleşmesi. ttl içinde TAZE; ttl ile max_stale arasında BAYAT
+    # (kullanılır ama yaşı karara iliştirilir); max_stale üstü KULLANILMAZ.
+    "ttl_hours": 24,
+    "max_stale_hours": 168,   # 7 gün ,  temel veriler çeyreklik değişir
+
+    # Gerçek ağ çağrısından sonraki bekleme. Cache hit'te ve kota doluyken
+    # ÇALIŞMAZ; eski kod bunu başarısız çağrıda da koşturuyordu.
+    "call_sleep_seconds": 15,
+}
+
+# ============================================================
 # SHORT SELLING AYARLARI
 # ============================================================
 _is_paper = TRADING_MODE == "paper"

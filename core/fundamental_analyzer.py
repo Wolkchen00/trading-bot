@@ -12,6 +12,9 @@ import time
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+
+from core.av_quota import AVOutcome, classify_response, shared_store
+from core.fundamentals_cache import FundamentalsCache
 from utils.logger import logger
 
 
@@ -31,28 +34,87 @@ FUNDAMENTAL_CONFIG = {
 class FundamentalAnalyzer:
     """Hisse senedi temel analiz — P/E, EPS, Revenue, Margins."""
 
-    def __init__(self):
+    def __init__(self, quota=None, disk_cache=None, funnel=None):
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_KEY", "")
         self.cache = {}
         self.last_fetch = {}
 
+        # R16: kota ve disk cache AYRI dosyalarda. Cache bozulursa temiz baslanir
+        # (veri kaybi), kota bozulursa gun tukenmis sayilir (fail-closed).
+        self.quota = quota if quota is not None else shared_store()
+        self.disk_cache = disk_cache if disk_cache is not None else FundamentalsCache()
+        self._kota_uyarildi = False
+        try:
+            from core.funnel import DailyFunnel
+            self._funnel = funnel if funnel is not None else DailyFunnel()
+        except Exception:
+            self._funnel = funnel
+        try:
+            from config import AV_QUOTA_CONFIG
+            self._call_sleep = float(AV_QUOTA_CONFIG.get("call_sleep_seconds", 15))
+        except Exception:
+            self._call_sleep = 15.0
+
         if self.alpha_vantage_key:
-            logger.info("FundamentalAnalyzer baslatildi — Alpha Vantage aktif")
+            logger.info(
+                f"FundamentalAnalyzer baslatildi , Alpha Vantage aktif "
+                f"(kota {self.quota.profile}: {self.quota.remaining()}/"
+                f"{self.quota.budget} kaldi)"
+            )
         else:
-            logger.info("FundamentalAnalyzer baslatildi — API key yok, sınırlı mod")
+            logger.info("FundamentalAnalyzer baslatildi , API key yok, sınırlı mod")
 
     # ============================================================
     # 1. ŞİRKET GENEL BAKIŞ
     # ============================================================
 
     def get_company_overview(self, symbol: str) -> Optional[Dict]:
-        """Alpha Vantage Company Overview endpoint."""
+        """Alpha Vantage Company Overview , kota + disk cache + tipli sonuclar (R16).
+
+        Sira onemli ve her adim bir agi/uykuyu ONLUYOR:
+          1. Bellek cache  -> ag yok, uyku yok
+          2. Disk cache    -> ag yok, uyku yok (restart'i atlatir)
+          3. Negatif cache -> kota bugun tukendi, AG CAGRISI YAPMA
+          4. Kota rezervi  -> butce doluysa AG CAGRISI YAPMA
+          5. Gercek cagri  -> ANCAK BURADA uyku var
+        Eski kod 2-4'u hic yapmiyordu: her sembol her turda AV'yi cagirip
+        `time.sleep(15)`u basarisiz cagrida bile odeyordu.
+        """
         cache_key = f"overview_{symbol}"
         if self._is_cached(cache_key):
             return self.cache[cache_key]
 
+        # 2) DISK CACHE , bayatlik sozlesmesiyle
+        yuk, yas, bolge = self.disk_cache.get(symbol)
+        if bolge in ("TAZE", "BAYAT") and yuk:
+            if bolge == "BAYAT":
+                # Bayat veri KULLANILIR ama yasi karara ilistirilir; sessizce
+                # taze gibi davranmak yasak.
+                yuk = dict(yuk)
+                yuk["data_age_hours"] = round(yas, 1)
+                yuk["is_stale"] = True
+            self.cache[cache_key] = yuk
+            self.last_fetch[cache_key] = datetime.now()
+            return yuk
+        if bolge == "SOURCE_UNAVAILABLE":
+            # Cok bayat: veri VAR ama kullanilmaz. Yokluk gibi davranilir.
+            logger.debug(
+                f"{symbol} temel verisi {yas:.0f} saatlik , max bayatlik asildi, "
+                f"SOURCE_UNAVAILABLE"
+            )
+
         if not self.alpha_vantage_key:
             return self._get_yahoo_fallback(symbol)
+
+        # 3) NEGATIF CACHE , kota bugun tukendi, agi hic yorma
+        if self.disk_cache.is_negative_cached(symbol):
+            return None
+
+        # 4) KOTA REZERVI , cagridan ONCE, surecler arasi kilit altinda
+        if not self.quota.try_reserve("fundamental"):
+            self._kota_uyar(symbol)
+            self.disk_cache.mark_quota_exhausted(symbol)
+            return None
 
         try:
             url = "https://www.alphavantage.co/query"
@@ -62,44 +124,107 @@ class FundamentalAnalyzer:
                 "apikey": self.alpha_vantage_key,
             }
             response = requests.get(url, params=params, timeout=15)
-            time.sleep(15)  # Rate limit (5 req/min)
+            # 5) Uyku YALNIZ gercek ag cagrisindan sonra.
+            time.sleep(self._call_sleep)
 
-            if response.status_code == 200:
+            try:
                 data = response.json()
-                if "Symbol" not in data:
-                    return None
+            except ValueError:
+                data = {}
+            sonuc = classify_response(response.status_code, response.text, data)
 
-                overview = {
-                    "symbol": data.get("Symbol", symbol),
-                    "name": data.get("Name", ""),
-                    "sector": data.get("Sector", ""),
-                    "industry": data.get("Industry", ""),
-                    "market_cap": self._safe_float(data.get("MarketCapitalization", 0)),
-                    "pe_ratio": self._safe_float(data.get("PERatio", 0)),
-                    "peg_ratio": self._safe_float(data.get("PEGRatio", 0)),
-                    "eps": self._safe_float(data.get("EPS", 0)),
-                    "revenue_per_share": self._safe_float(data.get("RevenuePerShareTTM", 0)),
-                    "profit_margin": self._safe_float(data.get("ProfitMargin", 0)),
-                    "dividend_yield": self._safe_float(data.get("DividendYield", 0)) * 100,
-                    "beta": self._safe_float(data.get("Beta", 1)),
-                    "52_week_high": self._safe_float(data.get("52WeekHigh", 0)),
-                    "52_week_low": self._safe_float(data.get("52WeekLow", 0)),
-                    "50_day_avg": self._safe_float(data.get("50DayMovingAverage", 0)),
-                    "200_day_avg": self._safe_float(data.get("200DayMovingAverage", 0)),
-                    "analyst_target": self._safe_float(data.get("AnalystTargetPrice", 0)),
-                    "forward_pe": self._safe_float(data.get("ForwardPE", 0)),
-                }
+            if sonuc is AVOutcome.QUOTA_EXHAUSTED:
+                # HTTP 200 + kota uyari govdesi. Sadece status_code'a bakan kod
+                # bunu "veri yok" sanip her turda yeniden cagirirdi.
+                self._kota_uyar(symbol)
+                self.disk_cache.mark_quota_exhausted(symbol)
+                return None
+            if sonuc is AVOutcome.RETRYABLE_ERROR:
+                # Gecici ariza , negatif cache'lenmez, ayni gun tekrar denenir.
+                logger.debug(
+                    f"AV gecici hata {symbol} (HTTP {response.status_code}) , "
+                    f"tekrar denenecek"
+                )
+                return None
+            if sonuc is AVOutcome.NO_DATA or "Symbol" not in data:
+                return None
 
-                self.cache[cache_key] = overview
-                self.last_fetch[cache_key] = datetime.now()
-                return overview
+            overview = {
+                "symbol": data.get("Symbol", symbol),
+                "name": data.get("Name", ""),
+                "sector": data.get("Sector", ""),
+                "industry": data.get("Industry", ""),
+                "market_cap": self._safe_float(data.get("MarketCapitalization", 0)),
+                "pe_ratio": self._safe_float(data.get("PERatio", 0)),
+                "peg_ratio": self._safe_float(data.get("PEGRatio", 0)),
+                "eps": self._safe_float(data.get("EPS", 0)),
+                "revenue_per_share": self._safe_float(data.get("RevenuePerShareTTM", 0)),
+                "profit_margin": self._safe_float(data.get("ProfitMargin", 0)),
+                "dividend_yield": self._safe_float(data.get("DividendYield", 0)) * 100,
+                "beta": self._safe_float(data.get("Beta", 1)),
+                "52_week_high": self._safe_float(data.get("52WeekHigh", 0)),
+                "52_week_low": self._safe_float(data.get("52WeekLow", 0)),
+                "50_day_avg": self._safe_float(data.get("50DayMovingAverage", 0)),
+                "200_day_avg": self._safe_float(data.get("200DayMovingAverage", 0)),
+                "analyst_target": self._safe_float(data.get("AnalystTargetPrice", 0)),
+                "forward_pe": self._safe_float(data.get("ForwardPE", 0)),
+            }
+
+            self.cache[cache_key] = overview
+            self.last_fetch[cache_key] = datetime.now()
+            self.disk_cache.put(symbol, overview)   # restart'i atlatsin
+            return overview
 
         except Exception as e:
+            # Ag/ayristirma istisnasi GECICI sayilir; negatif cache'lenmez.
             logger.debug(f"Alpha Vantage overview hatası {symbol}: {e}")
         return None
 
+    def _kota_uyar(self, symbol: str) -> None:
+        """Kota tukenmesi SESSIZ kalmaz , eski kod logger.debug ile yutuyordu."""
+        if not self._kota_uyarildi:
+            kalan = self.quota.remaining()
+            logger.warning(
+                f"ALPHA VANTAGE KOTASI TUKENDI ({self.quota.profile} profili, "
+                f"butce {self.quota.budget}/gun, kalan {kalan}) , FundAgent bugun "
+                f"yeni temel veri CEKEMEYECEK. Cache'teki veriler kullanilmaya "
+                f"devam eder."
+            )
+            self._kota_uyarildi = True
+        self._funnel_isaretle(symbol)
+
+    def _funnel_isaretle(self, symbol: str) -> None:
+        """R11 huni etiketi. `fund_source_quota` STAGES'te YOK, bu yuzden
+        `gate_block` sebebi olarak kaydedilir , aksi halde sessizce yutulurdu."""
+        try:
+            from core.funnel import DailyFunnel
+            if "fund_source_quota" in getattr(DailyFunnel, "STAGES", ()):
+                self._funnel.bump("fund_source_quota", symbol=symbol)
+            else:
+                self._funnel.bump(
+                    "gate_block", reason="fund_source_quota", symbol=symbol
+                )
+        except Exception:
+            pass
+
     def _get_yahoo_fallback(self, symbol: str) -> Optional[Dict]:
-        """Yahoo Finance fallback."""
+        """Yahoo Finance yedegi , OLCULEN DURUM: BUGUN CALISMIYOR.
+
+        2026-09-03 olcumu: `query1.finance.yahoo.com/v10/finance/quoteSummary`
+        HTTP 401 donuyor (Yahoo artik crumb/cookie istiyor). Ayrica bu fonksiyon
+        yalnizca AV anahtari YOKSA cagriliyor (get_company_overview), yani kota
+        tukendiginde ZATEN devreye girmiyordu , iki kat olu.
+
+        Kod silinmedi ama sessiz kalmiyor: ilk cagrida bir kez UYARIR ve
+        basarisizlik durustce None (NO_DATA) doner.
+        """
+        if not getattr(self, "_yahoo_uyarildi", False):
+            logger.warning(
+                "Yahoo temel veri yedegi cagrildi , bu kaynak 2026-09-03 itibariyle "
+                "HTTP 401 donuyor (crumb/cookie gerekiyor). Gercek bir yedek kaynak "
+                "isteniyorsa RF-ISSUES-4.md::YAHOO-YEDEGI-OLU maddesine bakin."
+            )
+            self._yahoo_uyarildi = True
         try:
             url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
             params = {"modules": "summaryDetail,defaultKeyStatistics,financialData"}

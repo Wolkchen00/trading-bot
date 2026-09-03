@@ -14,6 +14,7 @@ import time
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from core.av_quota import AVOutcome, classify_response, shared_store
 from utils.logger import logger
 from config import STOCK_SEARCH_TERMS, GEOPOLITICAL_KEYWORDS
 
@@ -147,8 +148,12 @@ class StockNewsAnalyzer:
 
         articles = []
 
-        # Alpha Vantage'den haber çek
-        if self.alpha_vantage_key:
+        # Alpha Vantage'den haber çek , R16: VARSAYILAN KAPALI (İhsan kararı).
+        # 25 çağrı/gün bütçesinin tamamı temel analize ayrıldı; haber Google News
+        # RSS (ücretsiz) ve Marketaux (50/gün, kendi sayacı var) üzerinden gelir.
+        # Açılırsa aynı kota rezervasyonundan geçmek ZORUNDA: kapatmak tek başına
+        # yeterli sayılmaz, kapı yerinde durur.
+        if self.alpha_vantage_key and self._av_news_enabled():
             av_articles = self._fetch_alpha_vantage_news(symbol)
             articles.extend(av_articles)
 
@@ -211,8 +216,25 @@ class StockNewsAnalyzer:
     # 2. ALPHA VANTAGE NEWS
     # ============================================================
 
+    @staticmethod
+    def _av_news_enabled() -> bool:
+        """AV haber yolu acik mi (R16). Varsayilan KAPALI."""
+        try:
+            from config import AV_QUOTA_CONFIG
+            return bool(AV_QUOTA_CONFIG.get("av_news_enabled", False))
+        except Exception:
+            return False
+
     def _fetch_alpha_vantage_news(self, symbol: str) -> List[Dict]:
-        """Alpha Vantage News Sentiment API."""
+        """Alpha Vantage News Sentiment , AYNI kota butcesinden gecer (R16).
+
+        Bu yol varsayilan olarak kapali. Acildiginda da temel analizle AYNI
+        gunluk butceyi paylasir; ayri bir sayac tutmak butceyi iki katina cikarirdi.
+        """
+        # Kota rezervi cagridan ONCE. Reddedilirse AG CAGRISI YAPILMAZ.
+        if not shared_store().try_reserve("news"):
+            logger.debug(f"AV haber {symbol}: kota butcesi dolu, cagri yapilmadi")
+            return []
         try:
             url = "https://www.alphavantage.co/query"
             params = {
@@ -226,6 +248,9 @@ class StockNewsAnalyzer:
 
             if response.status_code == 200:
                 data = response.json()
+                if classify_response(200, response.text, data) is AVOutcome.QUOTA_EXHAUSTED:
+                    logger.warning("AV haber: kota tukendi (HTTP 200 + uyari govdesi)")
+                    return []
                 feed = data.get("feed", [])
                 articles = []
                 for item in feed[:10]:

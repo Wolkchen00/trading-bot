@@ -26,6 +26,7 @@ import requests
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 
+from core.av_quota import shared_store
 from utils.logger import logger
 
 
@@ -99,6 +100,16 @@ class EarningsCalendar:
         if (datetime.now() - self._last_attempt).total_seconds() < self.RETRY_MINUTES * 60:
             return
         self._last_attempt = datetime.now()
+
+        # R16: UCUNCU AV tuketicisi. Ayni anahtarin gunluk butcesinden gecmek
+        # ZORUNDA; gecmezse temel analizle yarisir ve sinir sessizce asilir.
+        # Rezervasyon cagridan ONCE, surecler arasi kilit altinda.
+        if not shared_store().try_reserve("earnings"):
+            logger.warning(
+                "Earnings takvimi: AV kota butcesi dolu, cagri YAPILMADI , "
+                f"{'bayat cache ile devam' if self._calendar else 'gate fail-open'}"
+            )
+            return
 
         try:
             resp = requests.get(

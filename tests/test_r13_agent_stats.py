@@ -230,11 +230,14 @@ def test_day_rollover_keeps_days_in_separate_buckets(tmp_path):
 
     assert stats.snapshot(DAY_ONE)["coordinator"]["decisions"] == 1
     assert stats.snapshot(DAY_TWO)["coordinator"]["decisions"] == 1
+    # R15: data_ok ikiliden ucluye cikti (sema surumu 2). "disabled", politika
+    # geregi kapatilmis ajani "kaynak sustu"dan ayirir. TechAgent hicbir zaman
+    # kapatilamadigi icin burada her zaman 0.
     assert stats.snapshot(DAY_ONE)["agents"]["TechAgent"]["data_ok"] == {
-        "true": 1, "false": 0,
+        "true": 1, "false": 0, "disabled": 0,
     }
     assert stats.snapshot(DAY_TWO)["agents"]["TechAgent"]["data_ok"] == {
-        "true": 0, "false": 1,
+        "true": 0, "false": 1, "disabled": 0,
     }
 
 

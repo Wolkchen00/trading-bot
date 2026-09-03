@@ -471,6 +471,30 @@ STOCK_CONFIG = {
 }
 
 # ============================================================
+# AJAN ETKİNLİĞİ (R15)
+# ============================================================
+# SocialAgent'ın iki veri kaynağı da ölçülmüş biçimde ölü: Reddit kimliksiz
+# arama HTTP 403 döndürüyor (2026-09-03: 189908 bayt HTML gövde), Nitter/X yolu
+# `if not self.nitter: return {"score": 0}` ile zaten boş. Nominal ağırlığın
+# %15'i kalıcı sıfır, ama maliyeti sıfır değil: sembol başına 12 istek ve her
+# birinin ardından `time.sleep(1)` (social_sentiment.py:188, `status_code == 200`
+# bloğunun DIŞINDA, yani 403'te de koşuyor).
+#
+# ÖNEMLİ: Ajanı kapatmak ağırlığını kalanlara DAĞITMAZ. `weighted_score` ham bir
+# toplam ve eşikler mutlak (`ws > 15`), bu yüzden dağıtım aynı kanıttan daha
+# yüksek skor üretir ve her giriş kapısını gizlice gevşetir. Ayrıntı ve ölçülmüş
+# örnek: core/agent_enable.py.
+#
+# Geri açmak: Coolify env SOCIAL_AGENT_ENABLED=true + restart. Açılmadan önce
+# kaynağın gerçekten cevap verdiği doğrulanmalı, yoksa kör ajan oy kümesine döner.
+AGENT_CONFIG = {
+    "social_agent_enabled": (
+        os.getenv("SOCIAL_AGENT_ENABLED", "false").strip().lower()
+        in ("1", "true", "yes")
+    ),
+}
+
+# ============================================================
 # SHORT SELLING AYARLARI
 # ============================================================
 _is_paper = TRADING_MODE == "paper"

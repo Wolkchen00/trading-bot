@@ -1,0 +1,944 @@
+{
+  "aciklama": "R15 ONCESI uretim davranisi. R15 sonrasi testler bu degerlere karsi karsilastirilir. Bu dosya ELLE DUZENLENMEZ; degisirse davranis kaymistir.",
+  "agirlik_gecis_siniri": {
+    "cozumlenmis_4": {
+      "FundAgent": 0.2,
+      "RiskAgent": 0.2,
+      "SentAgent": 0.2,
+      "SocialAgent": 0.15,
+      "TechAgent": 0.25
+    },
+    "cozumlenmis_4_toplam": 1.0,
+    "cozumlenmis_5": {
+      "FundAgent": 0.2,
+      "RiskAgent": 0.2,
+      "SentAgent": 0.2,
+      "SocialAgent": 0.1633768147,
+      "TechAgent": 0.2366231853
+    },
+    "cozumlenmis_5_toplam": 1.0
+  },
+  "sema_surumu": 1,
+  "senaryolar": {
+    "cogunluk_buy": {
+      "beklenen": {
+        "buy_count": 3,
+        "confidence": 70.8,
+        "hold_count": 2,
+        "majority": true,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "BUY",
+        "weighted_score": 29.5
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 40,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 45,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 50,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "cogunluk_sell": {
+      "beklenen": {
+        "buy_count": 0,
+        "confidence": 70.8,
+        "hold_count": 2,
+        "majority": true,
+        "risk_veto": false,
+        "sell_count": 3,
+        "signal": "SELL",
+        "weighted_score": -29.5
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 40,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 45,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 50,
+          "short_boost": 0,
+          "signal": "SELL"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "confidence_doygunluk": {
+      "beklenen": {
+        "buy_count": 5,
+        "confidence": 100,
+        "hold_count": 0,
+        "majority": true,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "BUY",
+        "weighted_score": 100.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 100,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "RiskAgent": {
+          "confidence": 100,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SentAgent": {
+          "confidence": 100,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SocialAgent": {
+          "confidence": 100,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "TechAgent": {
+          "confidence": 100,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "dyn_cogunluk_buy": {
+      "beklenen": {
+        "buy_count": 3,
+        "confidence": 77.0,
+        "hold_count": 2,
+        "majority": true,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "BUY",
+        "weighted_score": 32.1
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 40,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 45,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 50,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.18,
+        "RiskAgent": 0.18,
+        "SentAgent": 0.22,
+        "SocialAgent": 0.12,
+        "TechAgent": 0.3
+      }
+    },
+    "dyn_risk_veto": {
+      "beklenen": {
+        "buy_count": 2,
+        "confidence": 36.0,
+        "hold_count": 2,
+        "majority": false,
+        "risk_veto": true,
+        "sell_count": 1,
+        "signal": "HOLD",
+        "weighted_score": 36.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 80,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "RiskAgent": {
+          "confidence": 30,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 90,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.18,
+        "RiskAgent": 0.18,
+        "SentAgent": 0.22,
+        "SocialAgent": 0.12,
+        "TechAgent": 0.3
+      }
+    },
+    "dyn_social_uretim_hali": {
+      "beklenen": {
+        "buy_count": 2,
+        "confidence": 39.0,
+        "hold_count": 2,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 1,
+        "signal": "BUY",
+        "weighted_score": 19.5
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 20,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 30,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 55,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.18,
+        "RiskAgent": 0.18,
+        "SentAgent": 0.22,
+        "SocialAgent": 0.12,
+        "TechAgent": 0.3
+      }
+    },
+    "dyn_ws_tam_sinir": {
+      "beklenen": {
+        "buy_count": 1,
+        "confidence": 30.0,
+        "hold_count": 4,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "HOLD",
+        "weighted_score": 15.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 50,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.18,
+        "RiskAgent": 0.18,
+        "SentAgent": 0.22,
+        "SocialAgent": 0.12,
+        "TechAgent": 0.3
+      }
+    },
+    "hepsi_hold": {
+      "beklenen": {
+        "buy_count": 0,
+        "confidence": 0.0,
+        "hold_count": 5,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "HOLD",
+        "weighted_score": 0.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "karsit_sinyaller": {
+      "beklenen": {
+        "buy_count": 2,
+        "confidence": 7.5,
+        "hold_count": 1,
+        "majority": false,
+        "risk_veto": true,
+        "sell_count": 2,
+        "signal": "HOLD",
+        "weighted_score": 7.5
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 70,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 20,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "SentAgent": {
+          "confidence": 40,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 70,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "risk_veto": {
+      "beklenen": {
+        "buy_count": 2,
+        "confidence": 32.5,
+        "hold_count": 2,
+        "majority": false,
+        "risk_veto": true,
+        "sell_count": 1,
+        "signal": "HOLD",
+        "weighted_score": 32.5
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 80,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "RiskAgent": {
+          "confidence": 30,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 90,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "social_acik_oy_veriyor": {
+      "beklenen": {
+        "buy_count": 3,
+        "confidence": 66.6,
+        "hold_count": 1,
+        "majority": true,
+        "risk_veto": false,
+        "sell_count": 1,
+        "signal": "BUY",
+        "weighted_score": 27.8
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 20,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 30,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SocialAgent": {
+          "confidence": 80,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "TechAgent": {
+          "confidence": 55,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "social_hold_conf_var": {
+      "beklenen": {
+        "buy_count": 1,
+        "confidence": 30.5,
+        "hold_count": 4,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "BUY",
+        "weighted_score": 15.2
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 95,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 61,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "social_uretim_hali_hold0": {
+      "beklenen": {
+        "buy_count": 2,
+        "confidence": 31.5,
+        "hold_count": 2,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 1,
+        "signal": "BUY",
+        "weighted_score": 15.8
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 20,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 30,
+          "short_boost": 0,
+          "signal": "BUY"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 55,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "tek_ajan_sell_sinir": {
+      "beklenen": {
+        "buy_count": 0,
+        "confidence": 30.0,
+        "hold_count": 4,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 1,
+        "signal": "HOLD",
+        "weighted_score": -15.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 75,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "veto_ama_on_sinyal_sell": {
+      "beklenen": {
+        "buy_count": 0,
+        "confidence": 52.8,
+        "hold_count": 2,
+        "majority": true,
+        "risk_veto": true,
+        "sell_count": 3,
+        "signal": "SELL",
+        "weighted_score": -44.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 70,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 50,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 80,
+          "short_boost": 0,
+          "signal": "SELL"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "vix_short_boost": {
+      "beklenen": {
+        "buy_count": 0,
+        "confidence": 60.0,
+        "hold_count": 2,
+        "majority": true,
+        "risk_veto": true,
+        "sell_count": 3,
+        "signal": "SELL",
+        "weighted_score": -37.5
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 60,
+          "short_boost": 0,
+          "signal": "SELL"
+        },
+        "RiskAgent": {
+          "confidence": 40,
+          "short_boost": 15,
+          "signal": "SELL"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 70,
+          "short_boost": 0,
+          "signal": "SELL"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "ws_sinir_alti_sell": {
+      "beklenen": {
+        "buy_count": 0,
+        "confidence": 30.5,
+        "hold_count": 4,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 1,
+        "signal": "SELL",
+        "weighted_score": -15.2
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 61,
+          "short_boost": 0,
+          "signal": "SELL"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "ws_sinir_ustu_buy": {
+      "beklenen": {
+        "buy_count": 1,
+        "confidence": 30.5,
+        "hold_count": 4,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "BUY",
+        "weighted_score": 15.2
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 61,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "ws_tam_arti_15": {
+      "beklenen": {
+        "buy_count": 1,
+        "confidence": 30.0,
+        "hold_count": 4,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 0,
+        "signal": "HOLD",
+        "weighted_score": 15.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 60,
+          "short_boost": 0,
+          "signal": "BUY"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    },
+    "ws_tam_eksi_15": {
+      "beklenen": {
+        "buy_count": 0,
+        "confidence": 30.0,
+        "hold_count": 4,
+        "majority": false,
+        "risk_veto": false,
+        "sell_count": 1,
+        "signal": "HOLD",
+        "weighted_score": -15.0
+      },
+      "votes": {
+        "FundAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "RiskAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SentAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "SocialAgent": {
+          "confidence": 0,
+          "short_boost": 0,
+          "signal": "HOLD"
+        },
+        "TechAgent": {
+          "confidence": 60,
+          "short_boost": 0,
+          "signal": "SELL"
+        }
+      },
+      "weights": {
+        "FundAgent": 0.2,
+        "RiskAgent": 0.2,
+        "SentAgent": 0.2,
+        "SocialAgent": 0.15,
+        "TechAgent": 0.25
+      }
+    }
+  }
+}

@@ -16,6 +16,8 @@ Kurallar:
   - Risk vetosu: RiskAgent SELL → BUY yapılamaz
 """
 from typing import Dict, List, Optional
+
+from core.agent_enable import is_agent_enabled
 from utils.logger import logger
 
 
@@ -401,14 +403,17 @@ class AgentCoordinator:
                 'reasoning': str
             }
         """
-        # 1. Her ajandan oy al
+        # 1. Her ETKİN ajandan oy al (R15).
+        # Kapalı ajanın analyze()'i HİÇ çağrılmaz ,  skoru sıfırlamak yetmez,
+        # asıl maliyet kaynağa gidilen bloklayıcı uykudur.
         votes = [
             self.tech_agent.analyze(tech_data),
             self.fund_agent.analyze(fund_data),
             self.sent_agent.analyze(sent_data),
-            self.social_agent.analyze(social_data),
-            self.risk_agent.analyze(risk_data),
         ]
+        if is_agent_enabled("SocialAgent"):
+            votes.append(self.social_agent.analyze(social_data))
+        votes.append(self.risk_agent.analyze(risk_data))
         
         # 2. Oyları say
         buy_count = sum(1 for v in votes if v.signal == "BUY")
@@ -424,9 +429,20 @@ class AgentCoordinator:
             weighted_score += signal_value * weight * vote.confidence
         
         # 4. Risk vetosu kontrolü
-        risk_vote = votes[4]  # RiskAgent her zaman son
+        # R15: eskiden `votes[4]` idi ("RiskAgent her zaman son"). Bir ajan oy
+        # kümesinden çıkınca liste kısalıyor ve bu satır HER KARARDA IndexError
+        # fırlatıyordu. Konum yerine AD ile bulunur.
+        risk_matches = [v for v in votes if v.agent_name == RiskAgent.NAME]
+        if len(risk_matches) != 1:
+            # Fail-closed: risk vetosunu kaybetmiş bir karar sessizce sürdürülemez.
+            # Veto, BUY'ı durduran tek mekanizma; yokluğu "veto yok" demek değildir.
+            raise RuntimeError(
+                f"RiskAgent oyu tam olarak bir tane olmali, {len(risk_matches)} bulundu. "
+                f"Oy kumesi: {[v.agent_name for v in votes]}"
+            )
+        risk_vote = risk_matches[0]
         risk_veto = False
-        
+
         if risk_vote.signal == "SELL":
             risk_veto = True
         

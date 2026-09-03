@@ -14,10 +14,11 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from config import state_path
+from core.agent_enable import is_agent_enabled
 from utils.logger import logger
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # R15: data_ok ikili -> uclu (ok / veri yok / politika ile kapali)
 AGENT_NAMES = (
     "TechAgent",
     "FundAgent",
@@ -125,7 +126,9 @@ class AgentStats:
     def _empty_agent() -> dict:
         return {
             "votes": {signal: 0 for signal in SIGNALS},
-            "data_ok": {"true": 0, "false": 0},
+            # R15 uclu durum: "true"=veri geldi, "false"=kaynak sustu,
+            # "disabled"=politika geregi kapali. Yokluk susmayla karisamaz.
+            "data_ok": {"true": 0, "false": 0, "disabled": 0},
             "confidence_histogram": {},
             "last_dynamic_weight": None,
         }
@@ -181,9 +184,12 @@ class AgentStats:
             }
         data_ok = raw.get("data_ok", {})
         if isinstance(data_ok, dict):
+            # Eski (surum 1) dosyalarda "disabled" anahtari YOK; 0'a duser.
+            # Goc kayipsiz: eski true/false sayaclari aynen tasinir.
             result["data_ok"] = {
                 "true": _count(data_ok.get("true", 0)),
                 "false": _count(data_ok.get("false", 0)),
+                "disabled": _count(data_ok.get("disabled", 0)),
             }
         result["confidence_histogram"] = cls._normalize_histogram(
             raw.get("confidence_histogram")
@@ -345,6 +351,26 @@ class AgentStats:
                 agent["last_dynamic_weight"] = _number(
                     dynamic_weights.get(name)
                 )
+
+            # R15: politika geregi kapali ajanlar oy kumesinde HIC yok, bu yuzden
+            # yukaridaki dongu onlara ugramaz. Sayacini bumplamazsak telemetride
+            # "hic calismamis" ile "kapatilmis" ayirt edilemez ve kaynak geri
+            # geldiginde kimse fark etmez. DISABLED_BY_POLICY ayri sayilir.
+            voted = {
+                str(
+                    self._vote_value(v, "agent", None)
+                    or self._vote_value(v, "agent_name", "")
+                )
+                for v in votes
+            }
+            for name in AGENT_NAMES:
+                if name in voted:
+                    continue
+                if is_agent_enabled(name):
+                    # Oy yok ama kapali da degil: bu bir politika durumu degildir,
+                    # sessizce gecilir (mevcut davranis korunur).
+                    continue
+                day["agents"][name]["data_ok"]["disabled"] += 1
 
             coord = day["coordinator"]
             confidence = float(decision.get("confidence", 0) or 0)

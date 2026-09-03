@@ -423,3 +423,19 @@ R16 üçüncü tüketiciyi ve interprocess lock'u kazandı; R17 tek skalerden ü
 geçti; R18 ekle-sadece toplayıcıya daraldı ve "şimdi kaydet" alan listesi netleşti;
 R19 kapı olmaktan çıkıp **kanıt üreticisi** oldu. Kapı ve etiketleyici
 RF-ISSUES-4.md'de tam sözleşmeleriyle bekliyor.
+
+### USER OVERRIDE (2026-09-03)
+
+Round 4 Codex kota limitine takildi (`turn.failed`: usage limit, sifirlanma 13:55 PDT).
+Meeting `VERDICT: NOT YET` durumunda, `VERDICT: SAME PAGE` ALINMADI.
+
+Ihsan karari: **Kural 1 (kod yok, once mutabakat) bu rock icin asildi.** Claude
+(Visionary) R15i simdi insa eder; Codex kotasi donunce hem R15in DIFFini inceler
+hem Round 4u R19 icin bitirir. Gerekce: R15 uc turda incelendi ve netlesti, R19 ise
+revizyon 4te dogdu ve hic incelenmedi. Capraz inceleme kaybedilmiyor, sirasi degisiyor.
+
+Claudein bagimsiz eklemesi (Codexin 3. sorusunun mekanik kismi): `votes` listesine
+konum varsayimi tum kod tabaninda TEK yerde, `core/agent_coordinator.py:427`.
+`agent_performance.record_prediction` listeyi donguyle geziyor (satir 90),
+`decision_trace.agent_votes` ada gore anahtarlanmis sozluk (satir 48),
+`AGENT_NAMES` isim tabanli. Liste kisalinca kiran baska yer YOK.

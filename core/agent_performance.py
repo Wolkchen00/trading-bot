@@ -15,6 +15,8 @@ import math
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+
+from core.agent_enable import mask_weights
 from utils.logger import logger
 
 
@@ -214,14 +216,20 @@ class AgentPerformanceTracker:
 
             raw_weights[agent_name] = weight
 
-        # Normalize (toplam = 1.0)
+        # Normalize (toplam = 1.0) ,  BEŞ ajanın TAMAMI üzerinden.
+        # R15: bu adım DEĞİŞTİRİLMEDİ ve değiştirilmemeli. Kapalı ajanı
+        # normalizasyondan ÖNCE çıkarmak, kalanları 1.0'a şişirir ve her giriş
+        # kapısını gizlice gevşetir (bkz. core/agent_enable.py).
         total = sum(raw_weights.values())
         if total > 0:
             normalized = {k: v / total for k, v in raw_weights.items()}
         else:
             normalized = dict(self.DEFAULT_WEIGHTS)
 
-        return normalized
+        # Maskeleme normalizasyondan SONRA gelir: kapalı ajan süzülür, kalanların
+        # payları AYNEN korunur, toplam 1.0'ın altına düşer. Bu, eşiklerin
+        # kalibre edildikleri ölçekte kalmasını sağlar.
+        return mask_weights(normalized)
 
     def get_agent_stats(self) -> Dict:
         """Her ajan için performans istatistikleri döndür."""

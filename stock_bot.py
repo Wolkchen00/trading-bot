@@ -51,6 +51,7 @@ from core.pdt_tracker import PDTTracker
 from core.stock_screener import StockScreener
 from core.earnings_calendar import EarningsCalendar
 from core.agent_coordinator import AgentCoordinator
+from core.agent_enable import is_agent_enabled
 from core.analyzer import TechnicalAnalyzer
 from core.executor import OrderExecutor
 from core.short_executor import ShortExecutor
@@ -1283,11 +1284,17 @@ class StockBot:
                 pass
 
             # Social data
+            # R15: ajan kapalıyken analyze_social HİÇ çağrılmaz. Skoru sıfırlamak
+            # yetmez ,  asıl maliyet ağa gidilen bloklayıcı uyku: 6 sub x 2 terim
+            # = 12 istek, her birinin ardından time.sleep(1) (social_sentiment.py:188,
+            # `status_code == 200` bloğunun DIŞINDA, yani HTTP 403'te de koşuyor).
+            # Sembol başına ~12 saniye, hiç gelmeyen veri için.
             social_data = {"social_score": 0}
-            try:
-                social_data = self.social_analyzer.analyze_social(symbol)
-            except Exception:
-                pass
+            if is_agent_enabled("SocialAgent"):
+                try:
+                    social_data = self.social_analyzer.analyze_social(symbol)
+                except Exception:
+                    pass
 
             # Risk data
             risk_data = self._build_risk_data(analysis, config)

@@ -210,7 +210,10 @@ def test_k_fund_source_quota_yutulmuyor(tmp_path, monkeypatch):
 
     a.get_company_overview("AAPL")
 
-    anlik = f.snapshot(_dt.date.today().isoformat())
+    # ZAMAN BAGIMLILIGI YOK: funnel gununu ET'ye gore tutuyor, `date.today()`
+    # ise yerel saat. Gece yarisi sinirinda (PDT 17:00 sonrasi) ikisi AYRISIYOR
+    # ve test gun icinde gecerken geceleyin dusuyordu. Funnel'in KENDI gununu sor.
+    anlik = f.snapshot(f._today())
     sebepler = anlik.get("gate_block_reasons", {})
     assert sebepler.get("fund_source_quota", 0) >= 1, (
         f"kota etiketi kalici funnel ciktisinda yok: {sebepler}"

@@ -29,8 +29,16 @@ services:
   # ============================================================
   # CONTAINER 2: PAPER — Long + Short (test & pratik)
   # ============================================================
+  # AGRESIF PAPER , 2026-09-03'ten itibaren OPT-IN (Ihsan karari: "kavga
+  # cikmasin"). Ayni Alpaca paper hesabinda iki bot birbirinin pozisyonlariyla
+  # kavga eder; hesap artik CANLI KARAR PROFILINE verildi.
+  # Agresif gozlemler zaten kilit kapisinda KANIT SAYILMIYORDU (esik 30,
+  # pozisyon $9000, tarama 15sn canli davranisi temsil etmez).
+  # Geri acmak: docker compose --profile aggressive up -d trading-short
+  # (once trading-paper-livecfg'yi DURDUR , ayni hesap.)
   trading-short:
     image: trading-bot:latest
+    profiles: ["aggressive"]
     depends_on:
       trading-live:
         condition: service_started
@@ -75,7 +83,7 @@ services:
   # ============================================================
   trading-paper-livecfg:
     image: trading-bot:latest
-    profiles: ["livecfg"]          # varsayilan `up` bunu BASLATMAZ
+
     depends_on:
       trading-live:
         condition: service_started
@@ -87,11 +95,17 @@ services:
       - TRADING_MODE=paper
       - BOT_MODE=both
       - PAPER_PROFILE=live_config   # R19: agresif override UYGULANMAZ
-      - ALPACA_KEY_PREFIX=PAPER2    # AYRI hesap , mevcut paper botuyla cakismaz
+      # Agresif bot kapatildigi icin MEVCUT paper hesabi kullanilir , ikinci
+      # Alpaca hesabina gerek kalmadi ve kavga imkansiz (tek bot, tek hesap).
+      - ALPACA_KEY_PREFIX=PAPER
       - PYTHONUNBUFFERED=1
       - FINBERT_CACHE_DIR=/app/models/finbert
     volumes:
-      - state-paper-livecfg:/app/state_paper   # AYRI state , epoch karismasin
+      # AYNI state volume: acik 5 pozisyonun metadata'si (stop seviyeleri,
+      # giris bayraklari) devredilmeli. Kopararsak Temmuz'daki "korumasiz yetim
+      # pozisyon" hatasi tekrarlanir (PLAN.md v4.7.1). Olcum katmani epoch/profil
+      # kimligiyle zaten ayirt ediyor , ayri volume'a gerek yok.
+      - state-paper:/app/state_paper
       - ./logs/livecfg:/app/logs
     logging:
       driver: "json-file"
@@ -103,4 +117,3 @@ services:
 volumes:
   state-live:
   state-paper:
-  state-paper-livecfg:

@@ -14,7 +14,25 @@ RF-ISSUES-4::KILIT-KAPISI-ARACI kapıyı "kilidi açan" olarak tanımlıyordu. K
 açıldı; kapının rolü artık "açık kilidi izleyen ve gerekirse kapatmayı öneren". Sözleşme yeniden
 yazılmalı. Sağlık aracı "kilit açık, ölçüm kapısı geçmedi (sahip kararı)" diye etiketlemeli.
 
+### KILL-TASFIYESI-BROKER-FLAT-DOGRULAMASI (Codex R1 #19, ertelendi)
+`stock_bot.py:2436-2447` `close_all_positions` kabul edilir edilmez yerel pozisyonları siliyor; kısmi
+kapanış hatasında broker'da metadata'sız pozisyon kalır. Düzeltme: yerel durumu broker flat olana dek
+koru, uzlaştırma yolu çıkışları kaydetsin, süre aşımında kritik alarm. PAPER-MSFT ile birlikte ele alınmalı.
+
+### MERKEZI-TOPLAM-POZISYON-TAVANI (Codex R1 #17, ertelendi)
+`max_open_positions` yalnız normal long akışında (`stock_bot.py:685-723`); BearBrain yalnız kendi
+sayısına bakıyor (`core/bear_brain.py:537-545`). Canlıda bear/opsiyon/short açılmadan ÖNCE tavan
+`can_open_new_risk` içinde broker-uzlaştırmalı uygulanmalı.
+
+### STOP-DOGRULANAMAYINCA-OTOMATIK-KAPATMA (Codex R1 #18/#21, kısmen ertelendi)
+R24 bu durumda yeni girişleri kalıcı kilitliyor ama pozisyonu kapatmıyor. Otomatik kapatma, oversize ve
+yanlış provenance watchdog'u kendi hata modları testleriyle ayrı bir rock olmalı.
+
 ## ORTA
+
+### NO-TRADE-SAYACI-GERIYE-SAYIYOR
+"İşlemsiz iş günü" sayacı 22 -> 21 -> 20 -> 3 diye geriye gidiyor (canlı alarms.jsonl 09-05..09-11).
+R22 hafta sonu alarmını ve bloker adını düzeltiyor; sayacın kendisi ayrıca incelenmeli.
 
 ### PAPER-MSFT-CLOSE-IN-PROGRESS-YAPISKAN
 `core/executor.py:211/613/709` `close_in_progress=True` yazıyor, yalnız başarıda (759) temizleniyor.

@@ -134,3 +134,25 @@ bağlı, Dockerfile commit gömmüyor (doğru).
 - ACCEPTED 15 -> açılış kapısı: long_only, opsiyon kapalı, bear env yok, auto-lock yok (adım 6).
 - ACCEPTED 16 -> ilk girişte kesin beklenen notional karşılaştırması (adım 10).
 - ACCEPTED 17 -> ilk girişte stop broker'dan tam doğrulanır: aktif, SELL, tam qty, fiyat, TIF (adım 11).
+
+## Round 3 , DENENDİ, Codex kotası doldu
+
+`codex exec resume 01a0915b-...` -> exit 1, `-o` dosyası yok. Akış: "You've hit your usage limit ...
+try again at 2:35 PM" (2026-09-11 ~10:15 PDT). Hafıza kuralı gereği tekrar denenmedi. Round 3 (Revizyon
+3 doğrulaması) kota yenilenince AYNI thread ile koşulacak. Tur sayısı 3/5'te bekliyor.
+
+## Visionary öz-incelemesi (Claude, Codex'ten SONRA , İhsan'ın istediği ikinci geçiş)
+
+Revizyon 3 baştan sona okundu; parça düzenlemelerden kalan çelişki yok. Eklenenler:
+- NAKİT GERÇEĞİ: executor boyutu `cash - 0.10 × equity` ile kırpıyor (`core/executor.py:299-301, 338`);
+  canlıda nakit $145.82 / equity $491.65 (gerisi SPY parkı) -> ilk giriş en fazla ~$96.65. "Tam bantlar"
+  park equity'yi tutarken pratikte günde ~1 giriş, ~$96 demek. TEŞHİS 6 ve RİSKLER 6'ya yazıldı; bu
+  döngüde değişmez (park İhsan'ın 2026-07-05 kararı). İhsan'a ayrıca söylenecek.
+- TABAN YENİDEN ÇAPALAMA: taban altına düşülünce girişler kalıcı durur (tasarım); yeniden çapalama sahip
+  işlemi (kayıt dosyasını silmek). R24'e yazıldı.
+- Günlük alım sınırı yok (`_daily_buys_count` yalnız sayaç) , ek bir gizli tıkanma değil.
+- `live_max_position_usd = 300` (`config.py:338`) , $300 bandı tavana takılmıyor.
+- ZAMANLAMA: kota yenilenmesi 14:35 PDT, piyasa cuma 13:00 PDT kapanıyor -> canlı açılış gerçekçi olarak
+  Pazartesi 2026-09-14. RİSKLER 7'ye yazıldı.
+- Kapsam uyarısı: R24 büyüdü (taban, bear kilidi, auto-lock, temizleme aracı, kill tasfiyesi). İnşa her
+  rock için ayrı Codex oturumu ister; bir kota penceresine sığmayabilir.

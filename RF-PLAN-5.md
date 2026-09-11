@@ -61,6 +61,11 @@ R22, R24'ün executor red sebeplerini raporladığı için R24'ten sonra gelir.
 - `config.py:352-357` en düşük bant `[50, 100]`; `core/position_sizer.py:96-104` bandın altına SIFIR boyut.
 - **Paper-livecfg canlı bantlarını HİÇ almıyor** (`stock_bot.py:219-228` bantları yalnız live dalında
   kuruyor). R19'un "canlı karar profili" iddiası boyutlandırmada yanlış; paper Kelly yolunda.
+- **Nakit gerçeği (Claude öz-inceleme):** executor boyutu `cash - cash_reserve_pct × equity` ile kırpıyor
+  (`core/executor.py:299-301, 338`). Canlıda nakit $145.82, equity $491.65, gerisi SPY parkında
+  (`index_parking_reserve_pct` 0.30). İlk giriş en fazla ~$96.65; ikinci giriş ancak ertesi günkü park
+  dengelemesiyle. Tam bantlar ($150-300) park equity'nin çoğunu tutarken pratikte oluşamaz. Bu bir
+  hata değil (park İhsan'ın 2026-07-05 kararı), beklentidir; bu döngüde değişmez.
 
 ### 7. Canlı emniyet açıkları (Codex Round 1, Claude doğruladı)
 
@@ -194,6 +199,8 @@ Yeni suite:
   Gün içi zirve KASITLI olarak sayılmaz ("günlük yüksek-su"). Restart tabanı ASLA aşağı çekemez.
   Kayıt yoksa ilk değer mevcut equity (log). **Bozuk/okunamayan kayıt:** canlıda otomatik kilit
   (aşağıda) + kritik alarm, taban yeniden kurulmaz; paper'da mevcut equity ile yeniden kurulur + WARN.
+  Taban altına düşülünce yeni girişler KALICI durur (tasarım); `saglik.py` bunu `TIKALI (EQUITY_FLOOR)`
+  gösterir. Yeniden çapalama SAHİP işlemidir: kayıt dosyasını silmek (yok = mevcut equity, loglanır).
 - **BearBrain canlı kilidi:** canlıda `bear_etf` HEM `LIVE_ENTRIES_ENABLED` HEM
   `LIVE_BEAR_ENTRIES_ENABLED` (varsayılan false) ister. Red sebepleri `LIVE_LOCK_R5` / `LIVE_BEAR_LOCK`.
   Paper etkilenmez.
@@ -379,4 +386,7 @@ yeniden deploy. Otomatik kilit (`live_auto_lock.json`) bottan bağımsız son em
 3. **45 eşiği kanıtsız:** 45-59 bandı en küçük boyutu ($100) alır.
 4. **Sönme koruyucuyu zayıflatır:** 2 zarardan sonra seçicilik yalnız 24 saat. HALT ve kill aynen.
 5. **Epoch değişir:** eşik değişikliği profil hash'ini değiştirir.
-6. **Beklenen hız düşük:** dürüst güven dağılımında haftada birkaç aday. "Canlandı" = hat akıyor.
+6. **Beklenen hız düşük:** dürüst güven dağılımında haftada birkaç aday; SPY parkı yüzünden canlıda
+   pratikte günde en fazla ~1 giriş, ~$96. "Canlandı" = hat akıyor, "çok işlem" değil.
+7. **Zamanlama:** Codex kotası 2026-09-11 10:15 PDT'de doldu (yenilenme 14:35 PDT). Round 3 ve inşa
+   ondan sonra; piyasa cuma 13:00 PDT kapandığı için canlı açılış gerçekçi olarak 2026-09-14 Pazartesi.

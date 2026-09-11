@@ -1,9 +1,9 @@
 # RF-PLAN-5.md , Canlandırma: karar hattındaki kalıcı kilitlenmeyi kaldır, İhsan'ın kararlarıyla canlıyı aç
 
 > Tarih: 2026-09-11 (Los Angeles). Sürücü: Claude (Visionary) + Codex (Integrator).
-> **Revizyon 4** , Codex Round 1-3 bulgularından sonra (kayıt: RF-SAME-PAGE-LOG-5.md).
+> **Revizyon 5** , Codex Round 1-4 bulgularından sonra (kayıt: RF-SAME-PAGE-LOG-5.md).
 > KOD baseline'ı: `1e731be`. Plan commit'leri: ilk `39239f9`, Revizyon 2 `d0ae983`, Revizyon 3 bu
-> Revizyon 3 `12c3877`, Revizyon 4 bu dosyayı taşıyan commit (worktree dalı `codex-canlandirma`).
+> Revizyon 3 `12c3877`, Revizyon 4 `2ffa3fa`, Revizyon 5 bu dosyayı taşıyan commit (dal `codex-canlandirma`).
 > Baseline kanıtı (Claude koştu): `ALPHA_VANTAGE_KEY=dummy-test-key py -m pytest tests/ -q` -> **592 passed**.
 > Not: anahtar env'i OLMADAN 2 R16 testi Yahoo yedeğine düşüp gerçek ağa gidiyor; ana ağaçta `.env`
 > olduğu için geçiyordu. Üretim hatası değil, test hermetikliği (RF-ISSUES-5).
@@ -223,6 +223,9 @@ Yeni suite:
   yazımı başarısızsa: bellek-içi halt + kritik alarm + yeni giriş reddi; ayrıca güvenlik dizini
   yazılamıyorsa canlı giriş baştan reddedilir (restart'ta kilidin buharlaşması imkansız). `saglik.py`
   yazılamaz güvenlik durumunu DEGRADED gösterir.
+- **BÜTÜN güvenlik-state dosyaları fail-closed:** `live_auto_lock.json`, `kill_close_pending`,
+  `peak_equity` ve `kill_switch.json` , VAR AMA OKUNAMAZ durumu canlıda giriş kilidi sayılır ve
+  `saglik.py` DEGRADED gösterir; "yok gibi" davranmak yasak. Her dosya için ayrı bozuk-dosya testi.
 - **Bozuk kill kaydı fail-open DEĞİL:** `core/kill_switch.py:45-80` bugün bozuk `kill_switch.json`'ı
   sessizce yutuyor (`except: pass`) ve `tools/saglik.py:120-139` okuma hatasını kill=false sayıyor.
   Canlıda bozuk kayıt = aktif kill kabul edilir (fail-closed) ve sağlıkta UNKNOWN/DEGRADED.
@@ -256,12 +259,15 @@ Yeni suite:
 (f) `FAILED_NAKED` VE `ELECTED_UNFILLED` ayrı ayrı auto-lock yazar; paper'da yazmaz;
 (g) **istisna enjeksiyonu:** bracket gönderildikten sonra doğrulama yolunda istisna -> pozisyon kalıcı
     + auto-lock; testin kendisi "unverified outcome" ile yetinmez;
-(h) auto-lock varken `index_parking` ALIMI reddedilir, parking ÇÖZME ve çıkışlar serbest; dört risk
-    türünün hepsi için red kanıtı;
+(h) auto-lock varken `index_parking` ALIMI reddedilir, parking ÇÖZME ve çıkışlar serbest; red kanıtı
+    elle sayılmış örneklerle değil **doğrudan `core.risk_guard._RISK_KINDS` üzerinde parametrize**
+    (bugün BEŞ tür: stock_long, stock_short, option, bear_etf, index_parking) , yeni bir tür eklenirse
+    test kendiliğinden kapsar;
 (i) auto-lock yazımı hata fırlatınca bellek-içi halt + alarm + giriş reddi; **güvenlik dizini
     yazılamazken YENİ SÜREÇ canlı girişi baştan reddeder** ve `saglik.py` DEGRADED der;
 (j) bozuk `kill_switch.json`: canlıda aktif kill kabul edilir, `saglik.py` UNKNOWN/DEGRADED
-    (bağımsız bozuk-dosya testi, bot ve araç ayrı);
+    (bağımsız bozuk-dosya testi, bot ve araç ayrı); AYNI test `live_auto_lock.json`,
+    `kill_close_pending` ve `peak_equity` için de var;
 (k) `saglik.py` auto-lock dosyası varken funnel temizken bile `KILITLI (OTOMATIK)` ve çıkış 3;
 (l) temizleme komutu: çıplak pozisyonda reddeder; flat/tam kapsamda temizler; `--zorla` sebebi loglar;
 (m) fractional pozisyon: reset anında stop yerleşimi reddedildi -> açılış çağrısı yerleştirip doğruluyor.
@@ -289,6 +295,17 @@ stopsuz ve botun bilmediği bir pozisyon bırakır. İhsan bu riski kabul etmedi
   şunlar koşar: broker sorgusu, `kill_close_pending` uzlaştırması, hâlâ açık pozisyon için
   duplicate-safe yeniden kapatma ve **koruyucu stopun yeniden yerleştirilmesi** (cancel_orders
   stopları sildiği için), alarm. Yeni giriş yine YOK.
+- **SEMBOL BAŞINA TEK ÇIKIŞ OTORİTESİ:** aynı açık miktar için hem yeniden kapatma emri hem yeniden
+  yerleştirilmiş stop GÖNDERİLMEZ , ikisi de dolarsa ters (short) pozisyon açılır. Kural: aktif ve
+  tam-miktarlı bir close emri varken stop/retry gönderilmez; retry öncesi eski çıkış emri broker'dan
+  uzlaştırılır (iptal ya da dolum olarak); toplam açık çıkış miktarı pozisyonu ASLA aşamaz. Kapanmayan
+  pozisyona koruyucu stop, aktif close emri YOKKEN yerleştirilir.
+- **Envanter HER TURDA yenilenir:** tek seferlik anlık görüntü yetmez , iptal edilmeye çalışılan açık
+  BUY emri geç dolarsa yeni pozisyon envantere girmeli. Her kill turunda güncel broker pozisyonları VE
+  açık giriş emirleri pending envanteriyle birleştirilir.
+- **Muhasebe tam olarak bir kez:** kapanış episode'u için kalıcı `accounted` işareti (episode kimliği)
+  pending kaydıyla birlikte tutulur; PnL/ledger/wash-sale/zarar serisi bir episode için ikinci kez
+  işlenmez. Muhasebe ile pending temizliği arasında crash olsa bile seri bir kez değişir.
 - **Vazgeçme yok:** sınırlı deneme sonrası bırakmak yerine, broker flat olana ya da SAHİP kalıcı bir
   devralma kaydı yazana kadar geri çekilmeli (backoff) duplicate-safe sorgu/kapat/koru döngüsü sürer.
   Süre aşımında (config, varsayılan 10 dk) kritik alarm + auto-lock (R24a tetikleyici 5), ama döngü
@@ -319,7 +336,14 @@ Yeni suite:
 (c) **gerçek `run` döngüsü:** kill aktifken tur, broker sorgusu + uzlaştırma + yeniden kapatma +
     stop yeniden yerleştirmeyi çağırır (yardımcı metodu doğrudan çağıran test YETMEZ);
 (d) süre aşımı: kritik alarm + auto-lock yazıldı VE döngü denemeye devam ediyor (bırakmıyor);
-(e) kapanmayan pozisyona koruyucu stop yeniden yerleştirilir ve doğrulanır;
+(e) kapanmayan pozisyona koruyucu stop yeniden yerleştirilir ve doğrulanır; **aktif tam-miktarlı close
+    emri varken stop GÖNDERİLMEZ** ve toplam açık çıkış miktarı pozisyonu aşmaz (iki-SELL/ters pozisyon
+    regresyonu); SPY parking pending'i için invaryant "aktif tam-miktarlı close VEYA tanımlı koruyucu
+    emir" , parking koruma kodunda kasıtlı stopsuz olduğu için (`core/position_manager.py:721-740`)
+    testte broker tarafındaki koruma da doğrulanır;
+(e2) anlık görüntüden SONRA geç dolan BUY emri -> yeni pozisyon envantere alınır ve kapatılır;
+(e3) muhasebe adımlarının HER BİRİNDEN sonra crash/restart enjeksiyonu -> zarar serisi, ledger ve
+    wash-sale kaydı yalnız BİR kez oluşur (`accounted` işareti);
 (f) **parking dahil:** broker'da SPY parkı varken kill -> pending envanterde SPY de var, yerel defterde
     olmasa bile; restart/flat akışı test edilir;
 (g) `kill_close_pending` varken bütün yeni risk türleri reddedilir; kill dosyası elle silinip YENİ
@@ -415,24 +439,32 @@ R20, R21, R24, R22 incelenip ana dala alındıktan sonra, İhsan'ın son onayıy
 6. **Açılış kapısı (zorunlu, konteyner içinden):** canlıda `BOT_MODE=long_only`,
    `OPTIONS_CONFIG.options_enabled=False`, `LIVE_BEAR_ENTRIES_ENABLED` yok/false, auto-lock dosyası yok.
    Biri tutmazsa kilit AÇILMAZ (merkezi pozisyon tavanının ertelenmesi bu üç koşula dayanıyor).
-7. Canlı açık emir kontrolü: beklenmedik açık emir varsa açılıştan önce İhsan'a sorulur.
+7. **IMAGE-İÇİ TEST KAPISI:** adım 4'te kaydedilen image ID'sinden, hacim ve ağ bağlamadan geçici bir
+   konteynerde (`docker run --rm --network none -e ALPHA_VANTAGE_KEY=dummy-test-key <IMAGE_ID>
+   python -m pytest ...`) R20, R21, R24a, R24b ve R22 hedef testleri koşar ve YEŞİL döner. Dağıtılan
+   image'da `pytest` ve `tests/` var (doğrulandı); `>=` bağımlılıklar yüzünden yerel yeşil tek başına
+   image kanıtı değil. Kırmızıysa kilit AÇILMAZ.
+8. Canlı açık emir kontrolü: beklenmedik açık emir varsa açılıştan önce İhsan'a sorulur.
 
 **Adım 2 , kilit AÇIK yeniden oluşturma (ayrı operasyon, YENİDEN DERLEME YOK):**
-8. Coolify env `LIVE_ENTRIES_ENABLED=true` (`LIVE_BEAR_ENTRIES_ENABLED` YOK). `docker restart` eski
+9. Coolify env `LIVE_ENTRIES_ENABLED=true` (`LIVE_BEAR_ENTRIES_ENABLED` YOK). `docker restart` eski
    env'i koruyacağı için konteyner YENİDEN OLUŞTURULUR, ama **aynı image ile**: VPS'te uygulama
    dizininde `docker compose up -d --force-recreate` (ya da Coolify'ın rebuild yapmayan recreate
    eylemi). Rebuild yasak: `>=` bağımlılıklar yeni sürüm çekip doğrulanmış davranışı değiştirebilir.
-9. Yeni konteyner içinde: **image ID adım 4'te kaydedilenle AYNI** (değiştiyse kilit açılmaz, adım
+10. **Konteyner ÖNCE oluşturulur, SONRA başlatılır:** `docker compose up -d --force-recreate
+    --no-start` -> `docker inspect` ile image ID ve env doğrulanır -> ancak ikisi de doğruysa
+    `docker compose start`. Böylece yanlış image/env ilk emirden ÖNCE yakalanır.
+11. Başladıktan sonra konteyner içinde: **image ID adım 4'te kaydedilenle AYNI** (değiştiyse kilit açılmaz, adım
    1-7 baştan koşar), env değeri `true`, parmak izi birebir, adım 6 kapısı yeniden geçer; `saglik.py`
    live `entry_authorization` artık KILITLI değil, ters-ETF ve auto-lock durumu görünür.
 
 **Adım 3 , ilk canlı giriş izlemi (Claude elle):**
-10. Boyut: sizer'ın log gerekçesinden hesaplanan KESİN beklenen notional (bant × sektör katsayısı,
+12. Boyut: sizer'ın log gerekçesinden hesaplanan KESİN beklenen notional (bant × sektör katsayısı,
     `min(equity × 0.62, max_position_usd)` ve nakit tavanı) ile dolum notional'ı karşılaştırılır; aralık
     kontrolü DEĞİL.
-11. Stop: broker'dan yeniden okunur: durum aktif, yön SELL, miktar pozisyonun tamamı, stop fiyatı planla
+13. Stop: broker'dan yeniden okunur: durum aktif, yön SELL, miktar pozisyonun tamamı, stop fiyatı planla
     aynı, TIF (fractional DAY / tam pay GTC). Provenance `strategy`, funnel `entries` arttı.
-12. Uygunsuzlukta anında geri alma.
+14. Uygunsuzlukta anında geri alma.
 
 **Geri alma:** `LIVE_ENTRIES_ENABLED=false` + AYNI doğrulanmış image ile recreate + konteyner içinde
 `false` kanıtı (girişler durur, çıkış/koruma sürer). KOD geri alma (`1e731be`) yalnız broker flat VE

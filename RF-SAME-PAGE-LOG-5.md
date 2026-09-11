@@ -210,3 +210,50 @@ Tek rock'a sığmayacak kadar büyüdü ve kill tasfiyesi kendi kanıt kümesini
 - ACCEPTED 12 (geri alma eski koda dönüyor) -> R23: geri alma aynı doğrulanmış image ile recreate +
   konteyner-içi `false` kanıtı; kod rollback'i yalnız broker flat ve state uyumluluğu doğrulanınca.
 - Round 2'deki 13'ün gerekçesi Codex'e göre geçersizdi; kabul edildi ve 11 ile birlikte düzeltildi.
+
+## Round 4
+### Integrator findings (Codex, verbatim)
+
+Round 3’teki 12 bulgunun tamamı niyet düzeyinde karşılanmış; ancak aşağıdaki yeni uçtan uca boşluklar maddilik barını geçiyor.
+
+- [FIX] R24a(h) “dört risk türünün hepsi”ni sınadığını söylüyor fakat `_RISK_KINDS` beş tür içeriyor (`core/risk_guard.py:4-10`), dolayısıyla bir tür açık kalırken proof geçebilir -> Testi elle sayılan dört örnek yerine doğrudan `_RISK_KINDS` üzerinde parametrize et ve beşinin de `LIVE_AUTO_LOCK` ile reddedildiğini kanıtla.
+- [FIX] R24b aynı açık miktar için hem duplicate-safe kapatma emri hem yeniden yerleştirilmiş stop öngörüyor; iki SELL emri birlikte kabul edilirse short pozisyon açabilir, biri reddedilirse proof koruma var sanabilir -> Sembol başına tek çıkış otoritesi kur: aktif tam-miktarlı close emri varken stop/retry gönderme, retry öncesi eski çıkış emrini uzlaştır ve toplam açık çıkış miktarının pozisyonu aşmadığını test et.
+- [FIX] R24b(e) genel pozisyon korumasını sınarken SPY parking’in mevcut koruma kodunda kasıtlı olarak stopsuz bırakıldığını kapsamıyor (`core/position_manager.py:721-758`) -> SPY pending için aktif tam-miktarlı close veya tanımlı koruyucu emir invariantı belirle ve parking testinde yalnız envanteri değil broker tarafındaki korumayı da doğrula.
+- [FIX] Tek seferlik broker snapshot’ından sonra iptal edilmeye çalışılan açık BUY emri geç dolarsa yeni pozisyon `kill_close_pending` envanterinde bulunmaz ve tasfiye dışında kalabilir -> Her kill turunda güncel broker pozisyonları ve açık giriş emirlerini pending envanteriyle yeniden birleştir; snapshot sonrası geç dolum testinde yeni pozisyonun benimsenip kapatıldığını kanıtla.
+- [FIX] “Güvenlik dizini yazılabiliyorsa giriş serbest” ön koşulu, auto-lock yazımının geçici olarak başarısız olup restart sırasında tekrar yazılabilir hale gelmesi durumunda kaybolan kilidi tespit edemez -> Canlı-risk oturumu başlamadan kalıcı bir fail-closed/unclean sentinel oluştur veya bağımsız ikinci durable kill kaydı kullan; tek auto-lock yazımı başarısızlığı ardından yazılabilir yeni süreç testini ekle.
+- [FIX] Revizyon 4 yalnız bozuk `kill_switch.json` için fail-closed davranışı tanımlıyor; bozuk `live_auto_lock.json` veya `kill_close_pending` botta ve sağlık aracında yokmuş gibi yorumlanabilir -> Bütün güvenlik-state dosyalarının var-ama-okunamaz durumunu canlıda giriş kilidi ve `saglik.py` DEGRADED kabul et; ayrı bozuk-dosya testleri ekle.
+- [FIX] Kimlik bazlı fill dedupe ledger tekrarını önlese de ledger/streak/wash-sale güncellemesi ile pending temizliği tek transaction değildir; aradaki crash zarar serisini ikinci kez artırabilirken R24b(h) geçer -> Kapanış episode’u için kalıcı exactly-once muhasebe checkpoint’i ekle ve her muhasebe adımı sonrasında crash/restart enjeksiyonuyla streak’in yalnız bir kez değiştiğini kanıtla.
+- [FIX] R23 ana testleri exact deployment image içinde koşturmuyor; serbest `>=` bağımlılıklarla yerel suite geçerken kaydedilen image’ın Alpaca emir/stop yolları bozuk olabilir -> Kilit açılmadan önce aynı image ID’den geçici ve izole state ile R20–R24b hedef testlerini çalıştırıp sonucu açılış kapısı yap.
+- [FIX] R23 adım 9 image/env/gate doğrulamasını `LIVE_ENTRIES_ENABLED=true` süreç başlatıldıktan sonra yapıyor, dolayısıyla yanlış image veya env ilk emirden sonra fark edilebilir -> Konteyneri önce create/inspect veya fail-closed preflight entrypoint ile doğrula; trading sürecini yalnız image ID, env ve tüm kapılar geçtikten sonra başlat.
+
+VERDICT: NOT YET
+### Visionary response (Claude)
+
+Claude doğruladı: `_RISK_KINDS` BEŞ tür (`core/risk_guard.py:4-10`); parking koruma kodunda kasıtlı
+stopsuz (`core/position_manager.py:721-740` `if not is_parking`); dağıtılan image'da `pytest 9.1.1` ve
+`tests/` VAR (`.dockerignore` testleri dışlamıyor, `COPY . .`), yani image-içi test kapısı mümkün ve
+yeni araç gerekmiyor.
+
+- ACCEPTED 1 -> R24a(h) testi `_RISK_KINDS` üzerinde parametrize; beş türün hepsi.
+- ACCEPTED 2 (iki SELL -> ters pozisyon) -> R24b: SEMBOL BAŞINA TEK ÇIKIŞ OTORİTESİ; aktif tam-miktarlı
+  close varken stop/retry yok, retry öncesi eski emir uzlaştırılır, toplam açık çıkış miktarı pozisyonu
+  aşamaz; test (e) ters-pozisyon regresyonu.
+- ACCEPTED 3 (parking kasıtlı stopsuz) -> R24b(e): parking pending invaryantı "aktif tam-miktarlı close
+  VEYA tanımlı koruyucu emir", broker tarafında doğrulanır.
+- ACCEPTED 4 (geç dolan BUY) -> R24b: envanter HER TURDA broker pozisyonları + açık giriş emirleriyle
+  yenilenir; test (e2).
+- REJECTED 5 (geçici yazma hatası sonrası kilidin buharlaşması icin session sentinel) -> Gerekçe: kilit
+  kaybolsa bile ÇIPLAK pozisyon durmaya devam ettiği sürece bir sonraki koruma turu
+  `ProtectionSummary.failed > 0` üretir ve auto-lock (artık yazılabilir diskte) YENİDEN yazılır
+  (R24a tetikleyici 2). Pozisyon bu arada korunduysa kilide gerek yoktur. Ek bir "unclean session"
+  sentineli, her konteyner restart'ını şüpheli hale getirip sahibi her deploy'da elle onaya zorlar;
+  marjinal güvenlik kazancı bu maliyeti karşılamıyor. RF-ISSUES-5'e yazıldı.
+- ACCEPTED 6 -> R24a: BÜTÜN güvenlik-state dosyaları (auto_lock, kill_close_pending, peak_equity,
+  kill_switch) var-ama-okunamaz durumunda fail-closed + DEGRADED; her biri için test.
+- ACCEPTED (daraltılmış) 7 (exactly-once muhasebe) -> R24b: tam transaction yerine episode kimlikli
+  kalıcı `accounted` işareti; muhasebe adımlarının her birinden sonra crash enjeksiyonu testi (e3).
+  Gerekçe: aynı garantiyi (seri/ledger/wash-sale bir kez) daha küçük yüzeyle verir.
+- ACCEPTED 8 (yerel yeşil image kanıtı değil) -> R23 adım 7: IMAGE-İÇİ TEST KAPISI , kaydedilen image
+  ID'sinden hacimsiz ve ağsız geçici konteynerde hedef testler; kırmızıysa kilit açılmaz.
+- ACCEPTED 9 (doğrulama süreç başladıktan sonra) -> R23 adım 10: `--no-start` ile oluştur, `inspect`
+  ile image ID + env doğrula, ancak sonra `start`.

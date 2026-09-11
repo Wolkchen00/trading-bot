@@ -53,3 +53,9 @@ Paper'da 7 günde 19 dolumun 16'sı provenance `UNKNOWN` (agresif dönemden devr
 `tests/test_r16_review_fixes3.py::test_basarisiz_sembol_her_turu_tekellestirmiyor`
 `ALPHA_VANTAGE_KEY` yoksa Yahoo yedeğine düşüp GERÇEK ağa istek atıyor. Ana ağaçta `.env`
 yüklendiği için geçiyordu. Testler anahtarı kendileri sabitlemeli.
+
+### KILIT-YAZIM-HATASI-SESSION-SENTINEL (Codex R4 #5, REDDEDILDI, kayit icin)
+Auto-lock yazimi gecici olarak basarisiz olup restart'ta disk yazilabilir hale gelirse kilit kaybolur.
+Reddedildi cunku ciplak pozisyon durdugu surece sonraki koruma turu auto-lock'u yeniden yaziyor; ek bir
+"unclean session" sentineli her deploy'u elle onaya baglardi. Kilit yazimi ile korumanin ikisi birden
+bozulursa bu bosluk acilir; daha ucuz bir ikinci dayanikli kayit bulunursa yeniden degerlendirilmeli.

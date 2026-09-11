@@ -1,0 +1,1089 @@
+{
+  "days": {
+    "2026-08-12": {
+      "scanned": 1996,
+      "signal_buy": 136,
+      "signal_sell": 0,
+      "signal_hold": 1860,
+      "conf_below_min": 0,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 0,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 3,
+      "queue_dup": 133,
+      "reached_executor": 0,
+      "entries": 1,
+      "exits": 1,
+      "gate_block_reasons": {},
+      "stage_symbols": null
+    },
+    "2026-08-13": {
+      "scanned": 3671,
+      "signal_buy": 362,
+      "signal_sell": 0,
+      "signal_hold": 3309,
+      "conf_below_min": 0,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 182,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 3,
+      "queue_dup": 176,
+      "reached_executor": 0,
+      "entries": 1,
+      "exits": 0,
+      "gate_block_reasons": {
+        "EMA200": 182
+      },
+      "stage_symbols": null
+    },
+    "2026-08-14": {
+      "scanned": 2695,
+      "signal_buy": 103,
+      "signal_sell": 193,
+      "signal_hold": 2399,
+      "conf_below_min": 152,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 103,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 2,
+      "gate_block_reasons": {
+        "EMA200": 103
+      },
+      "stage_symbols": null
+    },
+    "2026-08-17": {
+      "scanned": 1289,
+      "signal_buy": 237,
+      "signal_sell": 4,
+      "signal_hold": 1048,
+      "conf_below_min": 1,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 236,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 1,
+      "exits": 1,
+      "gate_block_reasons": {
+        "EMA200": 210,
+        "FUND_NO_DATA": 26
+      },
+      "stage_symbols": null
+    },
+    "2026-08-18": {
+      "scanned": 1697,
+      "signal_buy": 14,
+      "signal_sell": 9,
+      "signal_hold": 1674,
+      "conf_below_min": 9,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 12,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 2,
+      "exits": 0,
+      "gate_block_reasons": {
+        "FUND_NO_DATA": 12
+      },
+      "stage_symbols": null
+    },
+    "2026-08-19": {
+      "scanned": 3104,
+      "signal_buy": 838,
+      "signal_sell": 267,
+      "signal_hold": 1999,
+      "conf_below_min": 126,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 837,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 1,
+      "exits": 0,
+      "gate_block_reasons": {
+        "EMA200": 837
+      },
+      "stage_symbols": null
+    },
+    "2026-08-20": {
+      "scanned": 1899,
+      "signal_buy": 231,
+      "signal_sell": 20,
+      "signal_hold": 1648,
+      "conf_below_min": 7,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 230,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {
+        "EMA200": 230
+      },
+      "stage_symbols": null
+    },
+    "2026-08-21": {
+      "scanned": 3216,
+      "signal_buy": 1122,
+      "signal_sell": 0,
+      "signal_hold": 2094,
+      "conf_below_min": 0,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 1122,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 1,
+      "gate_block_reasons": {
+        "EMA200": 1122
+      },
+      "stage_symbols": null
+    },
+    "2026-08-24": {
+      "scanned": 1335,
+      "signal_buy": 2,
+      "signal_sell": 0,
+      "signal_hold": 1332,
+      "conf_below_min": 0,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 1,
+      "wash_sale_block": 0,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 1,
+      "exits": 2,
+      "gate_block_reasons": {
+        "EMA200": 1
+      },
+      "stage_symbols": null
+    },
+    "2026-08-25": {
+      "scanned": 2515,
+      "signal_buy": 799,
+      "signal_sell": 98,
+      "signal_hold": 1618,
+      "conf_below_min": 35,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 35,
+      "sector_block": 0,
+      "gate_block": 799,
+      "wash_sale_block": 1509,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {
+        "EMA200": 799
+      },
+      "stage_symbols": {
+        "scanned": [
+          "COIN",
+          "NIO",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "COIN",
+          "SOFI"
+        ],
+        "signal_sell": [
+          "TSLA"
+        ],
+        "signal_hold": [
+          "COIN",
+          "NIO",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "TSLA"
+        ],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [
+          "TSLA"
+        ],
+        "sector_block": [],
+        "gate_block": [
+          "COIN",
+          "SOFI"
+        ],
+        "wash_sale_block": [
+          "AMZN",
+          "NVDA",
+          "PLTR"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-08-26": {
+      "scanned": 3312,
+      "signal_buy": 114,
+      "signal_sell": 276,
+      "signal_hold": 2922,
+      "conf_below_min": 138,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 138,
+      "sector_block": 0,
+      "gate_block": 114,
+      "wash_sale_block": 2437,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {
+        "EMA200": 114
+      },
+      "stage_symbols": {
+        "scanned": [
+          "AMD",
+          "COIN",
+          "LCID",
+          "MARA",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "SOFI"
+        ],
+        "signal_sell": [
+          "COIN",
+          "LCID",
+          "MARA",
+          "RIVN",
+          "TSLA"
+        ],
+        "signal_hold": [
+          "AMD",
+          "COIN",
+          "MARA",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "COIN",
+          "MARA",
+          "RIVN",
+          "TSLA"
+        ],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [
+          "COIN",
+          "MARA",
+          "RIVN",
+          "TSLA"
+        ],
+        "sector_block": [],
+        "gate_block": [
+          "SOFI"
+        ],
+        "wash_sale_block": [
+          "AMZN",
+          "NVDA",
+          "PLTR",
+          "SMCI"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-08-27": {
+      "scanned": 2892,
+      "signal_buy": 517,
+      "signal_sell": 34,
+      "signal_hold": 2341,
+      "conf_below_min": 8,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 8,
+      "sector_block": 0,
+      "gate_block": 517,
+      "wash_sale_block": 1446,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {
+        "EMA200": 469,
+        "FUND_NO_DATA": 48
+      },
+      "stage_symbols": {
+        "scanned": [
+          "AMD",
+          "COIN",
+          "LCID",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "COIN",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "signal_sell": [
+          "AMD",
+          "LCID"
+        ],
+        "signal_hold": [
+          "AMD",
+          "COIN",
+          "LCID",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "LCID"
+        ],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [
+          "LCID"
+        ],
+        "sector_block": [],
+        "gate_block": [
+          "COIN",
+          "RIVN",
+          "SOFI",
+          "TSLA"
+        ],
+        "wash_sale_block": [
+          "AMZN",
+          "NVDA",
+          "PLTR"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-08-28": {
+      "scanned": 2886,
+      "signal_buy": 204,
+      "signal_sell": 383,
+      "signal_hold": 2299,
+      "conf_below_min": 230,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 230,
+      "sector_block": 0,
+      "gate_block": 42,
+      "wash_sale_block": 1443,
+      "index_signal": 0,
+      "queued_pullback": 2,
+      "queue_dup": 160,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 1,
+      "gate_block_reasons": {
+        "EMA200": 42
+      },
+      "stage_symbols": {
+        "scanned": [
+          "CRWD",
+          "LCID",
+          "MARA",
+          "META",
+          "MSFT",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "META",
+          "MSFT"
+        ],
+        "signal_sell": [
+          "LCID",
+          "MARA"
+        ],
+        "signal_hold": [
+          "CRWD",
+          "LCID",
+          "MARA",
+          "META",
+          "MSFT",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "LCID",
+          "MARA"
+        ],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [
+          "LCID",
+          "MARA"
+        ],
+        "sector_block": [],
+        "gate_block": [
+          "META"
+        ],
+        "wash_sale_block": [
+          "AMZN",
+          "NVDA",
+          "SMCI"
+        ],
+        "index_signal": [],
+        "queued_pullback": [
+          "MSFT"
+        ],
+        "queue_dup": [
+          "MSFT"
+        ],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-08-31": {
+      "scanned": 2085,
+      "signal_buy": 32,
+      "signal_sell": 413,
+      "signal_hold": 1640,
+      "conf_below_min": 138,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 138,
+      "sector_block": 0,
+      "gate_block": 32,
+      "wash_sale_block": 558,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 2,
+      "gate_block_reasons": {
+        "EMA200": 32
+      },
+      "stage_symbols": {
+        "scanned": [
+          "AAPL",
+          "CRWD",
+          "LCID",
+          "MARA",
+          "META",
+          "MSFT",
+          "NIO",
+          "RIVN"
+        ],
+        "signal_buy": [
+          "CRWD"
+        ],
+        "signal_sell": [
+          "AAPL",
+          "LCID",
+          "MARA",
+          "META",
+          "NIO",
+          "RIVN"
+        ],
+        "signal_hold": [
+          "AAPL",
+          "CRWD",
+          "LCID",
+          "MARA",
+          "META",
+          "MSFT",
+          "NIO",
+          "RIVN"
+        ],
+        "conf_below_min": [
+          "AAPL",
+          "LCID",
+          "MARA",
+          "NIO"
+        ],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [
+          "AAPL",
+          "LCID",
+          "MARA",
+          "NIO"
+        ],
+        "sector_block": [],
+        "gate_block": [
+          "CRWD"
+        ],
+        "wash_sale_block": [
+          "NVDA",
+          "SMCI"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-09-01": {
+      "scanned": 1576,
+      "signal_buy": 0,
+      "signal_sell": 458,
+      "signal_hold": 1118,
+      "conf_below_min": 76,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 76,
+      "sector_block": 0,
+      "gate_block": 0,
+      "wash_sale_block": 394,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {},
+      "stage_symbols": {
+        "scanned": [
+          "AAPL",
+          "CRWD",
+          "MSFT",
+          "NIO",
+          "RIVN",
+          "SHOP",
+          "SOFI",
+          "TSLA"
+        ],
+        "signal_buy": [],
+        "signal_sell": [
+          "CRWD",
+          "NIO",
+          "RIVN",
+          "SHOP",
+          "TSLA"
+        ],
+        "signal_hold": [
+          "AAPL",
+          "CRWD",
+          "MSFT",
+          "NIO",
+          "RIVN",
+          "SHOP",
+          "SOFI",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "sector_block": [],
+        "gate_block": [],
+        "wash_sale_block": [
+          "NVDA",
+          "SMCI"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-09-02": {
+      "scanned": 2240,
+      "signal_buy": 0,
+      "signal_sell": 530,
+      "signal_hold": 1710,
+      "conf_below_min": 64,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 64,
+      "sector_block": 0,
+      "gate_block": 0,
+      "wash_sale_block": 640,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {},
+      "stage_symbols": {
+        "scanned": [
+          "AAPL",
+          "COIN",
+          "CRWD",
+          "MSFT",
+          "NIO",
+          "RIVN",
+          "TSLA"
+        ],
+        "signal_buy": [],
+        "signal_sell": [
+          "COIN",
+          "MSFT",
+          "NIO",
+          "RIVN",
+          "TSLA"
+        ],
+        "signal_hold": [
+          "AAPL",
+          "COIN",
+          "CRWD",
+          "MSFT",
+          "NIO",
+          "RIVN",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "COIN",
+          "MSFT",
+          "TSLA"
+        ],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [
+          "COIN",
+          "MSFT",
+          "TSLA"
+        ],
+        "sector_block": [],
+        "gate_block": [],
+        "wash_sale_block": [
+          "NVDA",
+          "PLTR"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-09-03": {
+      "scanned": 1768,
+      "signal_buy": 251,
+      "signal_sell": 0,
+      "signal_hold": 1516,
+      "conf_below_min": 0,
+      "conf_below_min_buy": 0,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 159,
+      "wash_sale_block": 1068,
+      "index_signal": 0,
+      "queued_pullback": 2,
+      "queue_dup": 88,
+      "reached_executor": 2,
+      "entries": 2,
+      "exits": 0,
+      "gate_block_reasons": {
+        "EMA200": 159
+      },
+      "stage_symbols": {
+        "scanned": [
+          "AAPL",
+          "COIN",
+          "CRWD",
+          "META",
+          "MSFT",
+          "NIO",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "AAPL",
+          "COIN",
+          "META",
+          "MSFT",
+          "TSLA"
+        ],
+        "signal_sell": [],
+        "signal_hold": [
+          "COIN",
+          "CRWD",
+          "META",
+          "MSFT",
+          "NIO",
+          "TSLA"
+        ],
+        "conf_below_min": [],
+        "conf_below_min_buy": [],
+        "conf_below_min_short": [],
+        "sector_block": [],
+        "gate_block": [
+          "COIN",
+          "META",
+          "TSLA"
+        ],
+        "wash_sale_block": [
+          "NVDA",
+          "PLTR",
+          "SMCI"
+        ],
+        "index_signal": [],
+        "queued_pullback": [
+          "MSFT"
+        ],
+        "queue_dup": [
+          "MSFT"
+        ],
+        "reached_executor": [
+          "AAPL",
+          "MSFT"
+        ],
+        "entries": [
+          "AAPL",
+          "MSFT"
+        ],
+        "exits": []
+      }
+    },
+    "2026-09-08": {
+      "scanned": 870,
+      "signal_buy": 147,
+      "signal_sell": 0,
+      "signal_hold": 723,
+      "conf_below_min": 132,
+      "conf_below_min_buy": 132,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 15,
+      "wash_sale_block": 348,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 1,
+      "gate_block_reasons": {
+        "EMA200": 15
+      },
+      "stage_symbols": {
+        "scanned": [
+          "LCID",
+          "MARA",
+          "NIO",
+          "RIOT",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "MARA",
+          "RIOT",
+          "TSLA"
+        ],
+        "signal_sell": [],
+        "signal_hold": [
+          "LCID",
+          "MARA",
+          "NIO",
+          "RIOT",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "MARA",
+          "RIOT",
+          "TSLA"
+        ],
+        "conf_below_min_buy": [
+          "MARA",
+          "RIOT",
+          "TSLA"
+        ],
+        "conf_below_min_short": [],
+        "sector_block": [],
+        "gate_block": [
+          "MARA"
+        ],
+        "wash_sale_block": [
+          "NVDA",
+          "SMCI"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-09-09": {
+      "scanned": 7784,
+      "signal_buy": 1523,
+      "signal_sell": 581,
+      "signal_hold": 5680,
+      "conf_below_min": 1536,
+      "conf_below_min_buy": 996,
+      "conf_below_min_short": 540,
+      "sector_block": 0,
+      "gate_block": 527,
+      "wash_sale_block": 1946,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 1,
+      "gate_block_reasons": {
+        "LOSS_STREAK_WARN": 527
+      },
+      "stage_symbols": {
+        "scanned": [
+          "AMD",
+          "CRWD",
+          "LCID",
+          "META",
+          "NIO",
+          "SHOP",
+          "SOFI",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "AMD",
+          "META",
+          "TSLA"
+        ],
+        "signal_sell": [
+          "LCID",
+          "NIO",
+          "SHOP"
+        ],
+        "signal_hold": [
+          "AMD",
+          "CRWD",
+          "LCID",
+          "META",
+          "NIO",
+          "SHOP",
+          "SOFI",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "AMD",
+          "LCID",
+          "META",
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "conf_below_min_buy": [
+          "AMD",
+          "META",
+          "TSLA"
+        ],
+        "conf_below_min_short": [
+          "LCID",
+          "NIO",
+          "SHOP"
+        ],
+        "sector_block": [],
+        "gate_block": [
+          "META"
+        ],
+        "wash_sale_block": [
+          "AAPL",
+          "NVDA"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-09-10": {
+      "scanned": 6979,
+      "signal_buy": 93,
+      "signal_sell": 166,
+      "signal_hold": 6720,
+      "conf_below_min": 259,
+      "conf_below_min_buy": 93,
+      "conf_below_min_short": 166,
+      "sector_block": 0,
+      "gate_block": 0,
+      "wash_sale_block": 2991,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {},
+      "stage_symbols": {
+        "scanned": [
+          "AMD",
+          "LCID",
+          "META",
+          "NIO",
+          "SHOP",
+          "SOFI",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "META"
+        ],
+        "signal_sell": [
+          "LCID",
+          "NIO"
+        ],
+        "signal_hold": [
+          "AMD",
+          "LCID",
+          "META",
+          "NIO",
+          "SHOP",
+          "SOFI",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "LCID",
+          "META",
+          "NIO"
+        ],
+        "conf_below_min_buy": [
+          "META"
+        ],
+        "conf_below_min_short": [
+          "LCID",
+          "NIO"
+        ],
+        "sector_block": [],
+        "gate_block": [],
+        "wash_sale_block": [
+          "AAPL",
+          "AMZN",
+          "GOOGL"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    },
+    "2026-09-11": {
+      "scanned": 1677,
+      "signal_buy": 130,
+      "signal_sell": 0,
+      "signal_hold": 1547,
+      "conf_below_min": 130,
+      "conf_below_min_buy": 130,
+      "conf_below_min_short": 0,
+      "sector_block": 0,
+      "gate_block": 0,
+      "wash_sale_block": 2171,
+      "index_signal": 0,
+      "queued_pullback": 0,
+      "queue_dup": 0,
+      "reached_executor": 0,
+      "entries": 0,
+      "exits": 0,
+      "gate_block_reasons": {},
+      "stage_symbols": {
+        "scanned": [
+          "LCID",
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "signal_buy": [
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "signal_sell": [],
+        "signal_hold": [
+          "LCID",
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "conf_below_min": [
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "conf_below_min_buy": [
+          "NIO",
+          "SHOP",
+          "TSLA"
+        ],
+        "conf_below_min_short": [],
+        "sector_block": [],
+        "gate_block": [],
+        "wash_sale_block": [
+          "AAPL",
+          "AMZN",
+          "GOOGL",
+          "NVDA",
+          "PLTR"
+        ],
+        "index_signal": [],
+        "queued_pullback": [],
+        "queue_dup": [],
+        "reached_executor": [],
+        "entries": [],
+        "exits": []
+      }
+    }
+  },
+  "last_entry_date": "2026-09-03",
+  "last_no_trade_alarm_date": "2026-09-11"
+}

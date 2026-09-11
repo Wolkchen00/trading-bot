@@ -1,0 +1,46 @@
+[
+  {
+    "symbol": "META",
+    "action": "SELL",
+    "qty": 0.044,
+    "price": 584.73,
+    "pnl": -0.42,
+    "reason": "STOP_LOSS (-1.5% / limit -0.3%)",
+    "sector": "Technology",
+    "timestamp": "2026-07-09T13:30:02.899363",
+    "date": "2026-07-09"
+  },
+  {
+    "symbol": "AMZN",
+    "action": "SELL",
+    "qty": 0.1101,
+    "price": 244.586,
+    "pnl": 0.12,
+    "reason": "STOP_LOSS(BRACKET/EXT)",
+    "sector": "E-Commerce",
+    "timestamp": "2026-07-13T13:30:09.631100",
+    "date": "2026-07-13"
+  },
+  {
+    "symbol": "NVDA",
+    "action": "SELL",
+    "qty": 0.4709,
+    "price": 206.93,
+    "pnl": -0.31,
+    "reason": "STOP_LOSS (-0.3% / limit -0.3%)",
+    "sector": "Semiconductors",
+    "timestamp": "2026-07-15T16:14:03.044684",
+    "date": "2026-07-15"
+  },
+  {
+    "symbol": "RIVN",
+    "action": "SELL",
+    "qty": 3.0,
+    "price": 17.475,
+    "pnl": -2.26,
+    "reason": "STOP_LOSS(BRACKET/EXT)",
+    "sector": "EV",
+    "timestamp": "2026-07-16T13:30:23.008090",
+    "date": "2026-07-16"
+  }
+]

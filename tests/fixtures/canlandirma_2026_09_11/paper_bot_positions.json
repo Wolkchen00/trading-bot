@@ -1,0 +1,44 @@
+{
+  "positions": {
+    "MSFT": {
+      "entry_price": 511.33,
+      "qty": 4.0,
+      "entry_time": "2026-09-03T16:51:55.005218",
+      "synced_from_alpaca": false,
+      "highest_price": 515.49,
+      "breakeven_set": false,
+      "partial_sold": false,
+      "partial_intent": null,
+      "partial_retry_budget": null,
+      "server_stop_verified": true,
+      "server_stop_order_id": "2f94385b-fd2c-410f-89e1-bf185e2206f4",
+      "close_in_progress": true,
+      "stop_loss_pct": 0.05,
+      "stop_loss_price": 490.65,
+      "take_profit_pct": 0.0625
+    }
+  },
+  "short_positions": {},
+  "options_positions": {},
+  "last_trade_time": {
+    "GOOGL": "2026-09-09T13:34:20.176351"
+  },
+  "consecutive_losses": 2,
+  "symbol_consecutive_losses": {
+    "SPY": 1,
+    "AMD": 2,
+    "NVDA": 2,
+    "RIVN": 1,
+    "GOOGL": 2,
+    "META": 2,
+    "PLTR": 1,
+    "SMCI": 1,
+    "AMZN": 1,
+    "AAPL": 1,
+    "MSFT": 0,
+    "SHOP": 0
+  },
+  "daily_buys_count": 0,
+  "trades_today": [],
+  "last_update": "2026-09-11T16:42:49.177517"
+}

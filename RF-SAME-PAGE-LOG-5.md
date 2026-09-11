@@ -257,3 +257,16 @@ yeni araç gerekmiyor.
   ID'sinden hacimsiz ve ağsız geçici konteynerde hedef testler; kırmızıysa kilit açılmaz.
 - ACCEPTED 9 (doğrulama süreç başladıktan sonra) -> R23 adım 10: `--no-start` ile oluştur, `inspect`
   ile image ID + env doğrula, ancak sonra `start`.
+
+## Round 5 , KOSULMADI
+
+`codex exec resume` 2026-09-11 14:51 PDT'de kota limitine takildi (yenilenme 19:37 PDT).
+Ihsan'a secim soruldu: pencereyi 5. tur dogrulamasina mi, R20 insasina mi harcayalim.
+
+**USER OVERRIDE: 5. tur dogrulama turu ATLANDI (Ihsan karari).** Gerekce: plan dort tur adversarial
+incelemeden gecti, 50 bulgunun tamami islendi (yalnizca R4 #5 gerekcesiyle reddedildi, RF-ISSUES-5'te),
+ve botu asil acan R20'nin metni 2. turdan beri degismedi. Kural 1 geregi bu bir sahip gecersiz
+kilmasidir ve kayda geciyor. R24a/R24b insadan ONCE ayri bir dogrulama turu alabilir (Codex ayni
+thread'de: 01a0915b-339c-76d3-932d-6410b9024ca9).
+
+**Ihsan karari (insa butcesi):** Codex ile devam, pencere pencere, rock basina bir pencere.

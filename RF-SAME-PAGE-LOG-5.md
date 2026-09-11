@@ -156,3 +156,57 @@ Revizyon 3 baştan sona okundu; parça düzenlemelerden kalan çelişki yok. Ekl
   Pazartesi 2026-09-14. RİSKLER 7'ye yazıldı.
 - Kapsam uyarısı: R24 büyüdü (taban, bear kilidi, auto-lock, temizleme aracı, kill tasfiyesi). İnşa her
   rock için ayrı Codex oturumu ister; bir kota penceresine sığmayabilir.
+
+## Round 3 (kota yenilendikten sonra)
+### Integrator findings (Codex, verbatim)
+
+Round 2 bulgularının 1–5, 8–12 ve 15–17 numaralı karşılıkları yeterli; 13’ün gerekçesi geçersiz, 14 yalnız açılış için düzeltilmiş. Yeni kill tasarımı ise henüz sahibin kararını tam karşılamıyor.
+
+- [FIX] Kill aktifken ana döngü `stock_bot.py:452-457` üzerinden uzlaştırmaya ulaşmadan sürekli `continue` ediyor; R24(j) yardımcı metodu doğrudan çağırarak geçse bile üretimde pending tasfiye ilerlemez -> Kill branch’inde broker sorgusu, `kill_close_pending` uzlaştırması ve tekrar kapatma çalıştırılsın; gerçek `run` döngüsü ve restart üzerinden test edilsin.
+- [FIX] R24 kapatma isteğini gönderdikten sonra `kill_close_pending` yazdığı için API timeout’u veya aradaki crash, stopları iptal edilmiş fakat kalıcı niyeti olmayan pozisyon bırakabilir -> Broker pozisyon snapshot’ını ve tasfiye niyetini API çağrısından önce atomik kaydet; çağrı-sonrası crash ve belirsiz-timeout testleri ekle.
+- [FIX] `cancel_orders=True` koruyucu stopları kaldırırken 10 dakikalık timeout ve sınırlı retry tüketilince pozisyon süresiz açık ve korumasız kalabilir; bu Ihsan’ın kabul etmediği kill-liquidation riskidir -> Flat olana veya sahibin kayıtlı devralmasına kadar duplicate-safe sorgula/kapat döngüsü çalıştır ve bekleyen pozisyon için doğrulanmış koruma sağla.
+- [FIX] `kill_close_pending` doğrudan yeni-risk kapısı ve sağlık girdisi değildir; kill dosyası flat olmadan temizlenip süreç yeniden başlatılırsa yeni giriş açılabilir -> Her pending kayıt tüm yeni riski anında engellesin ve `saglik.py` tarafından doğrudan DEGRADED/TIKALI gösterilsin.
+- [FIX] Canlı SPY parking pozisyonu yerel pozisyon defterinden özellikle çıkarılıyor (`stock_bot.py:1798-1803`), fakat R24(j) parking’i kapsamadan “her açık pozisyon” tasfiyesini kanıtlayabilir -> Pending envanterini broker snapshot’ından oluştur ve gerçek `index_parking` SPY içeren kill/restart/flat testini zorunlu kıl.
+- [FIX] Mevcut dış-kapanış yolu yalnız en yeni SELL dolum fiyatını bulup tüm eski miktara uygular (`stock_bot.py:1972-2018`), dolayısıyla birden fazla retry/kısmi dolumla R24(j) geçerken PnL, ledger ve zarar serisi yanlış olabilir -> Tüm ilgili execution’ları miktar ağırlıklı ve kimlik bazlı uzlaştır; çok-emirli kısmi dolum testi ekle.
+- [FIX] Auto-lock yalnız `stock_long` ve `bear_etf` için tanımlandığından R5’ten zaten muaf olan `index_parking` (`core/risk_guard.py:120-122`) emniyet kilidi altında yeni gerçek risk açabilir -> `LIVE_AUTO_LOCK` bütün `_RISK_KINDS` için girişten önce uygulansın; parking unwind/çıkışları muaf tutulsun ve test edilsin.
+- [FIX] Auto-lock yazım hatasında bellek-içi halt süreç boyunca korur fakat restart’ta kaybolur ve `saglik.py` bunu göremez; R24(g)/(i) ayrı ayrı geçerken sistem false-green olabilir -> Canlı girişini durable safety-state yazılabilirliğiyle koşullandır ve yazım-hatası ardından yeni süreç ile fail-closed/DEGRADED testi ekle.
+- [FIX] Broker emri gönderildikten sonraki beklenmedik doğrulama istisnası mevcut genel handler’da yalnız `False` döner (`core/executor.py:454-529,573-583`), bu yüzden “unverified outcome” testi geçerken dolmuş pozisyon auto-lock’suz kalabilir -> Submission sonrası bütün exception yollarını pozisyonu kalıcılaştırıp auto-lock’a bağlayan bir fail-closed sınırına al ve exception-injection testi ekle.
+- [FIX] Bozuk `kill_switch.json` hem botta sessizce fail-open oluyor (`core/kill_switch.py:45-80`) hem sağlıkta okuma hatası yok sayılarak kill=false kabul ediliyor (`tools/saglik.py:120-139`) -> Canlıda bozuk güvenlik kaydını aktif kill/UNKNOWN-DEGRADED say ve bağımsız bozuk-dosya testi ekle.
+- [FIX] Dosya sha256’ları aynı image kanıtı değildir; iki Coolify rebuild’i arasında alt sınırla bırakılmış bağımlılıklar ve base image değişebilir (`Dockerfile:1-8`, `requirements.txt`) ve kod hashleri geçerken çalışma davranışı bozulabilir -> Adım 1’de doğrulanan immutable image digest’ini adım 2’de rebuild etmeden yeniden oluştur veya bağımlılık/base’i kilitleyip tam image digest’ini doğrula.
+- [FIX] R23 açılışta redeploy’a geçmiş olsa da geri alma hâlâ `LIVE_ENTRIES_ENABLED=false + restart` diyor ve `1e731be` güvenli R24 mekanizmalarını açık pozisyon varken kaldırabilir -> Geri almayı aynı doğrulanmış R24 image’ıyla recreate + konteyner-içi `false` kanıtı yap; kod rollback’ini yalnız broker flat ve state uyumluluğu doğrulandıktan sonra uygula.
+
+VERDICT: NOT YET
+### Visionary response (Claude)
+
+Claude doğruladı: `stock_bot.py:452-457` kill dalında `sleep(60); continue` (bekleyen tasfiye üretimde
+ilerlemez, DOĞRU ve kritik); `stock_bot.py:1798-1803` parking yerel defterden çıkarılıyor (DOĞRU);
+`core/kill_switch.py:45-80` bozuk dosyada `except: pass` fail-open (DOĞRU); `requirements.txt` tamamen
+`>=` (DOĞRU, dolayısıyla dosya hash'i aynı çalışma ortamı kanıtı değil).
+
+Yapısal karar: R24 ikiye bölündü , **R24a** (emniyet kilitleri) ve **R24b** (dürüst kill tasfiyesi).
+Tek rock'a sığmayacak kadar büyüdü ve kill tasfiyesi kendi kanıt kümesini hak ediyor.
+
+- ACCEPTED 1 (kill dalı uzlaştırmaya ulaşmıyor) -> R24b: kill dalında broker sorgusu + uzlaştırma +
+  duplicate-safe yeniden kapatma + stop yeniden yerleştirme; test (c) GERÇEK `run` döngüsünden geçer.
+- ACCEPTED 2 (niyet çağrıdan sonra yazılıyor) -> R24b: envanter + niyet çağrıdan ÖNCE atomik; test (b)
+  çağrı-sırası istisna ve sonrası crash enjeksiyonu.
+- ACCEPTED 3 (deneme tükenince pozisyon süresiz çıplak) -> R24b: vazgeçme yok; flat ya da sahip
+  devralması olana kadar backoff'lu döngü; süre aşımı alarm + auto-lock ama döngü durmaz; test (d)(e).
+- ACCEPTED 4 (`kill_close_pending` kapı ve sağlık girdisi değil) -> R24b: pending varken bütün yeni risk
+  reddedilir (kill dosyası silinip yeni süreç başlasa bile), `saglik.py` DEGRADED/TIKALI; test (g).
+- ACCEPTED 5 (parking yerel defterde yok) -> R24b: envanter broker anlık görüntüsünden; test (f).
+- ACCEPTED 6 (tek fiyat tüm miktara) -> R24b: kimlik bazlı, miktar ağırlıklı uzlaştırma; test (h).
+- ACCEPTED 7 (auto-lock yalnız iki tür) -> R24a: auto-lock BÜTÜN `_RISK_KINDS`, parking ALIMI dahil;
+  parking çözme ve çıkışlar muaf; test (h).
+- ACCEPTED 8 (bellek-içi halt restart'ta kaybolur) -> R24a: canlı giriş güvenlik durumunun
+  YAZILABİLİRLİĞİNE bağlı; yazılamıyorsa yeni süreç girişi baştan reddeder + DEGRADED; test (i).
+- ACCEPTED 9 (gönderim sonrası istisna) -> R24a tetikleyici (4): gönderim sonrası her istisna yolu
+  fail-closed sınıra alınır, pozisyon kalıcı + auto-lock; test (g) istisna enjeksiyonu.
+- ACCEPTED 10 (bozuk kill_switch.json fail-open) -> R24a: canlıda bozuk kayıt = aktif kill; `saglik.py`
+  UNKNOWN/DEGRADED; test (j).
+- ACCEPTED 11 (dosya hash'i image kanıtı değil) -> R23 adım 2: YENİDEN DERLEME YOK. Aynı image ile
+  `--force-recreate`; image ID adım 4'tekiyle aynı olmalı, değiştiyse kilit açılmaz ve doğrulama baştan
+  koşar. `requirements.txt` sabitleme RF-ISSUES-5'e (YÜKSEK) eklendi.
+- ACCEPTED 12 (geri alma eski koda dönüyor) -> R23: geri alma aynı doğrulanmış image ile recreate +
+  konteyner-içi `false` kanıtı; kod rollback'i yalnız broker flat ve state uyumluluğu doğrulanınca.
+- Round 2'deki 13'ün gerekçesi Codex'e göre geçersizdi; kabul edildi ve 11 ile birlikte düzeltildi.

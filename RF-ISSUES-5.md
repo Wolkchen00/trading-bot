@@ -14,6 +14,13 @@ RF-ISSUES-4::KILIT-KAPISI-ARACI kapıyı "kilidi açan" olarak tanımlıyordu. K
 açıldı; kapının rolü artık "açık kilidi izleyen ve gerekirse kapatmayı öneren". Sözleşme yeniden
 yazılmalı. Sağlık aracı "kilit açık, ölçüm kapısı geçmedi (sahip kararı)" diye etiketlemeli.
 
+### BAGIMLILIK-SURUMLERI-SABIT-DEGIL (Codex R3, ertelendi)
+`requirements.txt` tamamen `>=` kullanıyor (alpaca-py, pandas, numpy, ta, scikit-learn...). Her Coolify
+rebuild'i gerçek parayla çalışan bota sessizce yeni kütüphane sürümü getirebilir; dosya sha256'ları
+aynı olsa bile çalışma davranışı değişebilir. Base image de sabit değil. Sürümleri kilitle (lock
+dosyası) ve deploy'da image digest'ini kanıt olarak kullan. Bu döngüde risk yalnız "kilit açılışında
+rebuild yok" kuralıyla çevrelendi.
+
 ### MERKEZI-TOPLAM-POZISYON-TAVANI (Codex R1 #17, ertelendi)
 `max_open_positions` yalnız normal long akışında (`stock_bot.py:685-723`); BearBrain yalnız kendi
 sayısına bakıyor (`core/bear_brain.py:537-545`). Canlıda bear/opsiyon/short açılmadan ÖNCE tavan

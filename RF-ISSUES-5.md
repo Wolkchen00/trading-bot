@@ -14,11 +14,6 @@ RF-ISSUES-4::KILIT-KAPISI-ARACI kapıyı "kilidi açan" olarak tanımlıyordu. K
 açıldı; kapının rolü artık "açık kilidi izleyen ve gerekirse kapatmayı öneren". Sözleşme yeniden
 yazılmalı. Sağlık aracı "kilit açık, ölçüm kapısı geçmedi (sahip kararı)" diye etiketlemeli.
 
-### KILL-TASFIYESI-BROKER-FLAT-DOGRULAMASI (Codex R1 #19, ertelendi)
-`stock_bot.py:2436-2447` `close_all_positions` kabul edilir edilmez yerel pozisyonları siliyor; kısmi
-kapanış hatasında broker'da metadata'sız pozisyon kalır. Düzeltme: yerel durumu broker flat olana dek
-koru, uzlaştırma yolu çıkışları kaydetsin, süre aşımında kritik alarm. PAPER-MSFT ile birlikte ele alınmalı.
-
 ### MERKEZI-TOPLAM-POZISYON-TAVANI (Codex R1 #17, ertelendi)
 `max_open_positions` yalnız normal long akışında (`stock_bot.py:685-723`); BearBrain yalnız kendi
 sayısına bakıyor (`core/bear_brain.py:537-545`). Canlıda bear/opsiyon/short açılmadan ÖNCE tavan

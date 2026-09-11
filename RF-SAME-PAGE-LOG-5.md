@@ -76,3 +76,61 @@ yalnız alarm), `stock_bot.py:2436-2447` (kill tasfiyesi state'i hemen siliyor).
 - ACCEPTED 20 (tek operasyon deploy) -> R23 iki adım: env=false deploy + doğrulama, sonra ayrı env=true restart.
 - ACCEPTED (kısmen) 21 (watchdog) -> otomatik kısım R24 auto-lock; ilk giriş izlemi Claude elle (R23 adım 3). Oversize/provenance otomatik kapatma RF-ISSUES-5.
 - R5 GÖRÜŞÜ -> kayda geçti ve İhsan'a iletildi. "~$75 en kötü kayıp" iddiası plandan kaldırıldı (RİSKLER 2).
+
+## Round 2
+### Integrator findings (Codex, verbatim)
+
+- [FIX] Revizyon 2’nin gerçek plan commit’i `d0ae983` iken başlık yalnız `39239f9` planlama commit’ini kaydediyor -> Kod baseline’ı, ilk plan commit’i ve Revizyon 2 commit’ini ayrı ayrı yaz.
+- [FIX] R24 `peak_equity` değerini yalnız açılışta ve günlük resette güncellediği için gün içi equity zirvesini kaçırıyor -> Her güvenilir account refresh’inde yükselen peak’i atomik kaydet veya “yüksek-su” iddiasını günlük gözlemle sınırla.
+- [FIX] Bozuk peak dosyasında “son geçerli değer” tek dosyadan geri getirilemez ve açılış equity’si daha düşük olabilir -> Canlıda bozuk/okunamayan peak kaydı doğrudan auto-lock oluştursun; fresh-process bozuk-dosya testi ekle.
+- [FIX] R24 kanıtı bear için yalnız `LIVE_ENTRIES_ENABLED=true` ve bear env yok durumunu kapsıyor; bear env açıkken genel R5 kapalı senaryosu kanıtsız -> Dört kombinasyonlu test yaz ve `bear_etf` için iki kilidin de açık olmasını zorunlu kıl.
+- [FIX] Periyodik korumada `ELECTED_UNFILLED` da başarısız kapsama sayılıyor (`core/protection.py:75-89`), fakat R24 yalnız `FAILED_NAKED` sonucunu auto-lock’a bağlıyor -> `ProtectionSummary.ok == False` olan iki sonucu da kalıcı kilide bağla ve ayrı test et.
+- [FIX] `live_auto_lock.json` yazımı başarısız olursa fail-closed davranış tanımlanmamış -> Disk yazımı başarısız olsa bile bellek-içi risk halt’ı kur, kritik alarm üret ve yeni girişe izin verme.
+- [FIX] Auto-lock mevcutken yeni aday gelmezse R22 hiçbir `LIVE_AUTO_LOCK` funnel reddi görmez ve eski pencereyi sağlıklı gösterebilir -> `saglik.py` auto-lock dosyasını doğrudan okuyup `entry_authorization` durumunu hemen KILITLI/DEGRADED yapsın.
+- [FIX] Auto-lock temizleme komutu açık pozisyon hâlâ çıplak olduğu halde dosyayı silebilir -> Temizleme aracı broker-flat veya doğrulanmış tam stop kapsamı olmadan kilidi kaldırmasın.
+- [FIX] Fractional DAY stopunun günlük resette mock broker ile yeniden kurulması overnight korumayı kanıtlamaz; reset kapalı piyasada reddedilebilir ve önceki stop zaten gece düşmüştür -> Kapalı-piyasa reddi ardından market-open retry/doğrulama testi ekle ve overnight boşluğunu giderilmiş değil kabul edilmiş risk diye yaz.
+- [FIX] R22 pencerede herhangi bir eski `entries > 0` varsa AKIYOR diyor; daha sonraki günlerde LOSS_STREAK veya AUTO_LOCK tüm adayları durdursa bile tıkanıklığı maskeler -> Günleri ayrı sınıflandır ve başarılı girişten sonraki daha yeni durum blokerine öncelik ver.
+- [FIX] R22 terminal nedenler listeliyor fakat `BRACKET_REJECT`, `ALREADY_FLAT`, kuyruk sonuçları ve nedeni kaybolan eligible aday için sınıflandırma/fallback tanımlamıyor -> Her `eligible_buy` için tam bir terminal-sonuç invariantı kur; eşleşmeyen veya eksik sonuç UNKNOWN/TIKALI olsun.
+- [FIX] R22 “live ve paper fixture” done koşuluna rağmen proof (a) yalnız paper fixture’ını doğruluyor -> Aynı eski-veri göçü ve `LOSS_STREAK_WARN` sonucunu live fixture için de bağımsız test et.
+- [FIX] R23’ün container SHA doğrulaması uygulanabilir değil; Dockerfile commit’i gömmüyor ve fallback env’lerinin Coolify’da bulunduğu kanıtlanmamış -> Build sırasında immutable SHA dosyası/OCI label ekle ve çalışan image digest’iyle birlikte doğrula.
+- [FIX] Container environment restart sırasında değişmez; `LIVE_ENTRIES_ENABLED=true` ardından “yalnız restart” eski container env’iyle devam edebilir -> Doğrulanmış aynı image digest’ini rebuild etmeden recreate/redeploy et, yeni container içinde env ve digest’i yeniden doğrula.
+- [FIX] Merkezi tavanın ertelenme gerekçesi `BOT_MODE=long_only`, options kapalı ve bear kilitli varsayımlarına bağlı, fakat R23 bunların etkin runtime değerlerini doğrulamıyor -> Kilit açılmadan önce bu üç koşulu zorunlu deploy kapısı yap.
+- [FIX] R23’te `$100-300` aralık kontrolü yanlış bir $250 emri kabul ederken sektör/cash klampıyla geçerli $70 emri reddedebilir -> Güven bandı, sektör katsayısı, equity tavanı ve nakde göre hesaplanan kesin beklenen notional ile karşılaştır.
+- [FIX] “Koruyucu stop emri var” kanıtı stale, yanlış yönlü veya eksik miktarlı emri kabul edebilir -> İlk girişte aktif durum, SELL yönü, tam qty kapsamı, hedef stop fiyatı ve TIF’i brokerdan yeniden okuyarak doğrula.
+- [CLARIFY] Bozuk kill tasfiyesi yüksek risk olarak ertelendi fakat iki yeni owner kararı bu riski kabul ettiğini söylemiyor -> İhsan, `close_all_positions` kabul edilip broker flat olmadan yerel state’in silinmesi riskini açıkça kabul ediyor mu?
+
+R5 GORUSU (guncel):
+Tam bant açılışı nedeniyle ölçülmemiş alfa, 45 eşiği ve pozisyon başına $300 maruziyet bilinçli kalan gerçek-para riskidir.
+BearBrain ayrı kilitle güvenle kapsam dışında tutulabilir; bunun için iki kilitli test matrisi ve runtime mod doğrulaması şarttır.
+R24 tekrarlanan girişleri keser, fakat çıplak kalan ilk pozisyonu, overnight fractional boşluğunu veya doğrulanmamış kill tasfiyesini kurtarmaz.
+R23’ün iki-aşamalı fikri doğrudur; ancak env değişikliğinde restart yerine aynı doğrulanmış image digest’iyle recreate ve container-içi SHA/env kanıtı gerekir.
+Bu düzeltmelerden sonra sıra operasyonel olarak yeterli olur; kill tasfiyesi ve gap riski yine açıkça kabul edilmiş residual risk olarak kalırdır.
+
+VERDICT: NOT/NOT YET
+### Visionary response (Claude)
+
+Not: Codex'in son satırı `VERDICT: NOT/NOT YET` (biçim bozuk); NOT YET olarak işlendi.
+Claude doğruladı: `core/protection.py:75-89` `failed` = FAILED_NAKED + ELECTED_UNFILLED (doğru);
+`core/shadow_ledger.py:80-99` commit SHA yalnız git ya da `SOURCE_COMMIT`/`BOT_COMMIT_SHA` env'ine
+bağlı, Dockerfile commit gömmüyor (doğru).
+
+- USER DECISION (CLARIFY 18): İhsan kill tasfiyesi riskini KABUL ETMEDİ, "şimdi düzelt" dedi -> R24'e
+  dürüst kill tasfiyesi eklendi (`kill_close_pending`, broker-flat'e kadar kayıt korunur, süre aşımında
+  alarm + yeniden deneme + auto-lock), test (j). RF-ISSUES-5'ten çıkarıldı.
+- ACCEPTED 1 -> başlık üç commit'i ayrı yazıyor.
+- ACCEPTED 2 (daha basit alternatif) -> "günlük yüksek-su": açılış + günlük reset; gün içi zirve kasıtlı hariç; test (b).
+- ACCEPTED 3 -> canlıda bozuk peak = auto-lock + alarm; paper'da yeniden kurulum; yeni-süreç testi (c).
+- ACCEPTED 4 -> bear için iki kilit şart; dört kombinasyon testi (d).
+- ACCEPTED 5 -> auto-lock `ProtectionSummary.failed > 0` (FAILED_NAKED + ELECTED_UNFILLED); test (f).
+- ACCEPTED 6 -> yazım hatasında bellek-içi halt + alarm; test (g).
+- ACCEPTED 7 -> `saglik.py` auto-lock dosyasını doğrudan okur; test (i).
+- ACCEPTED 8 -> temizleme komutu çıplak pozisyonda reddeder, `--zorla` sebep loglar; test (h).
+- ACCEPTED 9 -> kapalı-piyasa reddi + açılış yeniden yerleşim testi (k); 16:00 ET sonrası stopsuz pencere RİSKLER 2'de kabul edilmiş kalan risk.
+- ACCEPTED 10 -> R22 günleri ayrı sınıflar, en yeni eligible gün belirler; test (a3).
+- ACCEPTED 11 -> terminal-sonuç invaryantı, eşleşmezse UNKNOWN, sınıflanmamış sebep UNCLASSIFIED = durum blokeri; test (a4).
+- ACCEPTED 12 -> live fixture bağımsız test (a2).
+- ACCEPTED 13 (değiştirilmiş) -> OCI label/imaj digest yerine değişen dosyaların sha256 parmak izi, konteyner içinde ana dalla birebir (R23 adım 4, 9). Gerekçe: aynı kanıtı Dockerfile/Coolify build ayarına dokunmadan verir.
+- ACCEPTED 14 -> env değişikliğinden sonra restart DEĞİL Coolify redeploy (yeniden oluşturma) + konteyner-içi env/parmak izi (adım 8-9).
+- ACCEPTED 15 -> açılış kapısı: long_only, opsiyon kapalı, bear env yok, auto-lock yok (adım 6).
+- ACCEPTED 16 -> ilk girişte kesin beklenen notional karşılaştırması (adım 10).
+- ACCEPTED 17 -> ilk girişte stop broker'dan tam doğrulanır: aktif, SELL, tam qty, fiyat, TIF (adım 11).

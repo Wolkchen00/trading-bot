@@ -493,6 +493,15 @@ STOCK_CONFIG = {
         os.getenv("LIVE_ENTRIES_ENABLED", "false").strip().lower()
         in ("1", "true", "yes")
     ),
+    # R24a , BEARBRAIN CANLI KILIDI (Ihsan karari 2026-09-12: bear canlida
+    # KAPALI kalir). Ters-ETF girisi canlida HEM `live_entries_enabled` HEM
+    # bunu ister; tek basina R5 kilidini acmak bear acmaz. Ayri anahtar olmasi
+    # kasitli: kilit acilisi hisse hunisini serbest birakir, dusus-kazanc
+    # beynini DEGIL (o ayri bir risk ve ayri bir karar).
+    "live_bear_entries_enabled": (
+        os.getenv("LIVE_BEAR_ENTRIES_ENABLED", "false").strip().lower()
+        in ("1", "true", "yes")
+    ),
 }
 
 # ============================================================

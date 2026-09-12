@@ -52,6 +52,22 @@ class OrderExecutor:
             pass
 
     @staticmethod
+    def _auto_lock_safe(bot, sebep: str, symbol: str = "", ayrinti: str = "") -> None:
+        """R24a: otomatik kilit , YALNIZ canlida, ve arizasi emri etkilemez."""
+        try:
+            from config import TRADING_MODE
+            default_paper = TRADING_MODE != "live"
+        except Exception:
+            default_paper = True
+        if bool(getattr(bot, "is_paper", default_paper)):
+            return          # paper'da kilit YAZILMAZ
+        try:
+            from core.safety_state import kilitle
+            kilitle(bot, sebep, symbol, ayrinti)
+        except Exception as exc:
+            logger.error(f"  Otomatik kilit cagrisi basarisiz: {exc}")
+
+    @staticmethod
     def _terminal_block_safe(
         bot, symbol: str, reason: str, provenance: str
     ) -> None:
@@ -420,6 +436,9 @@ class OrderExecutor:
                 self._journal_prepare_safe(
                     entry_client_order_id, symbol, "BUY", fill_provenance, qty=qty
                 )
+                # R24a: bu satirdan SONRA alinan her istisna "dolum olmus
+                # olabilir" demektir , fail-closed sinir burasi.
+                _emir_gonderildi = True
                 order = bot.client.submit_order(request)
                 self._journal_bind_safe(entry_client_order_id, order, symbol)
                 bracket_success = True
@@ -463,6 +482,9 @@ class OrderExecutor:
                 self._journal_prepare_safe(
                     entry_client_order_id, symbol, "BUY", fill_provenance, qty=qty
                 )
+                # R24a: bu satirdan SONRA alinan her istisna "dolum olmus
+                # olabilir" demektir , fail-closed sinir burasi.
+                _emir_gonderildi = True
                 order = bot.client.submit_order(request)
                 self._journal_bind_safe(entry_client_order_id, order, symbol)
 
@@ -554,6 +576,13 @@ class OrderExecutor:
                     f"{protection.detail}",
                 )
                 self._terminal_block_safe(bot, symbol, "STOP_UNVERIFIED", fill_provenance)
+                # R24a TETIK 1: pozisyon ACIK ama korumasi dogrulanamadi.
+                # Belirsizlikte dogru davranis DURMAKTIR ve bu karar restart'i
+                # atlatmalidir.
+                self._auto_lock_safe(
+                    bot, "STOP_UNVERIFIED", symbol,
+                    f"{protection.outcome.value}: {protection.detail}",
+                )
                 return False
 
             bot.positions[symbol]["server_stop_verified"] = True
@@ -615,6 +644,14 @@ class OrderExecutor:
                 "PDT_REJECT" if _pdt_red else "BUY_EXCEPTION",
                 locals().get("fill_provenance", "strategy"),
             )
+            # R24a TETIK 4: emir GONDERILDIYSE dolum olmus olabilir ve biz
+            # bilmiyoruz. PDT reddi emir yolunun TEMIZ bir reddidir (broker
+            # kabul etmedi), o yuzden kilit yazmaz.
+            if locals().get("_emir_gonderildi") and not _pdt_red:
+                self._auto_lock_safe(
+                    bot, "POST_SUBMIT_EXCEPTION", symbol,
+                    f"{type(e).__name__}: {e}",
+                )
             bot.consecutive_errors += 1
             return False
 

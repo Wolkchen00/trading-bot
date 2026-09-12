@@ -1,5 +1,7 @@
 """Yeni risk acan tum emir yollari icin merkezi guvenlik kapisi."""
 
+from utils.logger import logger
+
 
 _RISK_KINDS = {
     "stock_long",
@@ -24,6 +26,17 @@ _CODE_ERRORS = (
 def classify_error(exc: Exception) -> str:
     """Istisnayi kod hatasi veya broker/ag/API hatasi olarak siniflandir."""
     return "code" if isinstance(exc, _CODE_ERRORS) else "broker"
+
+
+def _bayrak(config, anahtar: str) -> bool:
+    """Bayragi once cagri config'inden, yoksa STOCK_CONFIG'ten oku , fail-closed."""
+    if anahtar in config:
+        return bool(config.get(anahtar, False))
+    try:
+        from config import STOCK_CONFIG
+        return bool(STOCK_CONFIG.get(anahtar, False))
+    except Exception:
+        return False
 
 
 def _deny(bot, reason: str) -> tuple[bool, str]:
@@ -117,15 +130,51 @@ def can_open_new_risk(
         ):
             return _deny(bot, "RISK_HALT")
 
+        try:
+            from config import TRADING_MODE
+            default_paper = TRADING_MODE != "live"
+        except Exception:
+            default_paper = True
+        is_live = not bool(getattr(bot, "is_paper", default_paper))
+
+        # R24a , OTOMATIK KILIT: BUTUN yeni risk turlerini kapsar, parking DAHIL.
+        # Parking R5'ten muaftir (savunma amacli nakit parki) ama emniyet
+        # kilidinden muaf DEGILDIR: bot kendi durumundan emin degilken yeni
+        # ALIM yapmaz. Parking COZME (satis) ve tum cikis/koruma yollari bu
+        # kapidan gecmez, dolayisiyla serbest kalir.
+        if is_live:
+            from core.safety_state import (
+                auto_lock_durumu, guvenlik_dizini_yazilabilir,
+            )
+            # State dizini bot'a degil KURULUMA ait bir gercektir; bot uzerinde
+            # yoksa config'ten okunur. Ikisi de yoksa fail-closed.
+            state_dir = getattr(bot, "_state_dir", None)
+            if not state_dir:
+                try:
+                    from config import STATE_DIR
+                    state_dir = STATE_DIR
+                except Exception:
+                    state_dir = None
+            if not state_dir:
+                logger.error("  State dizini belirlenemedi , canli giris reddedildi")
+                return _deny(bot, "LIVE_AUTO_LOCK")
+            yazilabilir, yazma_hatasi = guvenlik_dizini_yazilabilir(state_dir)
+            if not yazilabilir:
+                # Kilit YAZILAMIYORSA canli giris BASTAN reddedilir: aksi halde
+                # bir arizada kilit yazilamaz ve restart'ta buharlasir.
+                logger.error(
+                    f"  Guvenlik dizini YAZILAMIYOR ({yazma_hatasi}) , "
+                    "canli giris reddedildi"
+                )
+                return _deny(bot, "LIVE_AUTO_LOCK")
+            kilitli, kilit_sebep = auto_lock_durumu(bot, state_dir)
+            if kilitli:
+                logger.error(f"  OTOMATIK KILIT aktif ({kilit_sebep}) , yeni risk YOK")
+                return _deny(bot, "LIVE_AUTO_LOCK")
+
         # Parking strateji girisi degil, savunma amacli nakit parkidir. R5 canli
         # giris kilidinden muaftir; kill/risk-halt kapilari yine yukarida gecerlidir.
         if kind != "index_parking":
-            try:
-                from config import TRADING_MODE
-                default_paper = TRADING_MODE != "live"
-            except Exception:
-                default_paper = True
-            is_live = not bool(getattr(bot, "is_paper", default_paper))
             if is_live:
                 if "live_entries_enabled" in config:
                     live_entries_enabled = config.get(
@@ -146,6 +195,14 @@ def can_open_new_risk(
                     # donguyu kiran tek sey golge kaydidir.
                     _golge_kaydet(bot, config, kind, symbol)
                     return _deny(bot, "LIVE_LOCK_R5")
+
+        # R24a , BEARBRAIN AYRI KILIT. R5'TEN SONRA bakilir: R5 kapaliyken asil
+        # sebep R5'tir, bear kilidi ancak R5 ACIKKEN anlamlidir. Tek basina
+        # LIVE_ENTRIES_ENABLED=true ters-ETF ACMAZ (Ihsan karari 2026-09-12:
+        # bear canlida KAPALI kalir, kendi anahtarini ister).
+        if is_live and kind == "bear_etf":
+            if not _bayrak(config, "live_bear_entries_enabled"):
+                return _deny(bot, "LIVE_BEAR_LOCK")
 
         return True, ""
     except Exception:

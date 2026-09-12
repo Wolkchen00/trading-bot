@@ -150,6 +150,30 @@ def profil_sagligi(profil: str, state_dir: str, simdi: datetime) -> ProfilSaglig
         kilit_acik = None
     yetki = giris_yetkisi_durumu(kilit_acik, is_paper=is_paper)
 
+    # R24a , OTOMATIK KILIT dosyasi DOGRUDAN okunur. Funnel'de henuz red
+    # gorulmemis olsa bile (or. kilit piyasa kapaliyken yazildi) arac bunu
+    # soylemek ZORUNDA; aksi halde kilitli bir bot yesil yanar.
+    if not is_paper:
+        from core.health_status import BoyutDurumu, Durum
+        from core.safety_state import auto_lock_oku
+        kayit, kilit_hata = auto_lock_oku(state_dir)
+        if kilit_hata:
+            yetki = BoyutDurumu(
+                Durum.DEGRADED,
+                f"otomatik kilit kaydi OKUNAMADI ({kilit_hata}) , fail-closed",
+                {"auto_lock": "OKUNAMADI"},
+            )
+        elif isinstance(kayit, dict):
+            yetki = BoyutDurumu(
+                Durum.DEGRADED,
+                (
+                    f"KILITLI (OTOMATIK: {kayit.get('sebep', 'BILINMIYOR')})"
+                    f" , {kayit.get('symbol') or '-'} @ {kayit.get('zaman', '?')}"
+                    " , temizleme: tools/kilit_temizle.py"
+                ),
+                {"auto_lock": dict(kayit)},
+            )
+
     # --- dolumlar (SAGLIK KANITI DEGIL)
     dolumlar = []
     try:

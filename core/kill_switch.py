@@ -76,8 +76,28 @@ class KillSwitch:
                             f"🚨 KILL SWITCH AKTİF (önceki oturum): {self.kill_reason}\n"
                             f"   Tekrar başlatmak için kill_switch.json dosyasını silin."
                         )
-            except Exception:
-                pass
+            except Exception as exc:
+                # R24a , FAIL-CLOSED: VAR AMA OKUNAMAYAN kill kaydi "yok gibi"
+                # ele alinamaz. Eski `except: pass` bozuk bir dosyayla guvenligi
+                # SESSIZCE devre disi birakiyordu , oysa guvenlik kaydinin
+                # bozulmasi tam olarak kill'in gerekli oldugu duruma isarettir.
+                # Paper'da eski davranis korunur (ogrenme akisi durmasin).
+                try:
+                    from config import TRADING_MODE
+                    canli = TRADING_MODE == "live"
+                except Exception:
+                    canli = True            # belirsizlikte CANLI varsay
+                if canli:
+                    self.is_killed = True
+                    self.kill_reason = f"kill_switch.json OKUNAMADI ({exc})"
+                    logger.error(
+                        f"KILL SWITCH AKTIF (FAIL-CLOSED): {self.kill_reason} , "
+                        "bozuk guvenlik kaydi 'yok' sayilmaz"
+                    )
+                else:
+                    logger.warning(
+                        f"  PAPER: kill_switch.json okunamadi ({exc}), yok sayildi"
+                    )
 
         logger.info(
             f"KillSwitch başlatıldı - "

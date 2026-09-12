@@ -261,7 +261,13 @@ class StockBot:
         else:
             self.max_pos_usd = config.get("max_position_usd", 200)
 
-        self.equity_floor = equity * config.get("equity_floor_pct", 0.85)
+        # R24a , KALICI YUKSEK-SU TABANI.
+        # Eski hal: taban her baslangicta MEVCUT equity'den hesaplaniyordu, yani
+        # dusus sonrasi bir restart tabani ASAGI cekiyordu ve koruma, korumasi
+        # gereken dususun pesinden gidiyordu. Artik taban KALICI ZIRVEDEN gelir.
+        self._state_dir = os.path.dirname(os.path.abspath(self.POSITIONS_FILE))
+        self._auto_lock_memory = None
+        self.equity_floor = self._emniyet_tabani_kur(equity, config)
 
         # Durum değişkenleri
         self.positions = {}
@@ -440,6 +446,21 @@ class StockBot:
         summary = self.position_manager.ensure_protective_stops(config)
         if not summary.ok:
             logger.error(f"  Periyodik koruma uzlaştırması eksik: {summary.detail}")
+        # R24a TETIK 2: gercek koruma basarisizligi (FAILED_NAKED /
+        # ELECTED_UNFILLED) = canlida korumasiz pozisyon var demektir. Yeni risk
+        # acmak bu durumda kabul edilemez ve karar restart'i atlatmalidir.
+        # SKIPPED_PARKING zaten `failed` sayilmiyor (tasarim geregi stopsuz).
+        try:
+            if summary.failed > 0 and not getattr(self, "is_paper", False):
+                from core.safety_state import TETIK_KORUMA_BASARISIZ, kilitle
+                kilitle(self, TETIK_KORUMA_BASARISIZ, ayrinti=summary.detail)
+                self.notifier.notify_critical(
+                    "KORUMA_BASARISIZ",
+                    f"Koruma uzlastirmasi {summary.failed} pozisyonda BASARISIZ "
+                    f"({summary.detail}). Bot otomatik kilide alindi; cikislar serbest.",
+                )
+        except Exception as exc:
+            logger.error(f"  Koruma tetikli otomatik kilit basarisiz: {exc}")
         return summary
 
     def _notify_main_loop_consecutive_error(
@@ -983,6 +1004,40 @@ class StockBot:
     # ============================================================
     # HİSSE ANALİZİ VE İŞLEM
     # ============================================================
+
+    def _emniyet_tabani_kur(self, equity: float, config: Dict, *, sebep="acilis") -> float:
+        """R24a: tabani KALICI ZIRVEDEN hesapla. Restart tabani DUSUREMEZ.
+
+        Bozuk zirve kaydi canlida otomatik kilit + kritik alarm uretir ve taban
+        yeniden KURULMAZ; paper'da mevcut equity ile yeniden kurulur (WARN).
+        """
+        from core.safety_state import TETIK_PEAK_BOZUK, kilitle, taban_hesapla, zirve_guncelle
+
+        pct = config.get("equity_floor_pct", 0.85)
+        is_live = not bool(getattr(self, "is_paper", False))
+        zirve, hata = zirve_guncelle(
+            self._state_dir, equity, is_live=is_live, sebep=sebep,
+        )
+        if hata and is_live:
+            kilitle(self, TETIK_PEAK_BOZUK, ayrinti=hata)
+            try:
+                self.notifier.notify_critical(
+                    "PEAK_KAYDI_BOZUK",
+                    f"Canli zirve kaydi okunamadi ({hata}). Taban yeniden "
+                    "KURULMADI ve bot otomatik kilide alindi.",
+                )
+            except Exception:
+                pass
+            # Onceki tabani koru; yoksa 0 (executor floor kontrolu 0'i atlar ama
+            # otomatik kilit zaten butun yeni riski durduruyor).
+            return float(getattr(self, "equity_floor", 0.0) or 0.0)
+        if zirve is None:
+            return float(getattr(self, "equity_floor", 0.0) or 0.0)
+        taban = taban_hesapla(zirve, pct)
+        logger.info(
+            f"  Taban: zirve ${zirve:,.2f} x {float(pct):.0%} = ${taban:,.2f}"
+        )
+        return taban
 
     def _funnel_bump(
         self,
@@ -2448,6 +2503,16 @@ class StockBot:
         today = self._et_today()
         if self._daily_reset_date == today:
             return
+
+        # R24a , GUNLUK yuksek-su: zirve yalniz acilista ve BURADA guncellenir.
+        # Gun ici zirve KASITLI sayilmaz; yoksa gun ici bir tepe tabani yukari
+        # cakar ve normal bir geri cekilme yeni girisleri durdurur.
+        try:
+            self.equity_floor = self._emniyet_tabani_kur(
+                float(self.equity), STOCK_CONFIG, sebep="gunluk reset",
+            )
+        except Exception as exc:
+            logger.error(f"  Gunluk taban guncellemesi basarisiz: {exc}")
 
         # Önceki günün özetini gönder (ilk çalıştırma hariç)
         if self._daily_reset_date is not None:

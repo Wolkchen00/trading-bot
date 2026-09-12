@@ -1,6 +1,6 @@
 # RF5-DEVAM.md , Canlandırma döngüsü: kaldığımız yer
 
-> Son güncelleme: 2026-09-12 10:25 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
+> Son güncelleme: 2026-09-12 10:35 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
 > **Devam eden oturum buradan başlar.** Önce bu dosyayı, sonra `RF-PLAN-5.md`'yi oku.
 
 ## Durum özeti
@@ -11,7 +11,7 @@
 | R21 eşik 45 + bantlar | ✅ **BİTTİ** (Claude yazdı, Codex kotası doldu) |
 | R22 dürüst giriş akışı | ✅ **BİTTİ** (Claude) |
 | R24a emniyet kilitleri | ✅ **BİTTİ** (Claude) |
-| R24b dürüst kill tasfiyesi | ✅ **BİTTİ** (`bb8908b`) , HENÜZ DEPLOY EDİLMEDİ |
+| R24b dürüst kill tasfiyesi | ✅ **CANLIDA** (`f896251`, 17:20 UTC) |
 | R23 adım 1 (kilit KAPALI deploy) | ✅ **CANLIDA** 2026-09-12 17:00 UTC |
 | R23 adım 2 (kilit açılışı) | R24b bitince |
 
@@ -184,7 +184,25 @@ gerçek `run()` döngüsünü koşuyor.
 
 **760 test geçiyor.** parity R24a ile birebir aynı.
 
-## Sıradaki iş , R24b DEPLOY + kilit açılışı
+## R24b DEPLOY ✅ (2026-09-12 17:20 UTC) , ikinci kilit-kapalı deploy
+
+**Commit:** `f896251` · **Image:** `sha256:92c29611d97f8948c39bd251bf0bf773cd60fb0f123d847f86172f1690e0788c`
+**Konteynerler:** `trading-live-...-172014467471`, `trading-paper-livecfg-...-172014490007`
+
+Deploy öncesi: canlı equity $491.08, SPY parkı 0.4517, 0 açık emir, otomatik kilit YOK,
+bekleyen tasfiye YOK, `peak_equity.json` yerinde.
+
+Doğrulama:
+1. **Parmak izi 18/18 birebir**, iki konteynerde de.
+2. **Taban redeploy'a rağmen korundu:** $417.42 (kalıcı zirve $491.08'den) , R24a'nın
+   asıl vaadi gerçek bir redeploy'da kanıtlandı.
+3. Eşik 45, R5 kilidi `False`, BEAR kilidi `False`, `kill_liquidation_timeout_min=10`.
+4. `pending_var_mi = (False, '')`, `auto_lock_oku = (None, None)` , temiz.
+5. **Sıfır GUARD_ERROR, sıfır Traceback** (iki konteyner).
+6. **Image içi test kapısı:** hedef suite 168, tam suite **760** , ağsız/hacimsiz.
+7. Sağlık 4 boyut, çıkış 3 (`entry_flow=TIKALI`, `entry_authorization=KILITLI`).
+
+## Sıradaki iş , R23 adım 2: KİLİT AÇILIŞI
 
 `RF-PLAN-5.md`'deki R21 bölümü (eşik 50 -> 45 + `[45,100]` bandı, live VE paper-livecfg).
 Sözleşme R20'nin `RF5-SOZLESME-R20.md` kalıbıyla yazılır, sonra:

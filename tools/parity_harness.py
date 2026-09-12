@@ -39,6 +39,7 @@ from core.agent_coordinator import AgentCoordinator
 from core.agent_stats import build_agent_data_ok
 from core.analyzer import TechnicalAnalyzer
 from core.decision_trace import DecisionTrace, GateTrace
+from core.run_profile import aktif_profil
 import core.trade_gates as trade_gates_module
 from core.trade_gates import TradeGates
 from utils.logger import logger
@@ -342,14 +343,34 @@ class _FixtureBot:
         self.earnings_calendar = _FixtureEarnings(gate_inputs)
         self.pdt_tracker = _FixturePDT(gate_inputs)
         self._consecutive_losses = int(gate_inputs.get("consecutive_losses", 0) or 0)
+        self._last_loss_at = (
+            gate_inputs.get("last_loss_at") or clock.astimezone(timezone.utc).isoformat()
+            if self._consecutive_losses else None
+        )
         self._symbol_consecutive_losses = {}
         self._symbol_consecutive_losses[str(gate_inputs.get("symbol", ""))] = int(
             gate_inputs.get("symbol_consecutive_losses", 0) or 0
         )
-        halt_until = gate_inputs.get("loss_halt_until")
-        self._loss_halt_until = (
-            _parse_clock(halt_until).replace(tzinfo=None) if halt_until else None
-        )
+        symbol = str(gate_inputs.get("symbol", ""))
+        self._symbol_last_loss_at = {
+            symbol: (
+                gate_inputs.get("symbol_last_loss_at")
+                or clock.astimezone(timezone.utc).isoformat()
+                if self._symbol_consecutive_losses[symbol] else None
+            )
+        }
+        self._streaks_by_profile = {
+            aktif_profil(): {
+                "consecutive_losses": self._consecutive_losses,
+                "last_loss_at": self._last_loss_at,
+                "symbols": {
+                    symbol: {
+                        "losses": self._symbol_consecutive_losses[symbol],
+                        "last_loss_at": self._symbol_last_loss_at[symbol],
+                    }
+                },
+            }
+        }
         self.clock = clock
 
     def get_stock_bars(self, _symbol: str, days: int = 14) -> pd.DataFrame:

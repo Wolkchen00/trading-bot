@@ -199,16 +199,29 @@ def test_two_distinct_partials_plus_final_books_full_episode_once(monkeypatch):
     monkeypatch.setattr(
         executor_module,
         "update_loss_streak",
-        lambda _bot, symbol, pnl: streak_calls.append((symbol, pnl)),
+        lambda _bot, symbol, pnl, **kwargs: streak_calls.append(
+            (symbol, pnl, kwargs)
+        ),
     )
     bot, performance, agent_perf = _closing_bot(entry_ts)
+    filled_at = datetime.now(timezone.utc) - timedelta(minutes=3)
+    bot.client.close_order.filled_at = filled_at
+    bot.positions["AAPL"]["entry_profile"] = "live"
     assert OrderExecutor(bot).execute_sell("AAPL", "TAKE_PROFIT") is True
 
     fixed_oracle = (110.0 - 100.0) * 2 + (115.0 - 100.0) * 2 + (105.0 - 100.0) * 6
     assert fixed_oracle == pytest.approx(80.0)
     assert len(performance.calls) == 1
     assert performance.calls[0]["pnl"] == pytest.approx(fixed_oracle)
-    assert streak_calls == [("AAPL", pytest.approx(fixed_oracle))]
+    assert len(streak_calls) == 1
+    streak_symbol, streak_pnl, streak_kwargs = streak_calls[0]
+    assert (streak_symbol, streak_pnl) == (
+        "AAPL", pytest.approx(fixed_oracle)
+    )
+    assert streak_kwargs == {
+        "filled_at": filled_at,
+        "entry_profile": "live",
+    }
     assert len(agent_perf.calls) == 1
     assert agent_perf.calls[0][0][2] == pytest.approx(fixed_oracle)
     sells = [fill for fill in read_fills("AAPL") if fill["side"] == "SELL"]

@@ -19,6 +19,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from core.fill_ledger import record_fill
 from core.protection import protection_alarm
 from core.risk_guard import can_open_new_risk
+from core.run_profile import aktif_profil
 from utils.logger import logger
 
 
@@ -289,6 +290,7 @@ class OptionsExecutor:
                     "entry_price": fill_price,
                     "cost_basis": total_cost,
                     "entry_time": datetime.now().isoformat(),
+                    "entry_profile": aktif_profil(),
                     "order_id": str(order.id) if order else None,
                     "episode_id": option_episode_id,
                     "confidence": analysis.get("confidence", 0),

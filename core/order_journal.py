@@ -57,6 +57,11 @@ def _save(path: str, data: dict) -> None:
             pass
 
 
+def atomic_write_json(path: str, data: dict) -> None:
+    """Ortak state dosyalari icin fsync + os.replace tabanli atomik JSON yazimi."""
+    _save(path, data)
+
+
 def prepare(
     client_order_id: str,
     symbol: str,

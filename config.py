@@ -420,9 +420,11 @@ STOCK_CONFIG = {
     "loss_streak_warn": 2,                  # 2 ardışık zarar → güven yükselt
     "loss_streak_halt": 4,                  # 4 ardışık zarar → 1 gün alım yasağı
     "loss_streak_halt_hours": 24,
+    "loss_streak_decay_hours": 24,          # Son zarardan 24 saat sonra genel seri söner
     "loss_streak_elevated_conf": 70,
     "coin_filter_enabled": True,            # Hisse bazlı ardışık zarar filtresi
     "coin_max_consecutive_losses": 3,
+    "symbol_loss_decay_hours": 24,          # Sembol serisi de kalıcı kilide dönüşmez
 
     # === R:R GATE ===
     # v4.8: gate artık executor'ın GERÇEK planladığı SL/TP ile oranı ölçer

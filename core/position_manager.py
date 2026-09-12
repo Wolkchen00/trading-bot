@@ -326,6 +326,7 @@ class PositionManager:
                     "entry_price": entry_price,
                     "qty": float(pos.qty),
                     "entry_time": cached.get("entry_time") or datetime.now().isoformat(),
+                    "entry_profile": cached.get("entry_profile"),
                     "highest_price": max(current_price, cached.get("highest_price", 0) or 0),
                     "breakeven_set": cached.get("breakeven_set", False),
                     "partial_sold": cached.get("partial_sold", False),
@@ -527,6 +528,7 @@ class PositionManager:
                     "entry_price": entry_price,
                     "qty": abs_qty,
                     "entry_time": cached.get("entry_time") or datetime.now().isoformat(),
+                    "entry_profile": cached.get("entry_profile"),
                     "lowest_price": min(
                         current_price, cached.get("lowest_price", current_price) or current_price
                     ),

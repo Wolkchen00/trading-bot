@@ -18,6 +18,7 @@ from core.streak import update_loss_streak
 from core.fill_ledger import record_fill
 from core.protection import protection_alarm
 from core.risk_guard import can_open_new_risk
+from core.run_profile import aktif_profil
 from utils.logger import logger
 
 
@@ -31,7 +32,7 @@ class ShortExecutor:
         self, symbol: str, side: str, order: object | None,
         fallback_qty: float, fallback_price: float, pnl_usd: float | None = None,
         episode_id: str | None = None,
-    ) -> None:
+    ):
         candidate = order
         oid = str(getattr(order, "id", "") or "").strip() or None
         if oid:
@@ -67,6 +68,7 @@ class ShortExecutor:
                     or None
                 ),
                 episode_id=episode_id,
+                ts_utc=getattr(candidate, "filled_at", None),
                 degraded=degraded,
             )
         except Exception as exc:
@@ -81,6 +83,7 @@ class ShortExecutor:
                 )
             except Exception:
                 pass
+        return getattr(candidate, "filled_at", None)
 
     def execute_short(self, symbol: str, analysis: Dict, config: Dict, short_config: Dict) -> bool:
         """
@@ -238,6 +241,7 @@ class ShortExecutor:
                 "entry_price": price,
                 "qty": qty,
                 "entry_time": datetime.now().isoformat(),
+                "entry_profile": aktif_profil(),
                 "order_id": str(order.id),
                 "episode_id": short_episode_id,
                 "stop_loss_price": stop_price,
@@ -361,7 +365,7 @@ class ShortExecutor:
 
             # Pozisyonu kapat
             close_order = bot.client.close_position(symbol)
-            self._record_short_fill(
+            filled_at = self._record_short_fill(
                 symbol, "BUY", close_order, qty, current_price,
                 pnl_usd=pnl_usd,
                 episode_id=pos.get("episode_id") or f"short|{symbol}|{entry_time}",
@@ -392,7 +396,11 @@ class ShortExecutor:
 
             # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti
             # (v4.12.1, core/streak.py; long taraflı execute_sell ile simetrik)
-            update_loss_streak(bot, symbol, pnl_usd)
+            update_loss_streak(
+                bot, symbol, pnl_usd,
+                filled_at=filled_at,
+                entry_profile=pos.get("entry_profile"),
+            )
 
             # Performans kaydı — short'lar da Kelly istatistiğine girsin
             if hasattr(bot, 'performance'):

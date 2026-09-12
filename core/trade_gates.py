@@ -18,6 +18,7 @@ from typing import Dict, Tuple
 
 from ta.trend import EMAIndicator
 
+from core.streak import decay_loss_streaks, parse_utc
 from utils.logger import logger
 
 
@@ -156,22 +157,29 @@ class TradeGates:
     def _check_loss_streak(self, symbol: str, analysis: Dict, config: Dict) -> Tuple[bool, str]:
         """Kayıp serisi kontrolü."""
         bot = self.bot
+        # Genel ve sembol serisi AYNI UTC saatinden beslenir. Bu cagri,
+        # check_all_gates'teki sembol filtresinden hemen once oldugu icin iki
+        # kapi da suresi dolmus state'i gorur.
+        now = datetime.now(timezone.utc)
+        decay_loss_streaks(bot, config, now=now)
         if not config.get("loss_streak_enabled", True):
             return False, ""
 
         loss_count = getattr(bot, '_consecutive_losses', 0)
 
         if loss_count >= config.get("loss_streak_halt", 4):
-            halt_until = getattr(bot, '_loss_halt_until', None)
-            if halt_until is None or datetime.now() < halt_until:
-                if halt_until is None:
-                    halt_hours = config.get("loss_streak_halt_hours", 24)
-                    bot._loss_halt_until = datetime.now() + timedelta(hours=halt_hours)
-                    logger.warning(f"  ⚠️ {loss_count} ardisik zarar! {halt_hours} saat alim yasagi")
+            last_loss_at = parse_utc(getattr(bot, '_last_loss_at', None))
+            halt_hours = config.get("loss_streak_halt_hours", 24)
+            halt_until = (
+                last_loss_at + timedelta(hours=halt_hours)
+                if last_loss_at is not None else now
+            )
+            if now < halt_until:
+                logger.warning(
+                    f"  ⚠️ {loss_count} ardisik zarar! Alim yasagi "
+                    f"{halt_until.isoformat()} UTC'ye kadar"
+                )
                 return True, "LOSS_STREAK_HALT"
-            else:
-                bot._consecutive_losses = 0
-                bot._loss_halt_until = None
 
         elif loss_count >= config.get("loss_streak_warn", 2):
             elevated_conf = config.get("loss_streak_elevated_conf", 70)

@@ -75,7 +75,14 @@ from core.gap_scanner import GapScanner
 from core.relative_strength import RelativeStrength
 from core.market_regime import MarketRegimeDetector
 from core.bear_brain import BearBrain
-from core.streak import update_loss_streak
+from core.streak import (
+    decay_loss_streaks,
+    loss_streak_expires_at,
+    restore_streak_state,
+    streaks_for_persistence,
+    update_loss_streak,
+)
+from core.order_journal import atomic_write_json
 from core.signal_queue import SignalQueue
 from core.funnel import DailyFunnel
 from core.agent_stats import AgentStats, build_agent_data_ok
@@ -237,7 +244,10 @@ class StockBot:
         self.sell_cooldown = {}
         self.consecutive_errors = 0
         self._consecutive_losses = 0
+        self._last_loss_at = None
         self._symbol_consecutive_losses = {}  # Hisse bazli ardisik zarar
+        self._symbol_last_loss_at = {}
+        self._streaks_by_profile = {}
         self._daily_buys_count = 0
         self._last_status_time = datetime.min
         self._heartbeat_counter = 0
@@ -1693,6 +1703,7 @@ class StockBot:
     def _log_heartbeat(self):
         """Gelişmiş heartbeat logu."""
         try:
+            decay_loss_streaks(self, STOCK_CONFIG)
             account = self.client.get_account()
             equity = float(account.equity)
             cash = float(account.cash)
@@ -1712,6 +1723,10 @@ class StockBot:
             bear_str = ""
             if getattr(self.bear_brain, "enabled", False):
                 bear_str = f"🐻 {self.bear_brain.mode}({self.bear_brain.score:.0f}) | "
+            streak_expires = loss_streak_expires_at(self, STOCK_CONFIG)
+            streak_str = f"Zarar serisi: {self._consecutive_losses}"
+            if streak_expires:
+                streak_str += f" (söner: {streak_expires})"
             logger.info(
                 f"  💓 ${equity:,.2f} ({pnl:+.2f}/{pnl_pct:+.1f}%) | "
                 f"Cash: ${cash:,.2f} | "
@@ -1719,7 +1734,7 @@ class StockBot:
                 f"[{', '.join(pos_details) or 'yok'}] | "
                 f"İşlem: {len(self.trades_today)} | "
                 f"DT: {pdt_status['week_day_trades']}/{pdt_status['max_day_trades']} | "
-                f"Zarar serisi: {self._consecutive_losses} | "
+                f"{streak_str} | "
                 f"{bear_str}"
                 f"Piyasa: {market_status['status']} {market_status.get('time_et', '')} | "
                 f"Kill: {'⚠️AKTİF' if self.kill_switch.is_active else 'OK'}"
@@ -1852,6 +1867,7 @@ class StockBot:
                             "entry_price": entry_price,
                             "qty": qty,
                             "entry_time": cached.get("entry_time") or datetime.now().isoformat(),
+                            "entry_profile": cached.get("entry_profile"),
                             "synced_from_alpaca": True,
                             "highest_price": max(current_price, cached.get("highest_price", 0) or 0),
                             "breakeven_set": cached.get("breakeven_set", False),
@@ -1888,6 +1904,7 @@ class StockBot:
                             "entry_price": entry_price,
                             "qty": abs(qty),
                             "entry_time": cached.get("entry_time") or datetime.now().isoformat(),
+                            "entry_profile": cached.get("entry_profile"),
                             "synced_from_alpaca": True,
                             "lowest_price": min(current_price, lc) if lc > 0 else current_price,
                             "breakeven_set": cached.get("breakeven_set", False),
@@ -1970,7 +1987,7 @@ class StockBot:
         entry_time = pos.get("entry_time", "")
 
         # Son dolan çıkış emrini bul (CLOSED emirler en yeniden eskiye gelir)
-        fill_price, order_type, exit_order_id = 0.0, "", ""
+        fill_price, order_type, exit_order_id, filled_at = 0.0, "", "", None
         try:
             exit_side = OrderSide.SELL if side == "LONG" else OrderSide.BUY
             req = GetOrdersRequest(
@@ -1984,6 +2001,7 @@ class StockBot:
                 fill_price = float(o.filled_avg_price)
                 order_type = str(getattr(o, "order_type", "") or getattr(o, "type", ""))
                 exit_order_id = str(getattr(o, "id", "") or "")
+                filled_at = getattr(o, "filled_at", None)
                 break
         except Exception as e:
             logger.debug(f"  {symbol} dış kapanış emri sorgulanamadı: {e}")
@@ -2037,14 +2055,18 @@ class StockBot:
             "entry_time": entry_time, "exit_order_id": exit_order_id or None,
             "time": datetime.now().isoformat(),
         })
-        self._save_position_metadata()
-
         # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti (v4.12.1,
         # core/streak.py). Eski etiket-bazlı sayaç kârlı bracket stop-out'u
         # zarar sayıyordu (13 Tem: AMZN +$0.12 → seri 1→2 → KAYIP KORUYUCU
         # canlı long hunisini kilitledi). Bear/hedge kapanışı seriye girmez.
         if not pos.get("bear_brain"):
-            update_loss_streak(self, symbol, pnl_usd)
+            update_loss_streak(
+                self, symbol, pnl_usd,
+                filled_at=filled_at,
+                entry_profile=pos.get("entry_profile"),
+            )
+        else:
+            self._save_position_metadata()
         if side == "LONG" and pnl_usd < 0:
             try:
                 self.wash_sale_tracker.record_loss_sale(
@@ -2110,6 +2132,7 @@ class StockBot:
                   "partial_sold", "partial_covered", "partial_intent",
                   "partial_retry_budget", "stop_loss_pct",
                   "stop_loss_price", "take_profit_pct", "entry_time",
+                  "entry_profile",
                   "server_stop_verified",
                   "server_stop_order_id", "close_in_progress"):
             v = pos_data.get(k)
@@ -2172,16 +2195,17 @@ class StockBot:
                 "options_positions": self.options_positions,
                 "last_trade_time": {
                     k: (v.isoformat() if hasattr(v, 'isoformat') else str(v))
-                    for k, v in self.last_trade_time.items()
+                    for k, v in getattr(self, "last_trade_time", {}).items()
                 },
-                "consecutive_losses": self._consecutive_losses,
-                "symbol_consecutive_losses": self._symbol_consecutive_losses,
-                "daily_buys_count": self._daily_buys_count,
-                "trades_today": self.trades_today,
+                "streaks_by_profile": streaks_for_persistence(self),
+                "daily_buys_count": getattr(self, "_daily_buys_count", 0),
+                "trades_today": getattr(self, "trades_today", []),
                 "last_update": datetime.now().isoformat(),
             }
-            with open(self.POSITIONS_FILE, "w") as f:
-                json.dump(data, f, indent=2, default=str)
+            # Ortak state yardimcisinin fsync + os.replace yazimi; onceki
+            # dogrudan open() crash aninda yarim JSON birakabiliyordu.
+            serializable = json.loads(json.dumps(data, default=str))
+            atomic_write_json(self.POSITIONS_FILE, serializable)
             return True
         except Exception as e:
             logger.error(f"  Pozisyon kayıt hatası: {e}")
@@ -2199,6 +2223,7 @@ class StockBot:
                         # Mevcut pozisyona ek bilgileri aktar
                         self.positions[sym].update({
                             "entry_time": meta.get("entry_time", self.positions[sym].get("entry_time")),
+                            "entry_profile": meta.get("entry_profile"),
                             "highest_price": meta.get("highest_price", self.positions[sym].get("highest_price", 0)),
                             "breakeven_set": meta.get("breakeven_set", False),
                             "partial_sold": meta.get("partial_sold", False),
@@ -2254,6 +2279,7 @@ class StockBot:
                     if sym in self.short_positions:
                         self.short_positions[sym].update({
                             "entry_time": meta.get("entry_time", self.short_positions[sym].get("entry_time")),
+                            "entry_profile": meta.get("entry_profile"),
                             "lowest_price": meta.get("lowest_price", self.short_positions[sym].get("lowest_price", 0)),
                             "breakeven_set": meta.get("breakeven_set", False),
                             "partial_covered": meta.get("partial_covered", False),
@@ -2295,8 +2321,33 @@ class StockBot:
                 saved_options = data.get("options_positions", {})
                 if saved_options:
                     self.options_positions = saved_options
-                self._consecutive_losses = data.get("consecutive_losses", 0)
-                self._symbol_consecutive_losses = data.get("symbol_consecutive_losses", {})
+                history = getattr(getattr(self, "performance", None), "trades", None)
+                if not isinstance(history, list):
+                    history_path = os.path.join(
+                        os.path.dirname(os.path.abspath(self.POSITIONS_FILE)),
+                        "trade_history.json",
+                    )
+                    try:
+                        with open(history_path, "r", encoding="utf-8") as handle:
+                            history = json.load(handle)
+                    except (OSError, ValueError, TypeError):
+                        history = []
+                state_dir_name = os.path.basename(
+                    os.path.dirname(os.path.abspath(self.POSITIONS_FILE))
+                ).lower()
+                is_live_state = state_dir_name == "state_live" or (
+                    state_dir_name != "state_paper"
+                    and not getattr(self, "is_paper", TRADING_MODE != "live")
+                )
+                migrated = restore_streak_state(
+                    self,
+                    data,
+                    legacy_profile="live" if is_live_state else "paper_aggressive",
+                    history=history,
+                    config=STOCK_CONFIG,
+                )
+                if migrated:
+                    self._save_position_metadata()
                 opt_count = len(self.options_positions)
                 logger.info(f"  📁 Metadata yüklendi ({len(self.positions)} long + {len(self.short_positions)} short + {opt_count} options)")
         except Exception as e:

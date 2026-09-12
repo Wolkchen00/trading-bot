@@ -25,6 +25,7 @@ from core.protection import (
     protection_alarm,
 )
 from core.risk_guard import can_open_new_risk
+from core.run_profile import aktif_profil
 from utils.logger import logger
 
 
@@ -456,6 +457,7 @@ class OrderExecutor:
                 "qty": qty,
                 "entry_time": entry_now.isoformat(),
                 "entry_time_utc": entry_now.astimezone(timezone.utc).isoformat(),
+                "entry_profile": aktif_profil(),
                 "episode_id": entry_client_order_id,
                 "provenance": fill_provenance,
                 "order_id": (
@@ -742,6 +744,10 @@ class OrderExecutor:
                 pos.get("provenance")
                 or ("bear_etf" if pos.get("bear_brain") else "strategy")
             )
+            fill_timestamp = (
+                getattr(fill_order, "filled_at", None)
+                or getattr(close_order, "filled_at", None)
+            )
             self._record_fill_safe(
                 symbol,
                 side="SELL",
@@ -753,6 +759,7 @@ class OrderExecutor:
                 order_id=exit_order_id or fill_order_id,
                 client_order_id=fill_client_id,
                 episode_id=pos.get("episode_id") or f"{symbol}|{entry_time}",
+                ts_utc=fill_timestamp,
             )
 
             # Marker yalnız broker'dan flat + gerçek fill kanıtı alındıktan sonra temizlenir.
@@ -792,16 +799,20 @@ class OrderExecutor:
                 "entry_time": entry_time, "exit_order_id": exit_order_id or None,
                 "time": datetime.now().isoformat(),
             })
-            # Pozisyon kaldırma + gerçekleşmiş exit satırı aynı metadata yazımında
-            # kalıcılaşsın; restart aralığında reconciler phantom üretmesin.
-            bot._save_position_metadata()
-
             # Kayıp/kazanç serisi ,  tek kaynak: gerçekleşen PnL işareti
             # (v4.12.1, core/streak.py; kârlı stop-out artık zarar SAYILMAZ).
             # Bear/ters-ETF hedge kapanışları seriyi etkilemez ,  hedge zararı
             # long giriş hunisini kilitlemesin (BEAR_* eski davranışla uyumlu).
             if not pos.get("bear_brain"):
-                update_loss_streak(bot, symbol, episode_pnl)
+                # Pozisyon kaldirma + exit satiri + seri AYNI atomik metadata
+                # yaziminda kalicilasir; helper yazimi guncellemeden sonra yapar.
+                update_loss_streak(
+                    bot, symbol, episode_pnl,
+                    filled_at=fill_timestamp,
+                    entry_profile=pos.get("entry_profile"),
+                )
+            else:
+                bot._save_position_metadata()
             # WashSale kaydı ,  gerçekleşen zarar, çıkış etiketinden bağımsız
             if hasattr(bot, 'wash_sale_tracker') and pnl_usd < 0:
                 bot.wash_sale_tracker.record_loss_sale(

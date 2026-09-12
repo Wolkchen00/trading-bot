@@ -1,6 +1,6 @@
 # RF5-DEVAM.md , Canlandırma döngüsü: kaldığımız yer
 
-> Son güncelleme: 2026-09-12 09:00 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
+> Son güncelleme: 2026-09-12 09:15 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
 > **Devam eden oturum buradan başlar.** Önce bu dosyayı, sonra `RF-PLAN-5.md`'yi oku.
 
 ## Durum özeti
@@ -8,7 +8,7 @@
 | Rock | Durum |
 |---|---|
 | R20 zarar serisi | ✅ **İNŞA EDİLDİ + LEVEL 10 GEÇTİ** (commit'li, deploy YOK) |
-| R21 eşik 45 + bantlar | SIRADA , sözleşme yazılacak |
+| R21 eşik 45 + bantlar | ✅ **BİTTİ + LEVEL 10** (Claude yazdı, Codex kotası doldu) |
 | R24a emniyet kilitleri | bekliyor |
 | R24b dürüst kill tasfiyesi | bekliyor |
 | R22 dürüst giriş akışı | bekliyor |
@@ -56,7 +56,34 @@ yedek yol `filled_at` ve `entry_profile`'ı düşürüyordu , yani R20'nin öld�
 iki hatayı (duvar saati, devralınmış pozisyonun seriyi hareket ettirmesi) sessizce geri
 getirebilirdi. Yedek yol silindi, test yeni imzayı doğrulayacak şekilde GÜÇLENDİRİLDİ.
 
-## Sıradaki iş , R21
+## 12 Eylül (devam): R21 tamamlandı , Claude yazdı
+
+Codex kotası dolduğu için İhsan direktifiyle R21'i Claude yazdı (commit `0ebbe05`).
+
+- `min_confidence_score` 50 -> 45; taban bant `[50,100]` -> `[45,100]`.
+  **Eşik ile taban bant AYNI olmak zorunda**, yoksa eşiği geçen sinyal sizer'da
+  "en düşük bandın altında" diye boyutsuz kalır ve giriş sessizce düşer.
+- **Asıl yapısal düzeltme:** canlı karar boyutlandırması tek fonksiyona alındı
+  (`canli_karar_profili` + `canli_karar_boyutlandirmasi_uygula`) ve artık `live` VE
+  `paper_live_config` için aynı şekilde kurulur. Eskiden bu dal yalnız `is_paper=False`
+  içindi, yani **paper-livecfg sessizce Kelly yoluna düşüyordu (~$25 işlemler)**:
+  canlı kilidini açacak ÇALIŞTIRMA KANITINI canlının boyutlandırması olmadan üretiyordu.
+  `paper_aggressive` davranışı birebir korundu.
+- `stock_bot.py` ve `tools/parity_harness.py` yedek değerleri 50 -> 45.
+- BEAR +10 aynen (efektif 55).
+
+Proof (Claude koştu): **659 passed** (639 -> +20). `tests/test_r21_threshold45.py`:
+eşik/taban-bant eşitliği, live 47 -> $100, paper-livecfg 47 -> $100 (bant yolu, Kelly
+DEĞİL), 44.9 gerçek karar yolunda BUY dalına girmiyor, bant kademeleri, equity tavanı
+kırpması, BEAR 50 blok / 55 geçer, paper_aggressive değişmedi, canlı eşik literali taraması.
+
+parity_harness: tek fark AAPL'in blok sebebinden `min_confidence_score` düşmesi (hâlâ
+multi_timeframe bloklu). Etkin aksiyon mutabakatı 8/8 AYNI. Beklenen ve doğru.
+
+Gerçek env doğrulaması: `PAPER_PROFILE=live_config` -> 47 güven $100 bant yolundan;
+`PAPER_PROFILE=aggressive` -> canlı yola girmiyor.
+
+## Sıradaki iş , R24a
 
 `RF-PLAN-5.md`'deki R21 bölümü (eşik 50 -> 45 + `[45,100]` bandı, live VE paper-livecfg).
 Sözleşme R20'nin `RF5-SOZLESME-R20.md` kalıbıyla yazılır, sonra:

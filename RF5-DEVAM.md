@@ -1,6 +1,6 @@
 # RF5-DEVAM.md , Canlandırma döngüsü: kaldığımız yer
 
-> Son güncelleme: 2026-09-12 10:05 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
+> Son güncelleme: 2026-09-12 10:25 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
 > **Devam eden oturum buradan başlar.** Önce bu dosyayı, sonra `RF-PLAN-5.md`'yi oku.
 
 ## Durum özeti
@@ -11,7 +11,7 @@
 | R21 eşik 45 + bantlar | ✅ **BİTTİ** (Claude yazdı, Codex kotası doldu) |
 | R22 dürüst giriş akışı | ✅ **BİTTİ** (Claude) |
 | R24a emniyet kilitleri | ✅ **BİTTİ** (Claude) |
-| R24b dürüst kill tasfiyesi | SIRADA , kilit açılışının ÖN KOŞULU |
+| R24b dürüst kill tasfiyesi | ✅ **BİTTİ** (`bb8908b`) , HENÜZ DEPLOY EDİLMEDİ |
 | R23 adım 1 (kilit KAPALI deploy) | ✅ **CANLIDA** 2026-09-12 17:00 UTC |
 | R23 adım 2 (kilit açılışı) | R24b bitince |
 
@@ -157,7 +157,34 @@ Kod geri alma gerekirse `1e731be`; ama ÖNCE broker flat ve state uyumluluğu
 doğrulanmalı (eski kod yeni state şemasını ve R24a emniyetlerini BİLMİYOR).
 Kilit zaten kapalı olduğu için acil geri alma gerektiren bir giriş riski YOK.
 
-## Sıradaki iş , R24b (kilit açılışının ön koşulu)
+## 12 Eylül (akşam): R24b tamamlandı , `bb8908b`
+
+**En önemli bulgu:** ana döngünün kill dalı `sleep(60); continue` yapıp her şeyi
+atlıyordu. Yani tasfiye mantığı doğru olsa bile **üretimde asla ilerlemiyordu.**
+Yardımcı metodu doğrudan çağıran bir test bunu yakalayamazdı; proof bu yüzden
+gerçek `run()` döngüsünü koşuyor.
+
+- `core/kill_liquidation.py` (yeni): niyet çağrıdan ÖNCE atomik yazılır; envanter
+  BROKER'dan ve HER TURDA yenilenir (parking dahil, geç dolan BUY emri dahil);
+  yerel kayıt broker FLAT olmadan silinmez; **sembol başına tek çıkış otoritesi**
+  (aktif tam-miktarlı close varken ikinci emir ya da stop gönderilmez, ikisi de
+  dolarsa ters pozisyon açılır); kapatma gönderilemezse koruyucu stop yeniden
+  yerleşir; muhasebe tam bir kez; **vazgeçme yok** (süre aşımında alarm + otomatik
+  kilit ama döngü DURMAZ).
+- `risk_guard`: bekleyen tasfiye BÜTÜN risk türlerini reddeder; kill dosyası elle
+  silinse bile kapı tutar; okunamayan kayıt BEKLEYEN sayılır.
+- `saglik.py`: bekleyen tasfiyeyi kalan envanterle gösterir.
+
+**Ayrıca iki gerçek kusur düzeltildi:**
+1. `_reconcile_external_exit` EN YENİ çıkış emrinin fiyatını TÜM miktara
+   uyguluyordu. Tasfiye yeniden denemeleri kısmi dolum üretir. Artık miktar
+   ağırlıklı (test: 2@110 + 3@120 + 5@100 → 108.0; eski kod 110 verirdi).
+2. Tasfiye uzlaştırması `side` geçirmiyordu; short pozisyon LONG defterinden
+   uzlaştırılınca muhasebe sessizce kayboluyordu.
+
+**760 test geçiyor.** parity R24a ile birebir aynı.
+
+## Sıradaki iş , R24b DEPLOY + kilit açılışı
 
 `RF-PLAN-5.md`'deki R21 bölümü (eşik 50 -> 45 + `[45,100]` bandı, live VE paper-livecfg).
 Sözleşme R20'nin `RF5-SOZLESME-R20.md` kalıbıyla yazılır, sonra:

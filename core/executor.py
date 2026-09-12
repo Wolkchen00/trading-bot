@@ -52,6 +52,23 @@ class OrderExecutor:
             pass
 
     @staticmethod
+    def _terminal_block_safe(
+        bot, symbol: str, reason: str, provenance: str
+    ) -> None:
+        """R22: executor'in terminal reddini STRATEJI hunisine yaz.
+
+        BearBrain ve parking ayni execute_buy'i kullanir ama `eligible_buy`
+        sayacina HIC girmez (o sayac stock_bot'un strateji BUY dalinda artar).
+        Bear denemelerini ayni kovaya yazsaydik gunun yasam-dongusu denkligi
+        tutmaz ve saglik sebepsiz yere UNKNOWN'a duserdi.
+        """
+        if str(provenance) != "strategy":
+            return
+        OrderExecutor._funnel_bump_safe(
+            bot, "executor_block", reason=reason, symbol=symbol
+        )
+
+    @staticmethod
     def _fill_ids(order: object | None) -> tuple[str | None, str | None, str | None]:
         if order is None:
             return None, None, None
@@ -285,6 +302,7 @@ class OrderExecutor:
                     f"EQUITY FLOOR! Hesap ${equity:,.2f} < floor ${bot.equity_floor:,.2f} ,  "
                     f"Yeni alim yapilmiyor."
                 )
+                self._terminal_block_safe(bot, symbol, "EQUITY_FLOOR", fill_provenance)
                 return False
 
             # Market saati kontrolü
@@ -295,6 +313,7 @@ class OrderExecutor:
                     confidence = analysis.get("confidence", 0)
                     if not bot.market_hours.should_allow_extended_hours(confidence):
                         logger.info(f"  Piyasa kapalı ({status['status']}), alım engellendi")
+                        self._terminal_block_safe(bot, symbol, "MARKET_CLOSED", fill_provenance)
                         return False
 
             # Nakit rezerv kontrolü
@@ -303,6 +322,7 @@ class OrderExecutor:
 
             if available_cash < 10:
                 logger.warning(f"Nakit rezerv korumasi: Cash ${cash:.2f}, Rezerv ${cash_reserve:.2f}")
+                self._terminal_block_safe(bot, symbol, "CASH_RESERVE", fill_provenance)
                 return False
 
             # === KELLY-ATR ADAPTİF POZİSYON BOYUTLANDIRMA ===
@@ -324,6 +344,7 @@ class OrderExecutor:
                 tier_weight = sizing.get("weight", 0.20)  # FIX: NameError önlemi
                 if max_invest <= 0:
                     logger.debug(f"  {symbol} PositionSizer: {sizing['reasoning']}")
+                    self._terminal_block_safe(bot, symbol, "SIZER_ZERO", fill_provenance)
                     return False
             else:
                 # Fallback: eski tier-based hesaplama
@@ -341,6 +362,7 @@ class OrderExecutor:
 
             if max_invest < config.get("min_trade_value", 10):
                 logger.warning(f"Yetersiz bakiye: ${max_invest:.2f} < min ${config.get('min_trade_value', 10)}")
+                self._terminal_block_safe(bot, symbol, "MIN_TRADE_VALUE", fill_provenance)
                 return False
 
             qty = round(max_invest / price, 4)  # Fractional shares
@@ -353,6 +375,7 @@ class OrderExecutor:
 
             if qty * price < 1:
                 logger.warning(f"Çok küçük işlem: ${qty * price:.2f}")
+                self._terminal_block_safe(bot, symbol, "TOO_SMALL", fill_provenance)
                 return False
 
             logger.info(f"  Pozisyon: ${max_invest:.2f} | {qty:.4f} adet @ ${price:,.2f} (tier: {tier_weight:.0%})")
@@ -408,12 +431,13 @@ class OrderExecutor:
                     default_paper = True
                 is_live = not bool(getattr(bot, "is_paper", default_paper))
                 if is_live:
-                    self._funnel_bump_safe(
-                        bot,
-                        "gate_block",
-                        reason="FRACTIONAL_NO_BRACKET",
-                        symbol=symbol,
-                    )
+                    if str(fill_provenance) == "strategy":
+                        self._funnel_bump_safe(
+                            bot,
+                            "gate_block",
+                            reason="FRACTIONAL_NO_BRACKET",
+                            symbol=symbol,
+                        )
                     logger.error(
                         f"  LIVE bracket reddedildi; {symbol} pozisyonu AÇILMADI: "
                         f"{bracket_err}"
@@ -494,6 +518,7 @@ class OrderExecutor:
                     f"  {symbol} bracket kabul edildi fakat bounded sürede entry "
                     "pozisyonu görülmedi; BUY başarısı raporlanmadı"
                 )
+                self._terminal_block_safe(bot, symbol, "ALREADY_FLAT", fill_provenance)
                 return False
 
             entry_fill_price, entry_filled_qty, fill_order, entry_degraded = (
@@ -528,6 +553,7 @@ class OrderExecutor:
                     f"doğrulanamadı ({protection.outcome.value}): "
                     f"{protection.detail}",
                 )
+                self._terminal_block_safe(bot, symbol, "STOP_UNVERIFIED", fill_provenance)
                 return False
 
             bot.positions[symbol]["server_stop_verified"] = True
@@ -575,12 +601,20 @@ class OrderExecutor:
         except Exception as e:
             error_msg = str(e)
             # PDT rejection handler
-            if "403" in error_msg or "pattern day trader" in error_msg.lower():
+            _pdt_red = "403" in error_msg or "pattern day trader" in error_msg.lower()
+            if _pdt_red:
                 if hasattr(bot, 'pdt_tracker'):
                     bot.pdt_tracker.handle_pdt_rejection(symbol, error_msg)
                 logger.error(f"PDT VIOLATION: {symbol} alım reddedildi ,  {error_msg}")
             else:
                 logger.error(f"BUY hatasi {symbol}: {e}")
+            # R22: emir yolu istisnasi da TERMINAL bir sonuctur; sinifsiz
+            # birakilirsa gunun denkligi tutmaz ve saglik UNKNOWN'a duser.
+            self._terminal_block_safe(
+                bot, symbol,
+                "PDT_REJECT" if _pdt_red else "BUY_EXCEPTION",
+                locals().get("fill_provenance", "strategy"),
+            )
             bot.consecutive_errors += 1
             return False
 

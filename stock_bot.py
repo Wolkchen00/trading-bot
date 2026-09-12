@@ -1097,6 +1097,16 @@ class StockBot:
             except Exception:
                 pass
 
+            # R22: esik-marji AYNI karar aninda yazilir (guven ve esik ayri
+            # anlardan toplanirsa marj uydurma cikar).
+            if decision["signal"] == "BUY":
+                try:
+                    self.funnel.record_margin(
+                        symbol, decision["confidence"], effective_buy_conf
+                    )
+                except Exception:
+                    pass
+
             if (
                 decision["signal"] == "BUY"
                 and decision["confidence"] < effective_buy_conf
@@ -1139,6 +1149,10 @@ class StockBot:
             if (decision["signal"] == "BUY"
                     and BOT_MODE in ("long_only", "both")
                     and decision["confidence"] >= effective_buy_conf):
+                # R22: BURASI yasam dongusunun baslangicidir. Bu noktadan sonra
+                # her aday TEK bir terminal sonuca ulasmak zorunda; toplam
+                # tutmazsa saglik o gunu UNKNOWN sayar.
+                self._funnel_bump("eligible_buy", symbol=symbol)
                 # v4.12.1: kapılar koordinatör güvenini görmeli ,  eskiden gate'ler
                 # analysis'teki TEKNİK güveni (çoğu zaman 0) okuyordu → KAYIP
                 # KORUYUCU "guven 0% < 70%" ile her girişi kilitliyordu (13 Tem:

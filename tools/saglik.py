@@ -1,4 +1,4 @@
-"""R17 , DURUST saglik raporu: uc boyut, profil basina, fail-closed.
+"""R17+R22 , DURUST saglik raporu: DORT boyut, profil basina, fail-closed.
 
 `health_check.py` tek bir kovaya bakiyordu ve canli hesap icin "BOT CALISMIYOR"
 diyordu. Bot CALISIYORDU; yalnizca R5 giris kilidi kapaliydi. Bu rapor o hatayi
@@ -39,6 +39,7 @@ from core.health_status import (
     ProfilSagligi,
     SistemSagligi,
     dolum_boyutu,
+    giris_akisi_durumu,
     giris_yetkisi_durumu,
     karar_hatti_durumu,
     runtime_durumu,
@@ -65,7 +66,7 @@ def _ts(deger):
 
 
 def profil_sagligi(profil: str, state_dir: str, simdi: datetime) -> ProfilSagligi:
-    """Bir profilin uc boyutunu DISKTEN olcer.
+    """Bir profilin dort boyutunu DISKTEN olcer.
 
     Broker cagrisi YAPMAZ: bu rapor konteynerin ICINDE kosar ve kendi profilini
     olcer. Tek surec iki konteyneri gozleyemez (ayri anahtar, ayri state_path);
@@ -162,11 +163,20 @@ def profil_sagligi(profil: str, state_dir: str, simdi: datetime) -> ProfilSaglig
     except Exception:
         pass
 
+    # --- entry_flow (R22): esigi gecen aday GIRISE donuyor mu?
+    funnel_ham, funnel_hata = _oku_json(os.path.join(state_dir, "funnel.json"))
+    funnel_gunleri = None
+    if isinstance(funnel_ham, dict):
+        aday = funnel_ham.get("days")
+        funnel_gunleri = aday if isinstance(aday, dict) else None
+    akis = giris_akisi_durumu(funnel_gunleri, okuma_hatasi=funnel_hata)
+
     return ProfilSagligi(
         profil=profil,
         runtime=runtime,
         decision_pipeline=karar,
         entry_authorization=yetki,
+        entry_flow=akis,
         dolumlar=dolum_boyutu(dolumlar, simdi),
     )
 
@@ -196,7 +206,7 @@ def sistem_sagligi(profiller=None, simdi=None) -> SistemSagligi:
 def rapor_satirlari(saglik: SistemSagligi) -> list:
     L = []
     L.append("=" * 66)
-    L.append("  BOT SAGLIK RAPORU (R17 , uc boyut)")
+    L.append("  BOT SAGLIK RAPORU (R17+R22 , dort boyut)")
     L.append(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     L.append("=" * 66)
 

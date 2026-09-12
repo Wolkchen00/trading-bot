@@ -1,4 +1,4 @@
-"""R17 , bot saglik durumu: TEK SKALER DEGIL, UC BAGIMSIZ BOYUT.
+"""R17+R22 , bot saglik durumu: TEK SKALER DEGIL, DORT BAGIMSIZ BOYUT.
 
 NEDEN VAR
 ---------
@@ -11,11 +11,19 @@ Ama tersi de tuzak: tek bir skaler durum kullanilirsa `KILITLI`, OLU bir karar
 hattini MASKELER. Kilitli VE bayat bir bot yalnizca "kilitli" diye raporlanamaz;
 bu, ilk hatanin aynadaki goruntusudur.
 
-UC BOYUT
---------
+DORT BOYUT
+----------
 1. `runtime`              , surec/konteyner ayakta mi, heartbeat taze mi
 2. `decision_pipeline`    , tarama ve karar URETILIYOR mu
 3. `entry_authorization`  , canli giris kilidi acik mi
+4. `entry_flow`           , esigi gecen aday GIRISE donuyor mu (R22)
+
+DORDUNCU BOYUT NEDEN GEREKTI
+----------------------------
+Uc boyut "bot calisiyor mu" sorusunu cevapliyordu ve TIKALI bir hatta uc
+boyut da yesil yanabiliyordu: tarama var, karar var, kilit acik. 09 Eylul
+canli funnel'inde 285 aday (paper'da 527) zarar-serisi kilidinde durdu ve
+rapor "SAGLIKLI" dedi. `entry_flow` tam olarak bunu olcer.
 
 Her boyut KENDI durumunu tasir. Ozet bir skaler DEGILDIR: saglikli olmayan HER
 boyut ozette adiyla gorunur.
@@ -63,7 +71,59 @@ SIDDET: Dict[Durum, int] = {
 # `test_r17_honest_health.py` tarafindan ayrica dogrulanir.
 TUM_DURUMLAR = tuple(Durum)
 
-BOYUTLAR = ("runtime", "decision_pipeline", "entry_authorization")
+BOYUTLAR = (
+    "runtime", "decision_pipeline", "entry_authorization", "entry_flow",
+)
+
+
+class EntryFlow(str, Enum):
+    """R22 , GIRIS AKISI: esigi gecen aday ne oldu?
+
+    Uc boyut "bot calisiyor mu" sorusunu cevapliyordu. Ama TIKALI bir hat
+    calisiyor gibi gorunur: tarama var, karar var, kilit acik, ve yine de
+    aylardir tek giris yok. Dorduncu boyut tam olarak bunu olcer.
+    """
+
+    AKIYOR = "AKIYOR"        # esigi gecen aday GIRISE donusuyor
+    SESSIZ = "SESSIZ"        # esigi gecen aday YOK (ariza degil)
+    FILTRELI = "FILTRELI"    # aday var, TASARIM kapisi durduruyor
+    TIKALI = "TIKALI"        # aday var, DURUM kapisi durduruyor , ARIZA
+    KILITLI = "KILITLI"      # aday var, R5 giris kilidi durduruyor , KASITLI
+    UNKNOWN = "UNKNOWN"      # olculemedi ya da denklik tutmadi
+
+
+# EntryFlow -> Durum: siddet ve cikis kodu MEVCUT makineden turer, ikinci bir
+# cikis-kodu tablosu yazilmaz (iki tablo kacinilmaz olarak birbirinden sapar).
+ENTRY_FLOW_DURUM: Dict["EntryFlow", Durum] = {
+    EntryFlow.AKIYOR: Durum.SAGLIKLI,
+    EntryFlow.SESSIZ: Durum.SESSIZ,        # secici mod , cikis 0
+    EntryFlow.FILTRELI: Durum.SESSIZ,      # tasarim kapisi , cikis 0
+    EntryFlow.KILITLI: Durum.KILITLI,      # kasitli , cikis 0
+    EntryFlow.TIKALI: Durum.DEGRADED,      # ARIZA , cikis 3
+    EntryFlow.UNKNOWN: Durum.UNKNOWN,      # olculemedi , cikis 2
+}
+
+# TASARIM kapilari: bilincli secicilik. Bunlar bir ariza DEGILDIR.
+TASARIM_BLOKERLERI = frozenset({
+    "EMA200", "EARNINGS", "VOLATILITY", "RR_GATE", "MTF", "MARKET_CLOSED",
+    "SECTOR", "FUND_NEGATIVE", "FUND_NO_DATA",
+    "QUEUED_PULLBACK", "QUEUE_DUP",
+})
+
+# DURUM kapilari: botun kendi durumu girisi durduruyor. Bunlar ARIZADIR.
+DURUM_BLOKERLERI = frozenset({
+    "LOSS_STREAK_WARN", "LOSS_STREAK_HALT", "STOCK_FILTER",
+    "GUARD_ERROR", "KILL_SWITCH", "RISK_HALT", "EQUITY_FLOOR",
+    "SIZER_ZERO", "CASH_RESERVE", "MIN_TRADE_VALUE", "TOO_SMALL",
+    "STOP_UNVERIFIED", "ALREADY_FLAT", "FRACTIONAL_NO_BRACKET",
+    "BUY_EXCEPTION", "PDT_REJECT", "UNCLASSIFIED",
+    # R24a/R24b ile gelecek olanlar , simdiden siniflandirildi ki yeni bir
+    # bloker sessizce "bilinmeyen" kovasina dusmesin.
+    "LIVE_AUTO_LOCK", "KILL_CLOSE_PENDING", "LIVE_BEAR_LOCK",
+})
+
+# R5 giris kilidi , KASITLI, ariza degil ama SESSIZ de degil.
+KILIT_BLOKERI = "LIVE_LOCK_R5"
 
 CIKIS_KODLARI = {
     Durum.SAGLIKLI: 0,
@@ -93,12 +153,19 @@ class BoyutDurumu:
 
 @dataclass(frozen=True)
 class ProfilSagligi:
-    """Tek bir profilin (live ya da paper) uc boyutlu sagligi."""
+    """Tek bir profilin (live ya da paper) DORT boyutlu sagligi."""
 
     profil: str
     runtime: BoyutDurumu
     decision_pipeline: BoyutDurumu
     entry_authorization: BoyutDurumu
+    # R22 , DORDUNCU BOYUT. Varsayilan UNKNOWN: olculmediyse yesil sayilmaz.
+    entry_flow: BoyutDurumu = field(
+        default_factory=lambda: BoyutDurumu(
+            Durum.UNKNOWN, "giris akisi OLCULMEDI",
+            {"entry_flow": EntryFlow.UNKNOWN.value},
+        )
+    )
     dolumlar: dict = field(default_factory=dict)   # SAGLIK KANITI DEGIL
 
     def boyutlar(self) -> Dict[str, BoyutDurumu]:
@@ -106,6 +173,7 @@ class ProfilSagligi:
             "runtime": self.runtime,
             "decision_pipeline": self.decision_pipeline,
             "entry_authorization": self.entry_authorization,
+            "entry_flow": self.entry_flow,
         }
 
     def en_kotu(self) -> Durum:
@@ -129,7 +197,7 @@ class ProfilSagligi:
     def ozet_metni(self) -> str:
         sorunlu = self.sorunlu_boyutlar()
         if not sorunlu:
-            return f"{self.profil}: SAGLIKLI (uc boyut da temiz)"
+            return f"{self.profil}: SAGLIKLI (dort boyut da temiz)"
         parcalar = [f"{ad}={b.durum.value}" for ad, b in sorunlu.items()]
         return f"{self.profil}: " + " | ".join(parcalar)
 
@@ -307,6 +375,207 @@ def giris_yetkisi_durumu(
             "Acmak: Coolify env LIVE_ENTRIES_ENABLED=true + restart",
         )
     return BoyutDurumu(Durum.SAGLIKLI, "canli giris ACIK")
+
+
+def _bloker_dagilimi(gun: dict) -> Dict[str, int]:
+    """Bir gunun terminal redlerini SEBEP bazinda topla.
+
+    Asama degil SEBEP sayilir: "gate_block=7" hicbir sey soylemez, ama
+    "LOSS_STREAK_WARN=7" tam olarak neyin durdurdugunu soyler.
+    """
+    dagilim: Dict[str, int] = {}
+
+    def ekle(ad: str, adet: int) -> None:
+        adet = int(adet or 0)
+        if adet > 0:
+            dagilim[ad] = dagilim.get(ad, 0) + adet
+
+    ekle("SECTOR", gun.get("sector_block", 0))
+    ekle("QUEUED_PULLBACK", gun.get("queued_pullback", 0))
+    ekle("QUEUE_DUP", gun.get("queue_dup", 0))
+    for alan in ("gate_block_reasons", "executor_block_reasons"):
+        sebepler = gun.get(alan) or {}
+        if isinstance(sebepler, dict):
+            for sebep, adet in sebepler.items():
+                ekle(str(sebep).strip().upper() or "UNCLASSIFIED", adet)
+    return dagilim
+
+
+def _belirleyici_bloker(dagilim: Dict[str, int]):
+    """Adaylari EN COK durduran sebep. Esitlikte alfabetik , karar deterministik."""
+    if not dagilim:
+        return None, 0
+    return max(sorted(dagilim.items()), key=lambda kv: kv[1])
+
+
+def giris_akisi_durumu(
+    gunler: Optional[dict],
+    *,
+    pencere: int = 3,
+    okuma_hatasi: Optional[str] = None,
+) -> BoyutDurumu:
+    """R22 , esigi gecen aday ne oldu?
+
+    Pencere: TARAMA YAPILMIS son `pencere` islem gunu (`scanned == 0` atlanir;
+    hafta sonu bir ariza degildir). Her gun AYRI siniflanir ve durum, eligible
+    adayi olan EN YENI gune gore verilir , eski bir gunun girisi daha yeni bir
+    gunun blokerini MASKELEYEMEZ.
+    """
+    def _sonuc(akis: EntryFlow, sebep: str, ayrinti: Optional[dict] = None):
+        detay = dict(ayrinti or {})
+        detay["entry_flow"] = akis.value
+        return BoyutDurumu(ENTRY_FLOW_DURUM[akis], sebep, detay)
+
+    if okuma_hatasi:
+        return _sonuc(EntryFlow.UNKNOWN, f"funnel okunamadi: {okuma_hatasi}")
+    if not isinstance(gunler, dict) or not gunler:
+        return _sonuc(EntryFlow.UNKNOWN, "funnel verisi yok , giris akisi OLCULEMEDI")
+
+    try:
+        sirali = sorted(
+            ((str(g), v) for g, v in gunler.items() if isinstance(v, dict)),
+            key=lambda kv: kv[0], reverse=True,
+        )
+    except Exception as exc:
+        return _sonuc(EntryFlow.UNKNOWN, f"funnel verisi bozuk: {exc}")
+
+    taranan = [(g, v) for g, v in sirali if int(v.get("scanned", 0) or 0) > 0]
+    if not taranan:
+        return _sonuc(
+            EntryFlow.UNKNOWN,
+            "son gunlerde TARAMA YOK , giris akisi OLCULEMEDI",
+        )
+    pencere_gunleri = taranan[:max(1, int(pencere))]
+
+    from core.funnel import DailyFunnel
+
+    en_iyi_marj = None
+    for gun_str, gun in pencere_gunleri:
+        # R22 ONCESI GUNLER: `eligible_buy` alani YOK. Sifir saymak bu gunleri
+        # sessizce "aday yok" gosterirdi , tam olarak gizlemek istedigimiz sey.
+        # Kapilar YALNIZ esik gecildikten sonra kosar, dolayisiyla her kapi
+        # reddi bir adayi ima eder: ALT SINIR olarak turetilir.
+        # `wash_sale_block` DAHIL EDILMEZ , o esikten ONCE kosar.
+        turetilmis = "eligible_buy" not in gun
+        if turetilmis:
+            eligible = sum(
+                int(gun.get(alan, 0) or 0)
+                for alan in ("sector_block", "gate_block", "queued_pullback",
+                             "queue_dup", "executor_block", "entries")
+            )
+        else:
+            eligible = int(gun.get("eligible_buy", 0) or 0)
+        marj = gun.get("max_margin")
+        if en_iyi_marj is None and isinstance(marj, dict):
+            en_iyi_marj = dict(marj, gun=gun_str)
+        if eligible <= 0:
+            continue
+
+        if turetilmis:
+            # Turetilmis gunde denklik TANIM GEREGI tutar; sahte kesinlik
+            # uretmemek icin kontrol atlanir ama rapor bunu ACIKCA soyler.
+            girisler = int(gun.get("entries", 0) or 0)
+            dagilim = _bloker_dagilimi(gun)
+            bloker, adet = _belirleyici_bloker(dagilim)
+            ayrinti = {
+                "gun": gun_str, "eligible_buy": eligible, "turetilmis": True,
+                "bloker": bloker, "bloker_adedi": adet, "dagilim": dagilim,
+            }
+            if girisler > 0:
+                return _sonuc(
+                    EntryFlow.AKIYOR,
+                    f"{gun_str}: {girisler} giris (aday sayisi TURETILMIS)",
+                    ayrinti,
+                )
+            if bloker is None:
+                return _sonuc(
+                    EntryFlow.UNKNOWN,
+                    f"{gun_str}: turetilmis aday var ama sebep YOK", ayrinti,
+                )
+            if bloker == KILIT_BLOKERI:
+                akis_turu, metin = EntryFlow.KILITLI, "R5 giris kilidinde durdu (kasitli)"
+            elif bloker in TASARIM_BLOKERLERI:
+                akis_turu, metin = EntryFlow.FILTRELI, f"TASARIM kapisi ({bloker}={adet})"
+            else:
+                etiket = bloker if bloker in DURUM_BLOKERLERI else f"{bloker} (siniflandirilmamis)"
+                akis_turu, metin = EntryFlow.TIKALI, f"bloker {etiket}={adet}"
+            return _sonuc(
+                akis_turu,
+                f"{gun_str} (TURETILMIS): {eligible} aday , {metin}",
+                ayrinti,
+            )
+
+        # Denklik: aciklanamayan fark = olculmemis bir `return False` yolu.
+        denklik = DailyFunnel.terminal_denklik(gun)
+        if not denklik["denk"]:
+            return _sonuc(
+                EntryFlow.UNKNOWN,
+                (
+                    f"{gun_str}: yasam dongusu denkligi TUTMADI , "
+                    f"eligible={denklik['eligible_buy']} "
+                    f"terminal={denklik['terminal_toplam']} "
+                    f"aciklanamayan={denklik['aciklanamayan']}"
+                ),
+                {"gun": gun_str, "denklik": denklik},
+            )
+
+        girisler = int(gun.get("entries", 0) or 0)
+        if girisler > 0:
+            return _sonuc(
+                EntryFlow.AKIYOR,
+                f"{gun_str}: {eligible} aday, {girisler} giris",
+                {"gun": gun_str, "eligible_buy": eligible, "entries": girisler},
+            )
+
+        dagilim = _bloker_dagilimi(gun)
+        bloker, adet = _belirleyici_bloker(dagilim)
+        ayrinti = {
+            "gun": gun_str, "eligible_buy": eligible,
+            "bloker": bloker, "bloker_adedi": adet, "dagilim": dagilim,
+        }
+        if bloker is None:
+            return _sonuc(
+                EntryFlow.UNKNOWN,
+                f"{gun_str}: {eligible} aday var ama terminal sebep YOK",
+                ayrinti,
+            )
+        if bloker == KILIT_BLOKERI:
+            return _sonuc(
+                EntryFlow.KILITLI,
+                f"{gun_str}: {eligible} aday R5 giris kilidinde durdu (kasitli)",
+                ayrinti,
+            )
+        if bloker in TASARIM_BLOKERLERI:
+            return _sonuc(
+                EntryFlow.FILTRELI,
+                f"{gun_str}: {eligible} adayi TASARIM kapisi durdurdu ({bloker}={adet})",
+                ayrinti,
+            )
+        # Bilinmeyen sebep de DURUM blokeri sayilir , fail-closed.
+        etiket = bloker if bloker in DURUM_BLOKERLERI else f"{bloker} (siniflandirilmamis)"
+        return _sonuc(
+            EntryFlow.TIKALI,
+            f"{gun_str}: {eligible} aday GIRISE DONMEDI , bloker {etiket}={adet}",
+            ayrinti,
+        )
+
+    ayrinti = {"pencere": [g for g, _ in pencere_gunleri]}
+    if en_iyi_marj is not None:
+        ayrinti["max_margin"] = en_iyi_marj
+        fark = en_iyi_marj.get("margin")
+        return _sonuc(
+            EntryFlow.SESSIZ,
+            (
+                f"esigi gecen aday yok , en yakin "
+                f"{en_iyi_marj.get('symbol', '?')} "
+                f"guven {en_iyi_marj.get('confidence')} vs esik "
+                f"{en_iyi_marj.get('threshold')} (marj {fark})"
+            ),
+            ayrinti,
+        )
+    return _sonuc(
+        EntryFlow.SESSIZ, "esigi gecen aday yok (marj verisi yok)", ayrinti
+    )
 
 
 def dolum_boyutu(

@@ -28,6 +28,9 @@ class DailyFunnel:
         "conf_below_min",
         "conf_below_min_buy",
         "conf_below_min_short",
+        # R22: esigi GECEN BUY adayi. Yasam dongusunun baslangic noktasi;
+        # asagidaki terminal sonuclarin toplami buna esit olmak ZORUNDA.
+        "eligible_buy",
         "sector_block",
         "gate_block",
         "wash_sale_block",
@@ -35,9 +38,19 @@ class DailyFunnel:
         "queued_pullback",
         "queue_dup",
         "reached_executor",
+        # R22: executor'a ULASTIKTAN sonraki terminal red (sebep ayri tutulur).
+        "executor_block",
         "entries",
         "exits",
     )
+
+    # R22: sebep sozlugu tutan asamalar. gate_block zaten boyleydi; executor_block
+    # ayni mekanizmayi kullanir ki "reached_executor > entries" farki ACIKLANABILIR
+    # olsun. Aciklanamayan fark saglikta UNKNOWN uretir, asla yesil sayilmaz.
+    REASON_STAGES = {
+        "gate_block": "gate_block_reasons",
+        "executor_block": "executor_block_reasons",
+    }
     WRITE_INTERVAL_SECONDS = 60
     RETENTION_DAYS = 30
 
@@ -60,7 +73,11 @@ class DailyFunnel:
     @staticmethod
     def _empty_day() -> dict:
         result = {stage: 0 for stage in DailyFunnel.STAGES}
-        result["gate_block_reasons"] = {}
+        for field_name in DailyFunnel.REASON_STAGES.values():
+            result[field_name] = {}
+        # R22: gunun EN BUYUK guven-esik marji. "eligible_buy == 0" bir ariza
+        # degil ama ne kadar YAKLASILDIGI bilgisi olmadan sessizlik okunamaz.
+        result["max_margin"] = None
         result["stage_symbols"] = {
             stage: [] for stage in DailyFunnel.STAGES
         }
@@ -94,15 +111,26 @@ class DailyFunnel:
                 day[stage] = max(0, int(raw.get(stage, 0) or 0))
             except (TypeError, ValueError):
                 day[stage] = 0
-        reasons = raw.get("gate_block_reasons", {})
-        if isinstance(reasons, dict):
+        for field_name in cls.REASON_STAGES.values():
+            reasons = raw.get(field_name, {})
+            if not isinstance(reasons, dict):
+                continue
             for reason, count in reasons.items():
                 try:
-                    day["gate_block_reasons"][str(reason)] = max(
-                        0, int(count or 0)
-                    )
+                    day[field_name][str(reason)] = max(0, int(count or 0))
                 except (TypeError, ValueError):
                     continue
+        raw_margin = raw.get("max_margin")
+        if isinstance(raw_margin, dict):
+            try:
+                day["max_margin"] = {
+                    "symbol": str(raw_margin.get("symbol", "") or ""),
+                    "confidence": float(raw_margin.get("confidence", 0) or 0),
+                    "threshold": float(raw_margin.get("threshold", 0) or 0),
+                    "margin": float(raw_margin.get("margin", 0) or 0),
+                }
+            except (TypeError, ValueError):
+                day["max_margin"] = None
         raw_symbols = raw.get("stage_symbols")
         if not isinstance(raw_symbols, dict):
             # R11 oncesi gunlerde sembol kumesi yoktu. Sifir demek yerine
@@ -221,15 +249,83 @@ class DailyFunnel:
                 if isinstance(stage_symbols, list) and symbol_text not in stage_symbols:
                     stage_symbols.append(symbol_text)
                     stage_symbols.sort()
-            if stage == "gate_block" and reason is not None:
-                reason_text = str(reason).strip() or "BILINMIYOR"
-                reasons = day.setdefault("gate_block_reasons", {})
+            reason_field = self.REASON_STAGES.get(stage)
+            if reason_field is not None:
+                # R22: sebepsiz terminal red SINIFLANDIRILMAMIS sayilir ve
+                # saglikta durum blokeri gibi davranir , sessizce kaybolmaz.
+                reason_text = str(reason or "").strip() or "UNCLASSIFIED"
+                reasons = day.setdefault(reason_field, {})
                 reasons[reason_text] = int(reasons.get(reason_text, 0) or 0) + 1
             if stage == "entries":
                 self.last_entry_date = today
             self._persist(force=stage in ("entries", "exits"))
         except Exception as exc:
             logger.debug(f"  Funnel bump hatasi ({stage}): {exc}")
+
+    def record_margin(
+        self, symbol: str, confidence: float, threshold: float
+    ) -> None:
+        """R22: gunun en buyuk `guven - esik` marjini AYNI karar aninda yaz.
+
+        Gunluk BAGIMSIZ max(guven) ve max(esik) tutmak yanlis olurdu: rejim
+        gun icinde degisirse iki deger farkli anlardan gelir ve marj uydurma
+        cikar. Bu yuzden ucu (sembol, guven, esik) tek anda saklanir.
+        """
+        try:
+            if not self.enabled:
+                return
+            conf = float(confidence)
+            thr = float(threshold)
+            margin = conf - thr
+            today = self._today()
+            day = self.days.setdefault(today, self._empty_day())
+            mevcut = day.get("max_margin")
+            if isinstance(mevcut, dict):
+                try:
+                    if float(mevcut.get("margin", 0) or 0) >= margin:
+                        return
+                except (TypeError, ValueError):
+                    pass
+            day["max_margin"] = {
+                "symbol": str(symbol or "").strip().upper(),
+                "confidence": conf,
+                "threshold": thr,
+                "margin": margin,
+            }
+            self._persist()
+        except Exception as exc:
+            logger.debug(f"  Funnel marj kaydi hatasi: {exc}")
+
+    # R22 , TERMINAL SONUC SINIFLARI.
+    # `eligible_buy` bir gun icin ne olduysa BUNLARIN toplamina esit olmali.
+    # Esitlik tutmazsa o gun UNKNOWN'dir: aciklanamayan fark, olculmemis bir
+    # `return False` yolu demektir ve yesil sayilamaz.
+    TERMINAL_STAGES = (
+        "sector_block",
+        "gate_block",
+        "queued_pullback",
+        "queue_dup",
+        "executor_block",
+        "entries",
+    )
+
+    @classmethod
+    def terminal_denklik(cls, data: dict) -> dict:
+        """Bir gunun yasam dongusu denkligi: eligible == terminal sonuclar."""
+        eligible = int(data.get("eligible_buy", 0) or 0)
+        toplam = 0
+        dagilim = {}
+        for stage in cls.TERMINAL_STAGES:
+            adet = int(data.get(stage, 0) or 0)
+            dagilim[stage] = adet
+            toplam += adet
+        return {
+            "eligible_buy": eligible,
+            "terminal_toplam": toplam,
+            "dagilim": dagilim,
+            "aciklanamayan": eligible - toplam,
+            "denk": eligible == toplam,
+        }
 
     def snapshot(self, date_str: str) -> dict:
         try:

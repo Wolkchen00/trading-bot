@@ -58,6 +58,7 @@ def test_a_kilitli_VE_sessiz_ozette_IKISI_DE_gorunur():
         runtime=_saglikli("heartbeat 1 dk once"),
         decision_pipeline=BoyutDurumu(Durum.SESSIZ, "son karar 30 saat once"),
         entry_authorization=BoyutDurumu(Durum.KILITLI, "R5 kilidi kapali"),
+        entry_flow=_saglikli("giris akisi olculdu"),   # R22: 4. boyut
     )
     ozet = p.ozet_metni()
     assert "decision_pipeline=SESSIZ" in ozet, (
@@ -73,6 +74,7 @@ def test_a_kilitli_VE_bozuk_hat_ikisi_de_gorunur():
         runtime=_saglikli(),
         decision_pipeline=BoyutDurumu(Durum.DEGRADED, "invaryant ihlali"),
         entry_authorization=BoyutDurumu(Durum.KILITLI, "R5"),
+        entry_flow=_saglikli("giris akisi olculdu"),   # R22: 4. boyut
     )
     ozet = p.ozet_metni()
     assert "decision_pipeline=DEGRADED" in ozet and "KILITLI" in ozet
@@ -80,7 +82,7 @@ def test_a_kilitli_VE_bozuk_hat_ikisi_de_gorunur():
 
 
 def test_a_hepsi_saglikli_ise_ozet_temiz():
-    p = ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli())
+    p = ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli(), _saglikli())
     assert p.sorunlu_boyutlar() == {}
     assert "SAGLIKLI" in p.ozet_metni()
     assert p.en_kotu() is Durum.SAGLIKLI
@@ -114,7 +116,7 @@ def test_b_kasitli_durumlar_ariza_cikisi_vermiyor():
 
 
 def test_b_boyut_listesi_profil_ile_uyumlu():
-    p = ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli())
+    p = ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli(), _saglikli())
     assert set(p.boyutlar()) == set(BOYUTLAR)
 
 
@@ -194,7 +196,7 @@ def test_d_strateji_dolumu_ayrisiyor():
 
 def test_e_okunamayan_profil_UNKNOWN():
     s = SistemSagligi(
-        {"paper": ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli())},
+        {"paper": ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli(), _saglikli())},
         {"live": "bu konteynerden okunamaz"},
     )
     assert s.en_kotu() is Durum.UNKNOWN, "eksik profil sessizce atlandi"
@@ -207,7 +209,7 @@ def test_e_hicbir_profil_yoksa_UNKNOWN():
 
 def test_e_tum_profiller_saglikli_ise_saglikli():
     s = SistemSagligi(
-        {"paper": ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli())},
+        {"paper": ProfilSagligi("paper", _saglikli(), _saglikli(), _saglikli(), _saglikli())},
         {},
     )
     assert s.en_kotu() is Durum.SAGLIKLI and s.cikis_kodu() == 0

@@ -510,7 +510,16 @@ class StockBot:
                 # KillSwitch kontrolü
                 if self.kill_switch.is_active:
                     logger.error(f"🚨 KILL SWITCH AKTİF: {self.kill_switch.kill_reason}")
-                    logger.error("Bot durduruldu. kill_switch.json silinerek restart yapılabilir.")
+                    logger.error("Yeni giris YOK. Bekleyen tasfiye uzlastiriliyor.")
+                    # R24b: eski kod burada her seyi atliyordu (`sleep; continue`),
+                    # bu yuzden bekleyen tasfiye URETIMDE ASLA ilerlemiyordu.
+                    # Kill dalinda broker sorgusu + uzlastirma + yeniden kapatma
+                    # + koruyucu stop KOSAR; yeni giris yine acilmaz.
+                    try:
+                        from core.kill_liquidation import tasfiye_turu
+                        tasfiye_turu(self, config)
+                    except Exception as e:
+                        logger.error(f"  Kill tasfiye turu hatasi: {e}")
                     time.sleep(60)
                     continue
 
@@ -2085,23 +2094,65 @@ class StockBot:
         qty = float(pos.get("qty", 0) or 0)
         entry_time = pos.get("entry_time", "")
 
-        # Son dolan çıkış emrini bul (CLOSED emirler en yeniden eskiye gelir)
+        # R24b , COK-EMIRLI KISMI DOLUM MUHASEBESI.
+        # Eski hal: YALNIZ en yeni dolan cikis emrinin fiyati bulunup TUM eski
+        # miktara uygulaniyordu. Kill tasfiyesinin yeniden denemeleri birden
+        # cok kismi dolum uretebilir; tek fiyati tum miktara uygulamak PnL'i,
+        # ledger'i ve zarar serisini yanlis besler. Artik ilgili butun dolumlar
+        # MIKTAR AGIRLIKLI toplanir; pozisyon miktari kadari kapsanir.
         fill_price, order_type, exit_order_id, filled_at = 0.0, "", "", None
         try:
             exit_side = OrderSide.SELL if side == "LONG" else OrderSide.BUY
             req = GetOrdersRequest(
                 status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=20
             )
+            try:
+                giris_dt = datetime.fromisoformat(str(entry_time))
+            except (ValueError, TypeError):
+                giris_dt = None
+
+            kalan = qty
+            agirlikli_toplam = 0.0
+            kapsanan = 0.0
             for o in self.client.get_orders(req):
+                if kalan <= 1e-9:
+                    break
                 if o.side != exit_side:
                     continue
-                if float(o.filled_qty or 0) <= 0 or o.filled_avg_price is None:
+                dolan = float(o.filled_qty or 0)
+                if dolan <= 0 or o.filled_avg_price is None:
                     continue
-                fill_price = float(o.filled_avg_price)
-                order_type = str(getattr(o, "order_type", "") or getattr(o, "type", ""))
-                exit_order_id = str(getattr(o, "id", "") or "")
-                filled_at = getattr(o, "filled_at", None)
-                break
+                # Bu episode'a ait olmayan ESKI cikislari alma.
+                o_filled_at = getattr(o, "filled_at", None)
+                if giris_dt is not None and o_filled_at is not None:
+                    try:
+                        o_dt = o_filled_at
+                        if o_dt.tzinfo is not None and giris_dt.tzinfo is None:
+                            o_dt = o_dt.replace(tzinfo=None)
+                        elif o_dt.tzinfo is None and giris_dt.tzinfo is not None:
+                            o_dt = o_dt.replace(tzinfo=giris_dt.tzinfo)
+                        if o_dt < giris_dt:
+                            continue
+                    except (TypeError, ValueError, AttributeError):
+                        pass
+                pay = min(dolan, kalan)
+                agirlikli_toplam += float(o.filled_avg_price) * pay
+                kapsanan += pay
+                kalan -= pay
+                if not exit_order_id:
+                    order_type = str(
+                        getattr(o, "order_type", "") or getattr(o, "type", "")
+                    )
+                    exit_order_id = str(getattr(o, "id", "") or "")
+                    filled_at = o_filled_at
+            if kapsanan > 0:
+                fill_price = agirlikli_toplam / kapsanan
+                if kapsanan + 1e-9 < qty:
+                    logger.warning(
+                        f"  {symbol} dis kapanis dolumlari miktari KAPSAMIYOR "
+                        f"({kapsanan:g}/{qty:g}) , agirlikli ortalama kapsanan "
+                        "kisimdan hesaplandi"
+                    )
         except Exception as e:
             logger.debug(f"  {symbol} dış kapanış emri sorgulanamadı: {e}")
 
@@ -2594,17 +2645,37 @@ class StockBot:
             logger.debug(f"  Agent perf budama hatası: {e}")
 
     def _emergency_close_all(self, reason: str):
-        """KillSwitch tarafından çağrılır ,  tüm pozisyonları kapat."""
+        """KillSwitch tarafından çağrılır , tasfiyeyi BASLATIR (bitirmez).
+
+        R24b: eski hal `close_all_positions` KABULUNU dolum sayip yerel kaydi
+        HEMEN siliyordu; dolmayan bir kapanis sahipsiz ve (cancel_orders
+        stoplari da sildigi icin) STOPSUZ bir pozisyon birakiyordu. Artik:
+        niyet CAGRIDAN ONCE kalici yazilir, yerel kayit SILINMEZ ve isi ana
+        dongudeki `tasfiye_turu` broker FLAT olana kadar surdurur.
+        """
+        from core.kill_liquidation import niyet_baslat
+
         logger.error(f"🚨 ACİL KAPANIŞ: {reason}")
         self.notifier.notify_kill_switch(reason, self.equity)
+
+        # 1) NIYET ONCE , cagri sirasinda crash olsa bile iz kalir.
+        kayit, niyet_hatasi = niyet_baslat(self, reason)
+        if niyet_hatasi:
+            logger.error(
+                f"  Kill tasfiye niyeti yazilamadi ({niyet_hatasi}) , "
+                "kapatma yine denenecek ama kalicilik YOK"
+            )
+
+        # 2) Toplu kapatma DENEMESI. Kabul != dolum; sonuc bir sonraki turda
+        #    broker'dan DOGRULANIR. Yerel kayitlar BILEREK silinmez.
         try:
             self.client.close_all_positions(cancel_orders=True)
-            logger.error("  Tüm pozisyonlar kapatıldı, emirler iptal edildi.")
-            self.positions.clear()
-            self.short_positions.clear()
-            self.options_positions.clear()
+            logger.error(
+                "  Toplu kapatma emri gonderildi (KABUL, dolum DEGIL) , "
+                "uzlastirma ana donguden surecek"
+            )
         except Exception as e:
-            logger.error(f"  Acil kapanış hatası: {e}")
+            logger.error(f"  Acil kapanış hatası: {e} , tasfiye dongude surecek")
 
 
 # ============================================================

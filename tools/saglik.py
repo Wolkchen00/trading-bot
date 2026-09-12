@@ -174,6 +174,22 @@ def profil_sagligi(profil: str, state_dir: str, simdi: datetime) -> ProfilSaglig
                 {"auto_lock": dict(kayit)},
             )
 
+    # R24b , BEKLEYEN KILL TASFIYESI: yarim tasfiye hem live hem paper icin
+    # TIKALI bir durumdur; yeni risk acilmaz ve bunu arac soylemek zorunda.
+    from core.kill_liquidation import pending_oku
+    bekleyen, bekleyen_hata = pending_oku(state_dir)
+    if bekleyen_hata or isinstance(bekleyen, dict):
+        from core.health_status import BoyutDurumu as _BD, Durum as _D
+        if bekleyen_hata:
+            metin = f"kill tasfiye kaydi OKUNAMADI ({bekleyen_hata}) , fail-closed"
+        else:
+            kalan = sorted((bekleyen or {}).get("envanter") or {})
+            metin = (
+                f"TIKALI (KILL_CLOSE_PENDING: {bekleyen.get('sebep', '?')}) , "
+                f"kalan={kalan or 'yok'} , deneme={bekleyen.get('deneme_sayisi', 0)}"
+            )
+        yetki = _BD(_D.DEGRADED, metin, {"kill_close_pending": True})
+
     # --- dolumlar (SAGLIK KANITI DEGIL)
     dolumlar = []
     try:

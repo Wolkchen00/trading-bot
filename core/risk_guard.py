@@ -172,6 +172,27 @@ def can_open_new_risk(
                 logger.error(f"  OTOMATIK KILIT aktif ({kilit_sebep}) , yeni risk YOK")
                 return _deny(bot, "LIVE_AUTO_LOCK")
 
+        # R24b , BEKLEYEN KILL TASFIYESI: tasfiye bitmeden yeni risk ACILMAZ.
+        # Kill dosyasi elle silinip surec yeniden baslatilsa BILE bu kapi
+        # tutar; bekleyen kayit kendi basina bir giris kilididir.
+        # Paper'da da gecerlidir: yarim tasfiyenin ustune yeni pozisyon acmak
+        # olcumu de bozar.
+        from core.kill_liquidation import pending_var_mi
+        state_dir_k = getattr(bot, "_state_dir", None)
+        if not state_dir_k:
+            try:
+                from config import STATE_DIR
+                state_dir_k = STATE_DIR
+            except Exception:
+                state_dir_k = None
+        if state_dir_k:
+            bekleyen, bekleyen_sebep = pending_var_mi(state_dir_k)
+            if bekleyen:
+                logger.error(
+                    f"  BEKLEYEN KILL TASFIYESI ({bekleyen_sebep}) , yeni risk YOK"
+                )
+                return _deny(bot, "KILL_CLOSE_PENDING")
+
         # Parking strateji girisi degil, savunma amacli nakit parkidir. R5 canli
         # giris kilidinden muaftir; kill/risk-halt kapilari yine yukarida gecerlidir.
         if kind != "index_parking":

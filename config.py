@@ -364,6 +364,10 @@ STOCK_CONFIG = {
     "max_open_positions": 3,               # 3 pozisyona çeşitlenme (konsantrasyon riski azalt)
     "cash_reserve_pct": 0.10,              # %10 nakit rezerv (sabit boyut modunda sermaye deploy edilsin)
     "equity_floor_pct": 0.85,              # Hesap %85'ine düşerse yeni giriş dur (~%15 DD koruması)
+    # R24b , kill tasfiyesi bu sureden uzun surerse KRITIK alarm + otomatik
+    # kilit yazilir. Dongu DURMAZ: broker flat olana ya da sahip devralana
+    # kadar duplicate-safe denemeler surer.
+    "kill_liquidation_timeout_min": 10,
 
     # === INDEX PARKING (boştaki nakit → SPY beta) ===
     # v4.8.2 ,  LIVE'DA AÇIK (İhsan kararı 2026-07-05 "hemen aç"): regime deneyi

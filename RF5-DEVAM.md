@@ -1,6 +1,6 @@
 # RF5-DEVAM.md , Canlandırma döngüsü: kaldığımız yer
 
-> Son güncelleme: 2026-09-12 09:45 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
+> Son güncelleme: 2026-09-12 10:05 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
 > **Devam eden oturum buradan başlar.** Önce bu dosyayı, sonra `RF-PLAN-5.md`'yi oku.
 
 ## Durum özeti
@@ -12,7 +12,7 @@
 | R22 dürüst giriş akışı | ✅ **BİTTİ** (Claude) |
 | R24a emniyet kilitleri | ✅ **BİTTİ** (Claude) |
 | R24b dürüst kill tasfiyesi | SIRADA , kilit açılışının ÖN KOŞULU |
-| R23 adım 1 (kilit KAPALI deploy) | Pazartesi hedefi, İhsan onayı bekliyor |
+| R23 adım 1 (kilit KAPALI deploy) | ✅ **CANLIDA** 2026-09-12 17:00 UTC |
 | R23 adım 2 (kilit açılışı) | R24b bitince |
 
 **İhsan kararı 2026-09-12:** Pazartesi hedefi = yeni kod canlıda koşsun, **kilit
@@ -119,6 +119,43 @@ multi_timeframe bloklu). Etkin aksiyon mutabakatı 8/8 AYNI. Beklenen ve doğru.
 
 Gerçek env doğrulaması: `PAPER_PROFILE=live_config` -> 47 güven $100 bant yolundan;
 `PAPER_PROFILE=aggressive` -> canlı yola girmiyor.
+
+## R23 ADIM 1 , KİLİT KAPALI DEPLOY ✅ (2026-09-12 17:00 UTC)
+
+**Commit:** `52e57a1` · **Image:** `sha256:54bcce10e2bfb22d9c6c49b2fd1b4a674b8f2bd933ca1fad1280d315a02e6efb`
+**Konteynerler:** `trading-live-...-165812396424`, `trading-paper-livecfg-...-165812417771`
+
+### Deploy öncesi anlık görüntü (geri dönüş referansı)
+- **Canlı:** equity $491.08, nakit $145.82, SPY parkı 0.4517 pay, **0 açık emir**,
+  0 strateji pozisyonu, `consecutive_losses: 2` (Temmuz kilidi hâlâ diskteydi).
+- **Paper-livecfg:** equity $63.243,87, nakit $18.977,23, MSFT 4 pay (devralınmış,
+  koruyucu STOP_LIMIT açık) + SPY 55,32 park + XRPUSD tozu.
+- Dosya kopyaları: scratchpad `rf5/deploy-oncesi/`.
+
+### Doğrulama sonuçları (hepsi Claude tarafından koşuldu)
+1. **Parmak izi:** değişen 17 dosyanın sha256'sı **iki konteynerde de ana dalla
+   BİREBİR**.
+2. **Temmuz kilidi ÜRETİMDE söndü:** `Zarar serisi eski durum gocu: son zarar
+   trade_history'den alindi (2026-07-16...)` → `Zarar serisi 24 saat sonunda sondu
+   (2 -> 0)`; RIVN/NVDA/META sembol serileri de söndü.
+3. **Kalıcı taban kuruldu:** `peak_equity.json` = $491.08, taban $417.42 (0.85×zirve).
+   Paper'da $63.243,87 → yazıldı.
+4. **Eşik ve bantlar:** `min_confidence_score=45`, bantlar
+   `[[45,100],[60,150],[70,200],[80,300]]` **hem live hem paper-livecfg'de**;
+   47 güven → $100 ikisinde de (R21 düzeltmesi canlıda doğrulandı).
+5. **Kilitler KAPALI:** `live_entries_enabled=False`, `live_bear_entries_enabled=False`.
+   `BOT_MODE=long_only`. Yeni canlı giriş YOK.
+6. **Sağlık 4 boyut:** live `entry_flow=DEGRADED , 2026-09-09 (TURETILMIS): 285 aday,
+   bloker LOSS_STREAK_WARN=285`, çıkış 3. Paper aynı (527 aday). Eski kod bu girdide
+   "SAĞLIKLI" diyordu.
+7. **Sıfır GUARD_ERROR, sıfır Traceback** (iki konteyner).
+8. **Image içi test kapısı:** dağıtılan image'da ağsız/hacimsiz **731 test geçti**
+   (hedef suite'ler ayrıca 139).
+
+### Geri alma
+Kod geri alma gerekirse `1e731be`; ama ÖNCE broker flat ve state uyumluluğu
+doğrulanmalı (eski kod yeni state şemasını ve R24a emniyetlerini BİLMİYOR).
+Kilit zaten kapalı olduğu için acil geri alma gerektiren bir giriş riski YOK.
 
 ## Sıradaki iş , R24b (kilit açılışının ön koşulu)
 

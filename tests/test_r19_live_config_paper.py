@@ -252,9 +252,14 @@ def test_f_agresif_profil_degerleri_degismedi():
 
 
 def test_f_canli_esikler_degismedi():
-    """Canli taban degerleri R19'dan ETKILENMEMELI."""
+    """Canli taban degerleri R19'dan ETKILENMEMELI.
+
+    R21 (2026-09-12, Ihsan karari): esik BILINCLI olarak 50 -> 45 dusuruldu.
+    Testin amaci degismedi , R19'un canli tabana DOKUNMADIGINI korumak. Kilit
+    KOD varsayilani hala False; kilit yalnizca env ile acilir.
+    """
     from config import STOCK_CONFIG
-    assert STOCK_CONFIG["min_confidence_score"] == 50
+    assert STOCK_CONFIG["min_confidence_score"] == 45
     assert STOCK_CONFIG["live_entries_enabled"] is False, (
         "R5 kilidi acilmis , R19 kilide DOKUNMAMALI"
     )

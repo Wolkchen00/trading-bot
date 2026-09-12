@@ -442,7 +442,9 @@ def _live_gate_traces(
     regime = str(gate_inputs.get("market_regime", "BULL")).upper()
     max_positions = int(gate_inputs.get("max_positions", config.get("max_open_positions", 3)))
     open_positions = int(gate_inputs.get("open_positions", 0) or 0)
-    effective_buy = float(config.get("min_confidence_score", 50))
+    # R21: canli esik 45; yedek deger canli yolla AYNI kalmali, yoksa harness
+    # anahtar dustugunde botun ARTIK KULLANMADIGI esikle olcum yapar.
+    effective_buy = float(config.get("min_confidence_score", 45))
     effective_short = float(SHORT_CONFIG.get("short_min_confidence", 45))
     if regime == "BEAR":
         effective_buy += float(MARKET_REGIME_CONFIG.get("bear_buy_conf_increase", 10))

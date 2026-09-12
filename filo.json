@@ -1,0 +1,12 @@
+{
+  "ad": "trading",
+  "durum": "aktif",
+  "servis": [
+    {
+      "id": "trading-bot",
+      "ad": "Trading Bot",
+      "tur": "bot"
+    }
+  ],
+  "cron": []
+}

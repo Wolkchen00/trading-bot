@@ -1,5 +1,5 @@
 """
-Stock Trading Bot — Hisse Senedi Al-Sat Botu
+Stock Trading Bot ,  Hisse Senedi Al-Sat Botu
 Swing trading + sınırlı day trade stratejisi.
 
 Özellikler:
@@ -109,8 +109,37 @@ from utils.logger import logger
 # utils/logger'ın kendi console handler'ı + root'a propagation + (bir
 # bağımlılığın basicConfig'i) ile her satır docker loguna 3 KEZ yazılıyordu
 # (04-10 Tem loglarında kanıtlı). utils/logger artık propagate=False ve
-# kendi flush'lı stdout handler'ına sahip — root'a handler eklemek gereksiz.
+# kendi flush'lı stdout handler'ına sahip ,  root'a handler eklemek gereksiz.
 # ============================================================
+
+
+def canli_karar_profili(profil: str | None = None) -> bool:
+    """Bu profil CANLI karar profiliyle mi kosuyor (live ya da paper-livecfg).
+
+    R21: boyutlandirma kurulumunun tek kapisi. `paper_aggressive` FALSE doner,
+    kendi override'lariyla kosar.
+    """
+    from core.run_profile import LIVE, PAPER_LIVE_CONFIG, aktif_profil
+
+    return (profil or aktif_profil()) in (LIVE, PAPER_LIVE_CONFIG)
+
+
+def canli_karar_boyutlandirmasi_uygula(config: dict) -> float:
+    """Sizer/executor'in okudugu ortak anahtarlari CANLI degerleriyle doldur.
+
+    conf_position_bands -> guvene gore kademeli boyut ($100-300);
+    fixed_position_usd > 0 -> duz sabit boyut (eski mod, bantlar yoksa).
+    Ikisi de Kelly tabaninin urettigi ~$25'lik islemleri devre disi birakir.
+
+    R21: bu fonksiyon live VE paper_live_config icin AYNI sekilde cagrilir;
+    iki profil ayni kod yolundan gecmezse paper-livecfg'nin urettigi kanit
+    canli davranisi olcmez. Donen deger `max_pos_usd`.
+    """
+    max_pos_usd = config.get("live_max_position_usd", 200)
+    config["conf_position_bands"] = config.get("live_conf_position_bands") or []
+    config["fixed_position_usd"] = config.get("live_fixed_position_usd", 0)
+    config["max_position_usd"] = max_pos_usd
+    return max_pos_usd
 
 
 class _FunnelTradeRows(list):
@@ -131,7 +160,7 @@ class _FunnelTradeRows(list):
 
 class StockBot:
     """
-    Hisse Senedi Trading Bot — Swing + Sınırlı Day Trade.
+    Hisse Senedi Trading Bot ,  Swing + Sınırlı Day Trade.
     
     Günlük akış:
       1. Pre-market (09:00 ET): Sabah taraması + haber analizi
@@ -154,7 +183,7 @@ class StockBot:
         )
         self.agent_stats = AgentStats()
         # Yönetim bayrakları (partial_sold/breakeven_set/highest_price) pozisyon
-        # geçici olarak sync'ten düşse bile kaybolmasın diye cache (A6 — cascade önleme)
+        # geçici olarak sync'ten düşse bile kaybolmasın diye cache (A6 ,  cascade önleme)
         self._exit_flag_cache = {}
         self._floor_block = False  # Equity floor ihlalinde yeni alım durdurma (A3)
 
@@ -221,18 +250,16 @@ class StockBot:
         self.initial_equity = self._load_or_init_daily_baseline(account, equity)
         self.equity = equity
 
-        # Pozisyon limitleri
-        self.max_pos_usd = config.get("live_max_position_usd", 200)
-        if is_paper:
-            self.max_pos_usd = config.get("max_position_usd", 200)
+        # Pozisyon limitleri , R21: CANLI KARAR PROFİLİ artık tek fonksiyondan kurulur.
+        # `paper_live_config` (R19) canlı kilidini açacak ÇALIŞTIRMA KANITINI üretiyor;
+        # canlının eşiğiyle koşup canlının boyutlandırmasını kullanmazsa ürettiği kanıt
+        # canlı davranışı ölçmez. Eskiden bu dal yalnız `is_paper=False` içindi, yani
+        # paper-livecfg sessizce Kelly yoluna düşüyordu (~$25 işlemler).
+        # `paper_aggressive` bu yoldan GEÇMEZ; kendi override'larını korur.
+        if canli_karar_profili():
+            self.max_pos_usd = canli_karar_boyutlandirmasi_uygula(config)
         else:
-            # LIVE: sizer/executor'ın okuduğu ortak anahtarları live değerleriyle doldur.
-            # conf_position_bands → güvene göre kademeli boyut ($100-300);
-            # fixed_position_usd > 0 → düz sabit boyut (eski mod, bantlar yoksa).
-            # İkisi de Kelly tabanının ürettiği ~$25'lik işlemleri devre dışı bırakır.
-            config["conf_position_bands"] = config.get("live_conf_position_bands") or []
-            config["fixed_position_usd"] = config.get("live_fixed_position_usd", 0)
-            config["max_position_usd"] = self.max_pos_usd
+            self.max_pos_usd = config.get("max_position_usd", 200)
 
         self.equity_floor = equity * config.get("equity_floor_pct", 0.85)
 
@@ -278,7 +305,7 @@ class StockBot:
         self.fundamental_analyzer = FundamentalAnalyzer()
         self.macro_analyzer = MacroDataAnalyzer()
 
-        # KillSwitch — acil durum koruması
+        # KillSwitch ,  acil durum koruması
         self.kill_switch = KillSwitch(
             max_consecutive_errors=config.get("max_consecutive_errors", 3),
             max_daily_loss_pct=config.get("max_daily_loss_pct", 0.03),
@@ -297,7 +324,7 @@ class StockBot:
         # Sektör rotasyonu (VIX bazlı)
         self.sector_rotator = SectorRotator()
 
-        # FinBERT — news_analyzer'ın instance'ını paylaş (çift yüklemeyi önle, ~800MB RAM tasarrufu)
+        # FinBERT ,  news_analyzer'ın instance'ını paylaş (çift yüklemeyi önle, ~800MB RAM tasarrufu)
         self.finbert = getattr(self.news_analyzer, 'finbert', None)
 
         # Teknik analizci
@@ -318,10 +345,10 @@ class StockBot:
         self._gap_scan_done_today = False
         self._gap_scan_date = date.min
         # v4.8: EMA200 trend kapısı için GÜNLÜK bar cache'i {sembol: (tarih, bool|None)}
-        # — günde 1 kez hisse başına günlük veri çekilir (10 sembol ≈ 10 çağrı/gün)
+        # ,  günde 1 kez hisse başına günlük veri çekilir (10 sembol ≈ 10 çağrı/gün)
         self._daily_ema200_cache = {}
 
-        # Options modülleri (v4.0 — CALL/PUT)
+        # Options modülleri (v4.0 ,  CALL/PUT)
         self.options_positions = {}  # Açık opsiyon pozisyonları
         self.options_analyzer = OptionsAnalyzer(
             trading_client=self.client,
@@ -341,7 +368,7 @@ class StockBot:
         from core.index_parking import IndexParkingManager
         self.index_parking = IndexParkingManager(self, config)
 
-        # === BEAR BRAIN (v4.11 — düşüş-kazanç beyni) ===
+        # === BEAR BRAIN (v4.11 ,  düşüş-kazanç beyni) ===
         # Ters-ETF'ler artık YALNIZ bu beynin malı: tarama/koordinatör yolundan
         # çıkarıldı (o yol yapısal olarak hiç çalışmamıştı). Genişlik verisi
         # koordinatör ws'lerinden toplanır (_bear_breadth).
@@ -509,7 +536,7 @@ class StockBot:
                 if market_status["status"] == "CLOSED":
                     wait_secs = min(self.market_hours.seconds_until_open(), 300)
                     if self._heartbeat_counter % 60 == 0:
-                        logger.info(f"  Piyasa kapalı ({market_status['reason']}) — {wait_secs//60}dk bekleniyor")
+                        logger.info(f"  Piyasa kapalı ({market_status['reason']}) ,  {wait_secs//60}dk bekleniyor")
 
                     # R16: temel veri ON-CEKIMI burada kosar, islem dongusunde
                     # DEGIL. On-cekim aga gidip her istekten sonra 15 sn uyuyor;
@@ -565,16 +592,16 @@ class StockBot:
                     if self.kill_switch.check_api_error(e):
                         continue
 
-                # EQUITY FLOOR — live+paper: ihlalde YENİ ALIM durdurulur,
+                # EQUITY FLOOR ,  live+paper: ihlalde YENİ ALIM durdurulur,
                 # mevcut pozisyonlar yönetilmeye devam eder (A3).
                 self._floor_block = self.equity_floor > 0 and self.equity < self.equity_floor
                 if self._floor_block and self._heartbeat_counter % 30 == 0:
                     logger.warning(
                         f"  🛑 EQUITY FLOOR: ${self.equity:,.2f} < floor ${self.equity_floor:,.2f} "
-                        f"— yeni alım DURDURULDU (pozisyonlar yönetiliyor)"
+                        f",  yeni alım DURDURULDU (pozisyonlar yönetiliyor)"
                     )
 
-                # Piyasa rejim tespiti (her 30 dk) — v3.0 gelismis rejim
+                # Piyasa rejim tespiti (her 30 dk) ,  v3.0 gelismis rejim
                 self._update_market_regime()
 
                 # Pre-Market Gap Scanner (gunde 1 kez, piyasa acilmadan)
@@ -613,7 +640,7 @@ class StockBot:
                         else:
                             logger.debug(f"  Options pozisyon yonetim hatasi: {e}")
 
-                # 🐻 BEAR BRAIN (v4.11) — düşüş modunda ters-ETF stratejisi.
+                # 🐻 BEAR BRAIN (v4.11) ,  düşüş modunda ters-ETF stratejisi.
                 # Parking'den ÖNCE koşar: ATTACK çıkış/girişleri nakit durumunu
                 # değiştirir, parking direktifi (pause/unwind) taze modu okur.
                 try:
@@ -621,21 +648,21 @@ class StockBot:
                 except Exception as e:
                     logger.debug(f"  BearBrain döngü hatası: {e}")
 
-                # Idle-cash index parking (paper-first) — günde 1 rebalance, nakit → beta
+                # Idle-cash index parking (paper-first) ,  günde 1 rebalance, nakit → beta
                 try:
                     self.index_parking.maybe_rebalance()
                 except Exception as e:
                     logger.debug(f"  Index parking hatasi: {e}")
 
-                # Signal Queue kontrolu — bekleyen sinyalleri kontrol et
-                # (Equity floor ihlalinde yeni giriş yapılmaz — A3)
+                # Signal Queue kontrolu ,  bekleyen sinyalleri kontrol et
+                # (Equity floor ihlalinde yeni giriş yapılmaz ,  A3)
                 try:
                     ready_signals = [] if self._floor_block else self.signal_queue.check_entries(self)
                     for sig in ready_signals:
                         sym = sig["symbol"]
                         sig_analysis = sig.get("analysis", {})
                         # v4.8 güvenlik: kuyruğa girildiğinden beri (≤2 saat) durum
-                        # değişmiş olabilir — pozisyon/limit/wash-sale YENİDEN kontrol
+                        # değişmiş olabilir ,  pozisyon/limit/wash-sale YENİDEN kontrol
                         # edilir (execute_buy bunları kendisi kontrol etmez).
                         total_open_now = (len(self.positions) + len(self.short_positions)
                                           + len(self.options_positions))
@@ -654,7 +681,7 @@ class StockBot:
                             if q_bought:
                                 self._funnel_bump("entries", symbol=sym)
                                 self._record_trade_votes(sym, sig.get("decision") or {})
-                            # Kuyruk BUY'ında opsiyon — v4.9: yalnız hisse alımı gerçekleştiyse
+                            # Kuyruk BUY'ında opsiyon ,  v4.9: yalnız hisse alımı gerçekleştiyse
                             if q_bought and self._options_enabled and sig.get("confidence", 0) >= 60:
                                 try:
                                     opt = self.options_engine.evaluate_option_trade(
@@ -671,7 +698,7 @@ class StockBot:
                             if q_shorted:
                                 self._funnel_bump("entries", symbol=sym)
                                 self._record_trade_votes(sym, sig.get("decision") or {})
-                            # Kuyruk SHORT'unda PUT — v4.9: yalnız short gerçekten açıldıysa
+                            # Kuyruk SHORT'unda PUT ,  v4.9: yalnız short gerçekten açıldıysa
                             if q_shorted and self._options_enabled and sig.get("confidence", 0) >= 60:
                                 try:
                                     opt = self.options_engine.evaluate_option_trade(
@@ -721,11 +748,11 @@ class StockBot:
                         continue  # Yeni alım yapma, sadece pozisyon yönet
                     elif geo_level == "HIGH":
                         max_positions = min(max_positions, 1)
-                        logger.info(f"  ⚠️ Jeopolitik HIGH — Max pozisyon 1'e düşürüldü")
+                        logger.info(f"  ⚠️ Jeopolitik HIGH ,  Max pozisyon 1'e düşürüldü")
                 except Exception as e:
                     logger.debug(f"  Jeopolitik tarama hatası: {e}")
 
-                # Hisse analizi (Equity floor ihlalinde yeni alım yapılmaz — A3)
+                # Hisse analizi (Equity floor ihlalinde yeni alım yapılmaz ,  A3)
                 symbols = [] if self._floor_block else self._get_symbols_to_analyze()
 
                 for symbol in symbols:
@@ -796,7 +823,7 @@ class StockBot:
         logger.info("  🌅 SABAH TARAMASI")
         logger.info("=" * 50)
 
-        # Earnings takvimini KOTA TAZEYKEN yenile (v4.10) — gün içindeki lazy
+        # Earnings takvimini KOTA TAZEYKEN yenile (v4.10) ,  gün içindeki lazy
         # yenileme AV kotası bittikten sonra denk gelip boş dönüyordu
         try:
             self.earnings_calendar.ensure_fresh()
@@ -811,7 +838,7 @@ class StockBot:
                 logger.info(f"  Petrol: {macro['oil'].get('description', 'N/A')}")
             if "vix" in macro:
                 vix_data = macro["vix"]
-                # v4.10 BUG FIX: değer anahtarı "vix"tir, "value" DEĞİL — eski kod
+                # v4.10 BUG FIX: değer anahtarı "vix"tir, "value" DEĞİL ,  eski kod
                 # her gün varsayılan 20'yi okuyup rejimi kalıcı "normal"e çiviliyordu
                 # (gerçek VIX 16.4 iken bile; VIX 40 krizinde de defansife GEÇEMEZDİ).
                 # Veri yoksa/0 ise muhafazakâr 20 (normal) varsay.
@@ -860,7 +887,7 @@ class StockBot:
     # ============================================================
 
     def _update_market_regime(self):
-        """SPY bazli piyasa rejim tespiti — v3.0 gelismis (ADX+BB+EMA)."""
+        """SPY bazli piyasa rejim tespiti ,  v3.0 gelismis (ADX+BB+EMA)."""
         if not MARKET_REGIME_CONFIG.get("enabled", True):
             return
 
@@ -906,7 +933,7 @@ class StockBot:
             else:
                 self._market_regime = "BULL"
 
-            # VIX'i tazele (macro cache'li) — v4.11: _last_vix daha önce HİÇ
+            # VIX'i tazele (macro cache'li) ,  v4.11: _last_vix daha önce HİÇ
             # atanmıyordu (yalnız getattr ile okunuyordu) → gelişmiş rejim
             # detektörü hep vix=0 görüyordu. Artık 30dk'lık rejim turunda
             # güncellenir; BearBrain da seviye+sıçramayı buradan alır.
@@ -938,7 +965,7 @@ class StockBot:
             except Exception as e:
                 logger.debug(f"  Gelismis rejim hatasi: {e}")
 
-            # 🐻 BEAR BRAIN skoru (v4.11) — aynı günlük SPY verisiyle
+            # 🐻 BEAR BRAIN skoru (v4.11) ,  aynı günlük SPY verisiyle
             try:
                 self.bear_brain.update(
                     df,
@@ -1025,7 +1052,7 @@ class StockBot:
                 decision["signal"] = "SHORT"
             # v4.9: analyzer-SHORT ARKA KAPISI KALDIRILDI. Eski kod, koordinatör
             # 5/5 HOLD (ws=0) derken bile analyzer'ın tek başına ürettiği SHORT'u
-            # eski-ölçek güveniyle (50-70) decision'a yazıyordu — 06 Tem CRWD/SMCI
+            # eski-ölçek güveniyle (50-70) decision'a yazıyordu ,  06 Tem CRWD/SMCI
             # PUT churn'ünün fitili buydu (konsensüssüz sinyal → short engel →
             # PUT bypass). SHORT artık YALNIZ koordinatör mutabakatından doğar.
 
@@ -1041,14 +1068,17 @@ class StockBot:
 
             # v4.11: Ters ETF'ler YALNIZ BearBrain'den işlem görür. Eski yol
             # (BEAR rejim şartı + BUY eşiği+10 + long kapıları) yapısal olarak
-            # hiç çalışmamıştı; koordinatör oyu ETF'nin kendisi için anlamsız —
+            # hiç çalışmamıştı; koordinatör oyu ETF'nin kendisi için anlamsız , 
             # düşüş tezini piyasa-geneli skor verir (bear_brain.run_cycle).
             if symbol in _inverse_etfs:
                 self._funnel_bump("index_signal", symbol=symbol)
                 return
 
             # Rejim bazli guven ayarlamasi
-            effective_buy_conf = config.get("min_confidence_score", 50)
+            # R21: yedek deger canli esikle AYNI (45). Config anahtari her zaman
+            # dolu; burada 50 birakmak, anahtarin dustugu bir durumda sessizce
+            # ESKI esige donmek demekti.
+            effective_buy_conf = config.get("min_confidence_score", 45)
             effective_short_conf = SHORT_CONFIG.get("short_min_confidence", 45)
 
             if self._market_regime == "BEAR":
@@ -1105,11 +1135,11 @@ class StockBot:
                 except Exception as e:
                     logger.debug(f"  {symbol} Options değerlendirme hatası: {e}")
 
-            # === LONG (BUY) — BOT_MODE: 'long_only' veya 'both' ===
+            # === LONG (BUY) ,  BOT_MODE: 'long_only' veya 'both' ===
             if (decision["signal"] == "BUY"
                     and BOT_MODE in ("long_only", "both")
                     and decision["confidence"] >= effective_buy_conf):
-                # v4.12.1: kapılar koordinatör güvenini görmeli — eskiden gate'ler
+                # v4.12.1: kapılar koordinatör güvenini görmeli ,  eskiden gate'ler
                 # analysis'teki TEKNİK güveni (çoğu zaman 0) okuyordu → KAYIP
                 # KORUYUCU "guven 0% < 70%" ile her girişi kilitliyordu (13 Tem:
                 # "Coordinator GOOGL: BUY guven:52%" aynı saniyede reddedildi).
@@ -1136,14 +1166,14 @@ class StockBot:
                         if self.signal_queue.add_signal(symbol, "BUY", analysis, decision):
                             self._funnel_bump("queued_pullback", symbol=symbol)
                             logger.info(
-                                f"  ⏳ {symbol} girişi uzamış (RSI/BB/VWAP) — "
+                                f"  ⏳ {symbol} girişi uzamış (RSI/BB/VWAP) ,  "
                                 f"pullback kuyruğuna alındı"
                             )
                         else:
                             self._funnel_bump("queue_dup", symbol=symbol)
                             logger.info(
                                 f"  ⏳ {symbol} uzamış girişi zaten pullback "
-                                "kuyruğunda — market BUY yapılmadı"
+                                "kuyruğunda ,  market BUY yapılmadı"
                             )
                         # Uzamış giriş hiçbir koşulda market BUY'a düşmez. Kuyruk
                         # tüketicisi (_main_loop/check_entries) tek dönüşüm yoludur.
@@ -1152,12 +1182,12 @@ class StockBot:
                     bought = self.executor.execute_buy(symbol, analysis, config)
                     if bought:
                         self._funnel_bump("entries", symbol=symbol)
-                        # v4.10: ajan oyları yalnız GERÇEKLEŞEN işlemde kaydedilir —
+                        # v4.10: ajan oyları yalnız GERÇEKLEŞEN işlemde kaydedilir , 
                         # record_outcome kapanışta bu kaydı çözümler (meta_labeler beslenir)
                         self._record_trade_votes(symbol, decision)
 
                     # Opsiyon da ekle (güçlü sinyalde hisse + opsiyon birlikte)
-                    # v4.9: yalnız hisse alımı GERÇEKLEŞTİYSE — executor'ın kendi
+                    # v4.9: yalnız hisse alımı GERÇEKLEŞTİYSE ,  executor'ın kendi
                     # blokları (floor/PDT/nakit) opsiyonla atlatılamaz.
                     if bought and self._options_enabled and decision["confidence"] >= 65:
                         try:
@@ -1180,7 +1210,7 @@ class StockBot:
                     # enstrümanla yine de açmak kapının amacını boşa çıkarır
                     # (PUT bypass'ının CALL ikiziydi).
 
-            # === SHORT — BOT_MODE: 'short_only' veya 'both' ===
+            # === SHORT ,  BOT_MODE: 'short_only' veya 'both' ===
             elif (decision["signal"] == "SHORT"
                   and BOT_MODE in ("short_only", "both")
                   and SHORT_CONFIG.get("short_enabled", False)
@@ -1204,7 +1234,7 @@ class StockBot:
                     self._funnel_bump("entries", symbol=symbol)
                     self._record_trade_votes(symbol, decision)
 
-                # SHORT sinyalinde PUT opsiyon da ekle — v4.9: yalnız short
+                # SHORT sinyalinde PUT opsiyon da ekle ,  v4.9: yalnız short
                 # GERÇEKTEN açıldıysa. Eski kod execute_short'un rejim/kara-liste/
                 # squeeze bloklarını görmezden gelip PUT'u yine de alıyordu:
                 # 06 Tem'de "BULL modda short yapılmaz" engeli her turda PUT'a
@@ -1546,7 +1576,7 @@ class StockBot:
             )
 
     def _manage_positions(self, config: Dict):
-        """Açık pozisyonları yönet — trailing stop, take profit, break-even."""
+        """Açık pozisyonları yönet ,  trailing stop, take profit, break-even."""
         try:
             self.position_manager.manage_positions(config)
         except Exception as e:
@@ -1561,7 +1591,7 @@ class StockBot:
         """Alpaca'dan hisse bar verisi çek.
 
         timeframe: "hour" (varsayılan, gün-içi analiz) | "day" (rejim/EMA200 gibi
-        uzun-vade hesaplar — v4.8: saatlik EMA200 ~8 işlem gününe denk geliyordu,
+        uzun-vade hesaplar ,  v4.8: saatlik EMA200 ~8 işlem gününe denk geliyordu,
         gerçek 200-GÜN trendi için günlük bar şart).
         """
         try:
@@ -1615,7 +1645,7 @@ class StockBot:
 
     @staticmethod
     def _is_extended_entry(analysis: Dict) -> bool:
-        """Giriş 'uzamış' mı? (fiyat kısa vadede kovalanmış — pullback beklemeye değer)
+        """Giriş 'uzamış' mı? (fiyat kısa vadede kovalanmış ,  pullback beklemeye değer)
 
         Ölçütler: RSI ≥ 65 (momentum tepesi) | fiyat BB üst bandının üstünde |
         VWAP'a göre ≥ %2 primli. Temiz/dip girişlerde False → hemen alınır.
@@ -1632,7 +1662,7 @@ class StockBot:
         return False
 
     def _get_symbols_to_analyze(self) -> List[str]:
-        """Analiz edilecek hisseleri döndür — tarama sonucuna göre sırala."""
+        """Analiz edilecek hisseleri döndür ,  tarama sonucuna göre sırala."""
         # Tarama sonuçları varsa öncelikli
         if self.screener.scan_cache:
             symbols = sorted(
@@ -1644,7 +1674,7 @@ class StockBot:
             # Yoksa varsayılan havuz
             symbols = STOCK_CONFIG.get("symbols", list(STOCK_IDS.keys()))[:10]
 
-        # v4.11: ters-ETF'ler tarama evreninden ÇIKTI — onları BearBrain kendi
+        # v4.11: ters-ETF'ler tarama evreninden ÇIKTI ,  onları BearBrain kendi
         # piyasa-geneli skoruyla alıp satar (v4.8'in BEAR-rejim prepend'i, hiç
         # işlem üretmeyen ölü yoldu; koordinatör oyu ETF'nin kendisinde anlamsız).
         inverse = set(MARKET_REGIME_CONFIG.get("inverse_etf_symbols", []))
@@ -1654,7 +1684,7 @@ class StockBot:
         """Evrenin % kaçı bearish mutabakatta? (BearBrain genişlik bileşeni)
 
         Son 45 dk'daki koordinatör ws kayıtlarından: ws <= -5 oranı.
-        5'ten az taze örnek varsa None (fail-neutral — skor şişmez).
+        5'ten az taze örnek varsa None (fail-neutral ,  skor şişmez).
         """
         try:
             now = datetime.now()
@@ -1690,7 +1720,7 @@ class StockBot:
         return False
 
     def _touch_liveness(self):
-        """Canlılık dosyası (v4.10) — health_check "işlem yok"u değil BUNU ölçer:
+        """Canlılık dosyası (v4.10) ,  health_check "işlem yok"u değil BUNU ölçer:
         seçici bot günlerce işlem yapmayabilir ama döngüsü canlıdır. Her ana-döngü
         turunda yazılır (60 byte; kapalı piyasada ~60sn'de bir)."""
         try:
@@ -1810,7 +1840,7 @@ class StockBot:
                 unrealized_pl = float(pos.unrealized_pl)
                 asset_class = getattr(pos, 'asset_class', 'us_equity')
 
-                # Index parking pozisyonu — bot'un nakit-sleeve'i, normal pozisyon DEĞİL.
+                # Index parking pozisyonu ,  bot'un nakit-sleeve'i, normal pozisyon DEĞİL.
                 # Agent/stop-loss/max-pozisyon mantığından dışla (sleeve, trade değil).
                 # Daha önce yanlışlıkla positions'a girdiyse temizle (self-heal).
                 if self.index_parking.is_parking_symbol(symbol):
@@ -1860,7 +1890,7 @@ class StockBot:
                         # A6: pozisyon geçici düşüp geri geldiyse yönetim bayraklarını koru
                         cached = self._exit_flag_cache.get(symbol, {})
                         if cached and not exit_flag_cache_matches_entry(cached, entry_price):
-                            # Farkli girisin bayraklari — dusur (yanlis tetik enjeksiyonu)
+                            # Farkli girisin bayraklari ,  dusur (yanlis tetik enjeksiyonu)
                             self._exit_flag_cache.pop(symbol, None)
                             cached = {}
                         self.positions[symbol] = {
@@ -1896,7 +1926,7 @@ class StockBot:
                         # A6: yönetim bayraklarını koru (partial_covered/breakeven)
                         cached = self._exit_flag_cache.get(symbol, {})
                         if cached and not exit_flag_cache_matches_entry(cached, entry_price):
-                            # Farkli girisin bayraklari — dusur (yanlis tetik enjeksiyonu)
+                            # Farkli girisin bayraklari ,  dusur (yanlis tetik enjeksiyonu)
                             self._exit_flag_cache.pop(symbol, None)
                             cached = {}
                         lc = cached.get("lowest_price", 0) or 0
@@ -1940,7 +1970,7 @@ class StockBot:
 
             for symbol in list(self.positions.keys()):
                 if symbol not in alpaca_long_symbols:
-                    # Dış kapanış (bracket bacağı/manuel) — muhasebeyi işleyerek düşür
+                    # Dış kapanış (bracket bacağı/manuel) ,  muhasebeyi işleyerek düşür
                     self._reconcile_external_exit(symbol, side="LONG")
 
             for symbol in list(self.short_positions.keys()):
@@ -1974,7 +2004,7 @@ class StockBot:
             return
 
         # Taze girişleri kapanmış sayma: yeni verilen BUY henüz dolmamışken
-        # pozisyon Alpaca'da görünmez (özellikle kapalı piyasada) — 10dk bekle
+        # pozisyon Alpaca'da görünmez (özellikle kapalı piyasada) ,  10dk bekle
         try:
             entry_dt = datetime.fromisoformat(str(pos.get("entry_time", "")))
             if (datetime.now() - entry_dt).total_seconds() < 600:
@@ -2022,7 +2052,7 @@ class StockBot:
                 self._exit_flag_cache.pop(symbol, None)
             self._save_position_metadata()
             logger.info(
-                f"  {symbol} dış kapanış zaten bu oturumda kaydedilmiş — "
+                f"  {symbol} dış kapanış zaten bu oturumda kaydedilmiş ,  "
                 "çift muhasebe atlandı"
             )
             return
@@ -2055,7 +2085,7 @@ class StockBot:
             "entry_time": entry_time, "exit_order_id": exit_order_id or None,
             "time": datetime.now().isoformat(),
         })
-        # Kayıp/kazanç serisi — tek kaynak: gerçekleşen PnL işareti (v4.12.1,
+        # Kayıp/kazanç serisi ,  tek kaynak: gerçekleşen PnL işareti (v4.12.1,
         # core/streak.py). Eski etiket-bazlı sayaç kârlı bracket stop-out'u
         # zarar sayıyordu (13 Tem: AMZN +$0.12 → seri 1→2 → KAYIP KORUYUCU
         # canlı long hunisini kilitledi). Bear/hedge kapanışı seriye girmez.
@@ -2232,7 +2262,7 @@ class StockBot:
                             "close_in_progress": bool(meta.get("close_in_progress", False)),
                             "synced_from_alpaca": False,
                         })
-                        # stop_loss_pct=null enjekte etme — None değer position_manager'da
+                        # stop_loss_pct=null enjekte etme ,  None değer position_manager'da
                         # "-None" TypeError'a yol açıp TÜM pozisyon yönetimini durduruyordu
                         if meta.get("stop_loss_pct") is not None:
                             self.positions[sym]["stop_loss_pct"] = meta["stop_loss_pct"]
@@ -2358,7 +2388,7 @@ class StockBot:
     # ============================================================
 
     def _et_today(self) -> date:
-        """Borsanın (US/Eastern) bugünkü tarihi — gün-sınırları sunucu saatinden bağımsız (A2/C5)."""
+        """Borsanın (US/Eastern) bugünkü tarihi ,  gün-sınırları sunucu saatinden bağımsız (A2/C5)."""
         try:
             import pytz
             return datetime.now(pytz.timezone('US/Eastern')).date()
@@ -2470,14 +2500,14 @@ class StockBot:
         self._save_daily_baseline(today.isoformat(), self.initial_equity)
         logger.info(f"  📆 Günlük reset (ET): {today} | Başlangıç equity: ${self.initial_equity:,.2f}")
 
-        # Yeni gün: dünkü DAY çıkış emirleri (bracket bacakları) düştü —
+        # Yeni gün: dünkü DAY çıkış emirleri (bracket bacakları) düştü , 
         # emirsiz kalan pozisyonlara koruyucu stop yeniden yerleştirilir
         try:
             self.position_manager.ensure_protective_stops(STOCK_CONFIG)
         except Exception as e:
             logger.error(f"  Günlük koruma emri kontrolü hatası: {e}")
 
-        # Ajan performans dosyası bakımı (v4.10): çözümsüz/eski kayıtları buda —
+        # Ajan performans dosyası bakımı (v4.10): çözümsüz/eski kayıtları buda , 
         # konteyner günlerce restart görmediği için açılış budaması yetmez
         try:
             self.agent_perf.prune()
@@ -2485,7 +2515,7 @@ class StockBot:
             logger.debug(f"  Agent perf budama hatası: {e}")
 
     def _emergency_close_all(self, reason: str):
-        """KillSwitch tarafından çağrılır — tüm pozisyonları kapat."""
+        """KillSwitch tarafından çağrılır ,  tüm pozisyonları kapat."""
         logger.error(f"🚨 ACİL KAPANIŞ: {reason}")
         self.notifier.notify_kill_switch(reason, self.equity)
         try:

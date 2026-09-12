@@ -350,7 +350,10 @@ STOCK_CONFIG = {
     # oylar (ws 10-15) ≈ 20-30 → hiçbir banda giremez. Çelişkili sinyaller yön-
     # farkında formülde zaten ölür (2v2 → ws≈0).
     "live_conf_position_bands": [
-        [50, 100],                          # eşiği yeni geçen sinyal → $100
+        # R21: taban bant min_confidence_score ile AYNI olmak zorunda (45).
+        # Aksi halde eşiği geçen sinyal sizer'da "en düşük bandın altında"
+        # diye boyutsuz kalır ve giriş sessizce düşer.
+        [45, 100],                          # eşiği yeni geçen sinyal → $100
         [60, 150],
         [70, 200],
         [80, 300],                          # çok güvenilir (≈eski 90+) → $300
@@ -395,7 +398,14 @@ STOCK_CONFIG = {
     # v4.8: 60 → 50. v4.9: 50 KALDI ama artık remap'li ölçekte okunur
     # (conf = |ws|×çarpanlar×2.0): 50 ≈ ham ws 25 = net, çok-ajanlı mutabakat.
     # Remap'siz dönemde (06-07 Tem) bu eşiğe hiçbir sinyal ulaşamamıştı.
-    "min_confidence_score": 50,
+    # R21 (İhsan kararı 2026-09-12): 50 → 45. Gerekçe: canlı hunide 50 eşiği
+    # üstündeki sinyaller aylarca birikmesine rağmen giriş olmadı; tıkanmanın
+    # asıl sebebi R20'de kapatıldı (zarar serisi kilitlenmesi), ama eşik hâlâ
+    # pratikte ulaşılabilir bant sayısını 1'e indiriyordu. 45 = bant tabanı;
+    # ALTINDAKİ her şey hiçbir banda giremez, yani eşik ile en küçük bant
+    # ($100) aynı sayıda olmak ZORUNDA , yoksa eşiği geçen sinyal boyutsuz kalır.
+    # UYARI: bu eşik KANITLANMIŞ alfa değil; kilit açılışı ölçüm kapısına bağlı.
+    "min_confidence_score": 45,
     "rsi_oversold": 30,
     "rsi_overbought": 70,
     "min_volume_ratio": 1.3,

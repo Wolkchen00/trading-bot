@@ -1,6 +1,6 @@
 # RF5-DEVAM.md , Canlandırma döngüsü: kaldığımız yer
 
-> Son güncelleme: 2026-09-12 10:35 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
+> Son güncelleme: 2026-09-12 10:45 PDT. Sürücü: Claude (Visionary) + Codex (Integrator).
 > **Devam eden oturum buradan başlar.** Önce bu dosyayı, sonra `RF-PLAN-5.md`'yi oku.
 
 ## Durum özeti
@@ -13,7 +13,7 @@
 | R24a emniyet kilitleri | ✅ **BİTTİ** (Claude) |
 | R24b dürüst kill tasfiyesi | ✅ **CANLIDA** (`f896251`, 17:20 UTC) |
 | R23 adım 1 (kilit KAPALI deploy) | ✅ **CANLIDA** 2026-09-12 17:00 UTC |
-| R23 adım 2 (kilit açılışı) | R24b bitince |
+| R23 adım 2 (kilit açılışı) | ✅ **KİLİT AÇIK** 2026-09-12 17:38 UTC |
 
 **İhsan kararı 2026-09-12:** Pazartesi hedefi = yeni kod canlıda koşsun, **kilit
 KAPALI**. Sıfır yeni para riski. Kilit, R24b kanıtlandıktan sonra ayrı bir
@@ -202,7 +202,41 @@ Doğrulama:
 6. **Image içi test kapısı:** hedef suite 168, tam suite **760** , ağsız/hacimsiz.
 7. Sağlık 4 boyut, çıkış 3 (`entry_flow=TIKALI`, `entry_authorization=KILITLI`).
 
-## Sıradaki iş , R23 adım 2: KİLİT AÇILIŞI
+## R23 ADIM 2 , KİLİT AÇILDI ✅ (2026-09-12 17:38 UTC)
+
+**İhsan kararı:** "gerçek parayla ölçmeye başlayalım, kilidi şimdi aç, Pazartesiye bot hazır olsun."
+
+### Açılış kapısı (zorunlu) , altısı da GEÇTİ
+`BOT_MODE=long_only` · opsiyonlar `False` · BEAR kilidi `False` · otomatik kilit YOK ·
+bekleyen kill tasfiyesi YOK · `TRADING_MODE=live`.
+
+### Nasıl açıldı (YENİDEN DERLEME YOK)
+1. `LIVE_ENTRIES_ENABLED=true` **Coolify env deposuna** yazıldı (uuid
+   `wyohp5ubileknur86m91s5t1`) , sonraki deploy'larda kaybolmaz.
+2. Host `.env`'e eklendi. **DİKKAT:** dosya yeni satırla bitmiyordu, ilk ekleme
+   `HOST=0.0.0.0` satırını bozdu; yedekten geri alınıp `printf "
+..."` ile doğru
+   eklendi. Bu dosyaya bir daha `echo >>` ile yazma.
+3. `docker compose up --force-recreate --no-build --no-start trading-live`
+   -> **başlatmadan önce** image ve env doğrulandı -> `docker compose start`.
+   Image `sha256:92c29611d97f...` **birebir aynı kaldı**, volume
+   `dlyojlxudkezk2bze3f3ypp2_state-live` korundu.
+
+### Açılış sonrası doğrulama
+- `live_entries_enabled=True`, `live_bear_entries_enabled=False`, eşik 45.
+- Taban $417.42 (kalıcı zirve $491.08), otomatik kilit yok, bekleyen tasfiye yok.
+- **Karar kapısı (gerçek `can_open_new_risk`):** `stock_long` İZİN VAR,
+  `bear_etf` -> `LIVE_BEAR_LOCK` (doğru şekilde kapalı).
+- Boyut: 44.9 -> $0, **45 -> $100**, 60 -> $150, 70 -> $200, 80 -> $300.
+- `saglik.py`: `entry_authorization = SAGLIKLI (canli giris ACIK)`.
+- Sıfır GUARD_ERROR, sıfır Traceback.
+
+### Bilinen kozmetik kusur (deploy gerektirmez)
+Açılış logundaki `CALISMA PROFILI: live ... R5 kilidi kapaliyken yeni giris yok`
+satırı `core/run_profile.py::profil_ozeti()` içindeki SABİT metindir, canlı durumu
+okumaz. Kapı doğru çalışıyor; metin bir sonraki deploy'da düzeltilmeli.
+
+## Sıradaki iş , İLK CANLI GİRİŞİN İZLEMİ (Pazartesi)
 
 `RF-PLAN-5.md`'deki R21 bölümü (eşik 50 -> 45 + `[45,100]` bandı, live VE paper-livecfg).
 Sözleşme R20'nin `RF5-SOZLESME-R20.md` kalıbıyla yazılır, sonra:

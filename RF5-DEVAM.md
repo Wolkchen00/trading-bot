@@ -276,3 +276,182 @@ Sonra Level 10: tam diff + proof'ları Claude koşar + Claude kendi saldırgan t
   her biri diğerinin profil kaydını boot anındaki bayat kopyayla ezebilir. Bugün risk YOK
   (agresif bot kapalı, tek paper botu koşuyor) ve zaten pozisyon çakışması nedeniyle iki botun
   aynı anda koşması bilinçli olarak engellenmiş. Agresif bot geri açılacaksa önce bu ele alınmalı.
+
+## 14 Eylül , İLK CANLI İŞLEM GÜNÜ DENETİMİ (Claude, salt gözlem)
+
+Kilit 12 Eyl 17:38 UTC'de açıldı, piyasa kapalıydı. **Bugün yeni kodun (R20-R24b)
+gerçek parayla ilk işlem günü.** Hiçbir şey değiştirilmedi, hiçbir emir gönderilmedi.
+
+### Sonuç: sistem canlı, sağlıklı, doğru davranıyor
+
+- `TRADING_MODE=live` · `BOT_MODE=long_only` · `LIVE_ENTRIES_ENABLED=true`
+- Alpaca ACTIVE, equity **$490,15**, SPY parkı 0,4517 ($344,33, +$5,27), nakit $145,82,
+  açık emir 0, taban $417,42 (zirve $491,08), engel yok.
+- **Kod parmak izi 6/6 birebir** (stock_bot, config, trade_gates, risk_guard,
+  agent_coordinator, kill_liquidation). Canlı = depo `17b15fe`.
+  DİKKAT: Windows'ta md5 karşılaştırırken `tr -d '\r'` ile satır sonu eşitle,
+  yoksa CRLF yüzünden her dosya farklı görünür.
+- İki konteyner 2 gündür restart'sız. 24 saatte **0 Traceback, 0 GUARD_ERROR, 0 ERROR**.
+- Karar hattı 40 sn'de bir dönüyor: 3.991 tarama, 133 BUY sinyali. Güvenler gün içinde
+  gerçekten hareket ediyor (SOFI 8 -> 35), veri bayat değil.
+- **Gerçek kapı koşturuldu** (stub bot, `_funnel_bump` YOK ki huni kirlenmesin):
+  `stock_long -> (True, '')` AÇIK · `bear_etf -> (False, 'LIVE_BEAR_LOCK')` doğru
+  şekilde kapalı · `index_parking -> (True, '')`.
+- Kayıp serisi **0** (yani 70-güven yükseltmesi devrede değil), otomatik kilit yok,
+  bekleyen tasfiye yok, bear skoru 18 (eşik 55) MOD=OFF.
+
+### Bugün işlem olmamasının sebebi: aday yok, tıkanıklık değil
+
+Huni: `eligible_buy=0`, `gate_block=0`, `max_margin = SOFI 35,3 vs 45,0 (marj -9,7)`.
+
+**Kanıt:** paper-livecfg konteynerinde giriş kilidi HİÇ yok ve o da sıfır giriş yaptı.
+Aynı 10 sembol, aynı güvenler, aynı tepe 35. Sebep kilit değil, piyasa.
+
+### BULGU 1 (yapısal, izlenecek) , BUY tarafı çoğunluğa hiç ulaşamıyor
+
+Kilit açıldığından beri 3.920 karar / 126 BUY, **hepsi %31-35**. SELL %60'a çıkıyor.
+
+Ajan oy dağılımı (tüm canlı geçmiş):
+
+| Ajan | BUY | SELL | HOLD |
+|---|---|---|---|
+| TechAgent | 131 | 573 | 0 |
+| FundAgent | 122 | 0 | 582 |
+| SentAgent | **0** | 559 | 145 |
+| RiskAgent | **0** | 0 | 704 |
+
+- `RiskAgent.analyze` içinde **BUY döndüren dal yok** (v4.8, bilerek: "fren, gaz değil").
+- SentAgent 704 turda bir kez BUY demedi (`combined >= 12` şartı haber skoru istiyor).
+- SocialAgent kapalı (`SOCIAL_AGENT_ENABLED=false`).
+- Çoğunluk `buy_count >= 3` istiyor ama BUY'a oy verebilen yalnız 2 ajan var
+  -> **126 BUY kararının 122'si 2 oyda kaldı, 9'u 1 oyda, çoğunluk HİÇ oluşmadı**,
+  yani ×1,2 bonusu BUY tarafında ölü.
+- Pratik tavan: `(0,25×Tech + 0,20×Fund) × 2`. SOFI ile doğrulandı:
+  0,25×55 + 0,20×20 = 17,75 -> güven 35,3. Eşik 45.
+- Matematiksel duvar DEĞİL (Fund 20'de sabitken TechAgent >= 74 verirse geçer,
+  TechAgent tavanı 100) ama 20 işlem gününde bir kez olmadı.
+
+Bu, Temmuz'daki "canlı motor fiilen kapalıydı" vakasının aynısı DEĞİL: o zaman
+ham |ws| 15'te sıkışmıştı ve ×2,0 remap yamaydı. Şimdi remap çalışıyor, sorun
+oy sayısında.
+
+### BULGU 2 , 115 kontrollük koruma paketi devre dışı ve 4'ü kırık
+
+`tests/conftest.py` -> `collect_ignore = ["test_full_system.py"]`.
+**760 yeşil sayısı bu dosyayı HİÇ kapsamıyor.** Dosya pytest'e verilirse
+`SystemExit: 4` ile toplama çöker. Standalone: 115 test, 111 geçti, 4 kırık.
+
+Dördü de **bayat, gerçek regresyon yok** (tek tek doğrulandı):
+
+1. `test_paper_learning_config` , `min_confidence_score == 50` bekliyor. R21 45 yaptı.
+2. `test_v412_paper_aggressive_config` , `live_conf_position_bands[0] == [50,100]`
+   bekliyor. R21 `[45,100]` yaptı.
+3. `test_v4112_exposure_headroom` , "ATTACK girişi yapılmadı". R24a bear kilidini
+   ekledi (`bear_brain.py:510` artık `can_open_new_risk(kind="bear_etf")` çağırıyor),
+   testin haberi yok. Davranış DOĞRU.
+4. `test_v412_merge_order` , "substring not found". R24a `self.equity_floor = equity *`
+   satırını `self._emniyet_tabani_kur(...)` yaptı, kaynak-metin çıpası kayboldu.
+   **Koruduğu kural elle doğrulandı ve SAĞLAM:** merge(217) -> max_pos(260) ->
+   floor(270) -> kill(315).
+
+Asıl risk kırıklar değil, dosyanın ağdan çıkmış olması: içinde "İhsan'ın canlı
+koruma kilitleri değişmedi" assert'leri var ve o ağ artık koşmuyor.
+
+### BULGU 3 , nakit sıkışıklığı (zaten biliniyordu, teyit)
+
+$145,82 nakit, %10 rezerv ($49,02) düşünce ~$96,80 kalıyor. İlk giriş $100 bandına
+girse bile ~$96'ya kırpılır. "Günde ~1 giriş, ~$96" notu doğrulandı.
+
+### Kozmetik (teyit)
+
+Açılış logundaki `R5 kilidi kapaliyken yeni giris yok` satırı hâlâ sabit metin
+(`core/run_profile.py::profil_ozeti()`), canlı durumu okumuyor. Kapı doğru.
+
+Ayrıca 04:00 UTC NO_TRADE alarmı gün başlamadan koştuğu için
+`Baskin downstream bloker: veri_yok (0)` yazıyor, yani o saatte anlamlı bilgi vermiyor.
+
+### AÇIK KALAN , huni uçtan uca ateşlenmedi
+
+Yeni kodla bir adayın 45'i geçip kapılardan **emre dönüştüğü görülmedi.**
+Kapıya son ulaşan aday 9 Eyl'de (285 aday `LOSS_STREAK_WARN`'a takıldı) ve o
+R20 düzeltmesinden ÖNCEYDİ. Huni geçmişte ateşleniyordu (paper 7 giriş yaptı,
+canlıda kapı redleri EMA200 / LOSS_STREAK_WARN / LIVE_LOCK_R5 olarak kayıtlı),
+ama R20-R24b sonrası kanıt YOK.
+
+**İhsan kararı 14 Eyl: BEKLE VE İZLE.** Canlıya dokunulmayacak.
+
+Günlük izleme (30 saniye):
+
+```bash
+C=trading-live-dlyojlxudkezk2bze3f3ypp2-172014467471
+ssh -i ~/.ssh/coolify_vps2 root@91.99.9.121 "docker exec $C python tools/saglik.py"
+```
+
+- `entry_flow=SESSIZ` + marj negatif  -> normal, aday yok, bir şey yapma.
+- `entry_flow` SESSIZ DIŞI bir şey     -> aday eşiği geçti, huni ateşlendi, İNCELE.
+- `eligible_buy > 0` ama `entries=0`   -> kapı yiyor, `gate_block_reasons` oku.
+
+Huni geçmişi:
+
+```bash
+docker exec $C python -c "from core.funnel import DailyFunnel; f=DailyFunnel(); [print(g, f.days[g].get('eligible_buy'), f.days[g].get('gate_block_reasons'), f.days[g].get('entries'), f.days[g].get('max_margin')) for g in sorted(f.days)]"
+```
+
+DİKKAT: `eligible_buy` alanı R22'de (12 Eyl) eklendi. ÖNCEKİ günlerde 0 görünmesi
+"aday yok" DEĞİL "ölçülmedi" demektir. O günler için `gate_block` sayısına bak.
+
+## 16 Eylül , R25 ORTA AGRESİF PAKET CANLIDA ✅ (20:05 UTC)
+
+**İhsan:** "3 gündür bot al-sat yapmıyor, biraz daha agresif risk alsın, parayı hızlıca
+arttırmamız lazım." Üç seçenek sunuldu (orta / sert / yalnız hata düzeltmesi),
+**ORTA AGRESİF** seçildi, "bitince deploy et" dendi.
+
+### Teşhis (canlı log 14-16 Eyl, 15.880 karar)
+- BULGU 1 doğrulandı ve BUGÜN İÇİN KESİN: BUY çoğunluğu 3 oy istiyor, BUY verebilen
+  2 ajan var. 16 Eyl GOOGL guven 42 (Tech 59 + Fund 30, Sent HOLD, Risk HOLD) < 45.
+- Tarama `[:10]` ile kırpılıyordu (evren 20). Nakit $145, park %70.
+- Tekrar oynatma (2-oy + eşik 40): 14 Eyl SOFI 43.9 (EMA200 altı, kapıda elenir),
+  16 Eyl GOOGL 49.9 + AAPL 40.3. Bugünkü kural: 3 günde SIFIR aday.
+- Yan bulgu: AV kotası 13/gün, `exhausted_day` 2 çağrıda işaretleniyor (anahtar
+  paylaşımlı); FundAgent disk cache'ten yaşıyor. Dokunulmadı.
+
+### Ne değişti (`c28c101` sözleşme + `ab8def5` kod)
+- **Koordinatör:** RiskAgent dışı etkin ajanların çoğunluğu (bugün 2/3) + karşı oy yok +
+  veto yok + `risk_score > -15` + VIX biliniyor ise x1.2. `ws <= 15` BUY'a terfi etmez.
+  SELL tarafı AYNEN. Sonuçta yeni `majority_rule`, logda `COGUNLUK(2oy)`.
+- Risk verisi boş dict ya da VIX pozitif-sonlu değilse `risk_score=None` (bonus yok).
+  Bozuk tip (string VIX, dict olmayan veri) ESKİSİ GİBİ istisna verir -> HOLD.
+- `min_confidence_score` 45 -> **40**, bantlar `[[40,100],[60,150],[70,200],[80,300]]`.
+- `scan_max_symbols` **20** (geçersizse 10, tavan 30).
+- `index_parking_reserve_pct` 0.30 -> **0.60** (paper agresif 0.30 açıkça korundu).
+  DİKKAT: rezerv NAKİT hedefidir; pozisyon açıldıkça park SPY satarak nakdi %60'a
+  tamamlar, yani 2-3 pozisyonda park neredeyse sıfıra iner. Bilinçli.
+- `profil_ozeti()` LIVE metni artık durum iddia etmiyor (kozmetik kapandı).
+- DEĞİŞMEDİ (testle kilitli): kill %5, taban %85, stop %4-6, zarar serisi 2/4/70,
+  max 3 pozisyon, $300 tavan, opsiyon kapalı, BEAR kilidi, bütün kapılar.
+
+### İnşa ve inceleme
+- Codex `gpt-5.6-sol` high, thread `01a0abb5-b50f-7fc1-a8ca-e6f6c2c0e6f2`, 2 fix round.
+- Claude saldırgan suite `tests/test_r25_saldirgan.py` (35 test, gerçek ajanlarla).
+  **İki gerçek bulgu:** (1) `_build_risk_data` istisnada `{}` dönüyor -> bonus KÖR veriyle
+  veriliyordu; (2) numpy `risk_score` ile `majority` np.bool_ sızıyordu. Fix round 2:
+  Codex'in round 1'de RAPORLAMADAN yaptığı gevşetme (bozuk VIX'i 0 sayma) geri alındı.
+- Proof (Claude koştu): 830 passed (760 -> 830); `test_full_system.py` 5 kırık,
+  hepsi baseline 7'nin alt kümesi (3'ü worktree'de .env yokluğu); parity baseline ile
+  BAYT BAYT AYNI.
+
+### Deploy doğrulaması
+- Deploy `zb0ht6855lxbztrki137rp5x` finished, image `a765663abe8f`.
+- Konteynerler: `trading-live-...-200313430754`, `trading-paper-livecfg-...-200313451974`.
+- Parmak izi 10/10 birebir (CRLF eşitlenmiş). Image içi ağsız **830 passed**.
+- Env: live / long_only / `LIVE_ENTRIES_ENABLED=true`, BEAR kilidi False, Social kapalı.
+- Konteyner içi karar: GOOGL-benzeri girdi -> `BUY 49.7 majority itirazsiz_2_oy`.
+- Taban $417.42 (zirve $491.08) korundu; kill/auto-lock/tasfiye YOK; 0 Traceback/GUARD_ERROR.
+- Deploy öncesi: equity $486.31, nakit $145.82, SPY 0.4517, açık emir 0.
+
+### İZLE (17 Eyl, Çarşamba)
+- 13:30 UTC açılış: `PARK` SELL ~$146 SPY (rezerv %60'a tamamlama). Nakit ~$292 olmalı.
+- `Coordinator ... COGUNLUK(2oy)` satırları ve `eligible_buy > 0`.
+- İlk giriş: `[LONG-KADEMELI] GÜVEN x -> $100`, stop broker'da NEW, provenance=strategy.
+- Aday eşiği geçip `entries=0` ise `gate_block_reasons` oku (en olası: MTF 4h, EMA200).
+- Geri alma: `ab8def5` revert + deploy (state şeması değişmedi, geri uyumlu).

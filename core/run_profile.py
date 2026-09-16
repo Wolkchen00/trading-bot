@@ -131,7 +131,10 @@ def profil_ozeti() -> dict:
         "agresif_override": agresif_override_uygulanir_mi(),
         "kapi_icin_gecerli": kapi_icin_gecerli(p),
         "aciklama": {
-            LIVE: "gercek para; R5 kilidi kapaliyken yeni giris yok",
+            LIVE: (
+                "gercek para; yeni giris LIVE_ENTRIES_ENABLED kilidine bagli "
+                "(durum: tools/saglik.py)"
+            ),
             PAPER_AGGRESSIVE: (
                 "paper broker + agresif override'lar , canli davranisi TEMSIL "
                 "ETMEZ, kilit kapisinda kanit sayilmaz"

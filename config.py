@@ -310,6 +310,7 @@ TECHNICAL_CONFIG = {
 STOCK_CONFIG = {
     # === HİSSE HAVUZU ===
     "symbols": list(STOCK_IDS.keys()),
+    "scan_max_symbols": 20,                 # R25: canli tarama evreninin tamami
 
     # === GOZLEMLENEBILIRLIK (R4) ===
     "funnel_enabled": True,
@@ -350,10 +351,10 @@ STOCK_CONFIG = {
     # oylar (ws 10-15) ≈ 20-30 → hiçbir banda giremez. Çelişkili sinyaller yön-
     # farkında formülde zaten ölür (2v2 → ws≈0).
     "live_conf_position_bands": [
-        # R21: taban bant min_confidence_score ile AYNI olmak zorunda (45).
+        # R25: taban bant min_confidence_score ile AYNI olmak zorunda (40).
         # Aksi halde eşiği geçen sinyal sizer'da "en düşük bandın altında"
         # diye boyutsuz kalır ve giriş sessizce düşer.
-        [45, 100],                          # eşiği yeni geçen sinyal → $100
+        [40, 100],                          # esigi yeni gecen sinyal, $100
         [60, 150],
         [70, 200],
         [80, 300],                          # çok güvenilir (≈eski 90+) → $300
@@ -373,13 +374,11 @@ STOCK_CONFIG = {
     # v4.8.2 ,  LIVE'DA AÇIK (İhsan kararı 2026-07-05 "hemen aç"): regime deneyi
     # SPY açığının ~9 puanının nakit sürüklemesi olduğunu gösterdi (−11.5→−2.8).
     # Katkı eklenmeyecek (tek sermaye) → boş nakdin çalışması tek yapısal düzeltme.
-    # Rezerv etkileşimi: %30 rezerv (~$146 @ $487) likit kalır; executor'ın %10
-    # nakit rezerviyle birlikte ilk alım ~$97-100'e kırpılabilir ,  bilinçli kabul;
-    # alım rezervi eritirse parking ertesi gün SPY satıp rezervi tamamlar (günde 1
-    # rebalance → aynı-gün AL-SAT yok → PDT güvenli; floor ihlalinde park yapılmaz).
+    # R25: equity'nin %60'i likit kalir, park payi yaklasik %40 olur; bu rezerv
+    # iki $100 giris icin alan acar. Gunluk rebalance ve PDT korumasi aynen kalir.
     "index_parking_enabled": True,
     "index_parking_symbol": "SPY",
-    "index_parking_reserve_pct": 0.30,     # equity'nin %30'u likit kalsın (trade buying-power)
+    "index_parking_reserve_pct": 0.60,     # R25: equity'nin %60'i likit kalsin
     "index_parking_min_trade_usd": 50,     # bu altı rebalance yapma (gereksiz emir/PDT yok)
     "index_parking_allow_live": True,      # LIVE opt-in (İhsan onayı 2026-07-05)
 
@@ -402,14 +401,10 @@ STOCK_CONFIG = {
     # v4.8: 60 → 50. v4.9: 50 KALDI ama artık remap'li ölçekte okunur
     # (conf = |ws|×çarpanlar×2.0): 50 ≈ ham ws 25 = net, çok-ajanlı mutabakat.
     # Remap'siz dönemde (06-07 Tem) bu eşiğe hiçbir sinyal ulaşamamıştı.
-    # R21 (İhsan kararı 2026-09-12): 50 → 45. Gerekçe: canlı hunide 50 eşiği
-    # üstündeki sinyaller aylarca birikmesine rağmen giriş olmadı; tıkanmanın
-    # asıl sebebi R20'de kapatıldı (zarar serisi kilitlenmesi), ama eşik hâlâ
-    # pratikte ulaşılabilir bant sayısını 1'e indiriyordu. 45 = bant tabanı;
-    # ALTINDAKİ her şey hiçbir banda giremez, yani eşik ile en küçük bant
-    # ($100) aynı sayıda olmak ZORUNDA , yoksa eşiği geçen sinyal boyutsuz kalır.
+    # R25 (Ihsan karari 2026-09-16): 45 -> 40. Itirazsiz iki ajanli net BUY
+    # canli huniye girebilsin; taban bant da 40, yoksa sinyal boyutsuz kalir.
     # UYARI: bu eşik KANITLANMIŞ alfa değil; kilit açılışı ölçüm kapısına bağlı.
-    "min_confidence_score": 45,
+    "min_confidence_score": 40,
     "rsi_oversold": 30,
     "rsi_overbought": 70,
     "min_volume_ratio": 1.3,
@@ -856,6 +851,7 @@ PAPER_AGGRESSIVE_CONFIG = {
     # === HİSSE AYARLARI (override) ===
     "max_position_usd": 9000,                # v4.12: $5000 → $9000 (bant tavanı geçsin)
     "max_open_positions": 10,                 # v4.12: 8 → 10 (havuz ~20 sembol)
+    "index_parking_reserve_pct": 0.30,        # R25: agresif paper aynen
     # v4.12: paper artık CANLININ bant mekanizmasını kullanır (sizer'daki aynı
     # kod yolu, agresif dolarlarla). Eskiden paper Kelly yoluna düşüyordu ve
     # PF<1'de Kelly-negatif tabanı ~%5 equity'ye ($3.1k) sabitleniyordu ,  boyut

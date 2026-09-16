@@ -932,9 +932,9 @@ def test_paper_learning_config():
         assert fresh.PAPER_AGGRESSIVE_CONFIG.get("pullback_queue_enabled") is True, "Paper pullback queue kapalı!"
         assert fresh.STOCK_CONFIG.get("pullback_queue_enabled") is False, "Canlıda pullback queue AÇIK kalmış!"
         assert fresh.STOCK_CONFIG.get("fundamental_gate_enabled") is False, "Canlıda fundamental gate AÇIK kalmış!"
-        assert fresh.STOCK_CONFIG["min_confidence_score"] == 50, "Canlı min_conf 50 değil!"
+        assert fresh.STOCK_CONFIG["min_confidence_score"] == 40, "Canlı min_conf 40 değil!"
         bands = fresh.STOCK_CONFIG["live_conf_position_bands"]
-        assert bands[0][0] == 50 and bands[-1][0] == 80, f"Bantlar yeniden haritalanmamış: {bands}"
+        assert bands[0][0] == 40 and bands[-1][0] == 80, f"Bantlar yeniden haritalanmamış: {bands}"
     finally:
         _sys.modules.pop("config", None)
         if saved is not None:
@@ -1791,8 +1791,8 @@ def test_v412_paper_aggressive_config():
         assert sc["max_atr_pct"] == 0.05, "LIVE VOL kapısı gevşemiş!"
         assert sc["max_positions_per_sector"] == 2, "LIVE sektör tavanı değişmiş!"
         assert sc["live_max_position_usd"] == 300, "LIVE $300 tavanı değişmiş!"
-        assert sc["live_conf_position_bands"][0] == [50, 100], "LIVE bantları değişmiş!"
-        assert sc["min_confidence_score"] == 50, "LIVE min_conf değişmiş!"
+        assert sc["live_conf_position_bands"][0] == [40, 100], "LIVE bantları değişmiş!"
+        assert sc["min_confidence_score"] == 40, "LIVE min_conf değişmiş!"
         # Bear brain: paper bantları büyüdü, CANLI bantlar aynen
         bc = fresh.BEAR_BRAIN_CONFIG
         assert bc["paper_size_bands"] == [[55, 3000], [72, 6000]], "Bear paper bantları v4.12 değil!"

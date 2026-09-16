@@ -12,9 +12,12 @@ Ajanlar:
   5. RiskAgent  — Risk yönetimi (ATR, drawdown, korelasyon)
 
 Kurallar:
-  - Çoğunluk: ≥3 ajan aynı yönde olmalı
+  - BUY çoğunluğu: 3 oy veya risk normalken itirazsız etkin-ajan çoğunluğu
+  - SELL çoğunluğu: ≥3 oy
   - Risk vetosu: RiskAgent SELL → BUY yapılamaz
 """
+import math
+from numbers import Real
 from typing import Dict, List, Optional
 
 from core.agent_enable import is_agent_enabled
@@ -300,6 +303,12 @@ class RiskAgent:
         
         # Korelasyon riski → VIX bazlı piyasa riski
         vix = risk_data.get("vix", 0)
+        vix_known = (
+            isinstance(vix, Real)
+            and not isinstance(vix, bool)
+            and math.isfinite(float(vix))
+            and vix > 0
+        )
         if vix > 35:
             risk_score -= 25
             short_boost += 20  # Panik = short icin cok iyi
@@ -349,6 +358,7 @@ class RiskAgent:
             " | ".join(reasons) if reasons else "Risk seviyeleri normal"
         )
         vote.short_boost = short_boost  # Coordinator'a ilet
+        vote.risk_score = risk_score if vix_known else None
         return vote
 
 
@@ -364,8 +374,9 @@ class AgentCoordinator:
       RiskAgent:   %20
     
     Kurallar:
-      1. Çoğunluk: ≥3 ajan aynı yönde → işlem
-      2. Risk vetosu: RiskAgent SELL → BUY engellenir
+      1. BUY: 3 oy veya risk normalken itirazsız etkin-ajan çoğunluğu
+      2. SELL çoğunluğu: ≥3 oy
+      3. Risk vetosu: RiskAgent SELL → BUY engellenir
     """
 
     WEIGHTS = {
@@ -406,6 +417,7 @@ class AgentCoordinator:
                 'confidence': float (0-100),
                 'votes': [AgentVote],
                 'majority': bool,
+                'majority_rule': '3_oy' | 'itirazsiz_2_oy' | None,
                 'risk_veto': bool,
                 'reasoning': str
             }
@@ -486,18 +498,42 @@ class AgentCoordinator:
 
         if risk_vote.signal == "SELL":
             risk_veto = True
+
+        # R25: RiskAgent BUY uretemez; taban, yalniz BUY uretebilen etkin
+        # ajanlardan hesaplanir. Risk puani belirsizse gevseme fail-closed kalir.
+        buy_capable = [v for v in votes if v.agent_name != RiskAgent.NAME]
+        buy_needed = min(3, len(buy_capable) // 2 + 1)
+        risk_score = getattr(risk_vote, "risk_score", None)
+        risk_normal = (
+            isinstance(risk_score, Real)
+            and not isinstance(risk_score, bool)
+            and math.isfinite(float(risk_score))
+            and risk_score > -15
+        )
+        itirazsiz_buy_cogunlugu = bool(
+            buy_count >= buy_needed
+            and sell_count == 0
+            and not risk_veto
+            and risk_normal
+        )
         
         # 5. Çoğunluk kontrolü
         majority = False
+        majority_rule = None
         
         if buy_count >= 3:
             preliminary_signal = "BUY"
             majority = True
+            majority_rule = "3_oy"
         elif sell_count >= 3:
             preliminary_signal = "SELL"
             majority = True
+            majority_rule = "3_oy"
         elif weighted_score > 15:
             preliminary_signal = "BUY"
+            majority = itirazsiz_buy_cogunlugu
+            if majority:
+                majority_rule = "itirazsiz_2_oy"
         elif weighted_score < -15:
             preliminary_signal = "SELL"
         else:
@@ -561,6 +597,7 @@ class AgentCoordinator:
             "sell_count": sell_count,
             "hold_count": hold_count,
             "majority": majority,
+            "majority_rule": majority_rule,
             "risk_veto": risk_veto,
             "reasoning": " | ".join(reasoning_parts),
         }
@@ -568,11 +605,15 @@ class AgentCoordinator:
         self.last_decision = result
         
         # Log
+        if majority_rule == "itirazsiz_2_oy":
+            majority_log = "COGUNLUK(2oy)"
+        else:
+            majority_log = "COGUNLUK" if majority else "tekil"
         logger.info(
             f"  Coordinator {symbol}: {final_signal} "
             f"(guven:{confidence:.0f}% ws:{weighted_score:+.1f}) "
             f"[{vote_summary}] "
-            f"{'COGUNLUK' if majority else 'tekil'} "
+            f"{majority_log} "
             f"{'⚠️VETO' if risk_veto else ''}"
         )
         for v in votes:

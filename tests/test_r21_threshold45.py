@@ -1,4 +1,4 @@
-"""R21 PROOF: guven esigi 45 + bantlar, live VE paper_live_config.
+"""R25 PROOF: guven esigi 40 + bantlar, live VE paper_live_config.
 
 Rock'in vaadi: 47 guvenli, kapilardan gecen bir BUY, HEM live HEM paper-livecfg
 profilinde executor'da $100 emir planina doner. paper_aggressive DEGISMEZ.
@@ -40,11 +40,11 @@ def size_at(cfg: dict, confidence: float, *, equity: float = EQUITY) -> float:
 
 
 # ------------------------------------------------------------------ config
-def test_esik_45_ve_taban_bant_ayni():
+def test_esik_40_ve_taban_bant_ayni():
     """Esik ile en dusuk bant AYNI olmali; yoksa esigi gecen sinyal boyutsuz kalir."""
     from config import STOCK_CONFIG
-    assert STOCK_CONFIG["min_confidence_score"] == 45
-    assert STOCK_CONFIG["live_conf_position_bands"][0][0] == 45, (
+    assert STOCK_CONFIG["min_confidence_score"] == 40
+    assert STOCK_CONFIG["live_conf_position_bands"][0][0] == 40, (
         "taban bant esikten farkli , esigi gecen sinyal sizer'da dusecek"
     )
 
@@ -88,24 +88,24 @@ def test_b2_paper_aggressive_canli_yoldan_GECMEZ(monkeypatch):
     assert canli_karar_profili() is False
 
 
-# ------------------------------------------------ (c) 44.9 esigin altinda
-def test_c_44_9_esigin_altinda_executor_cagrilmaz(monkeypatch):
-    """Gercek karar yolu: 44.9 BUY dalina HIC girmemeli."""
+# ------------------------------------------------ (c) 39.9 esigin altinda
+def test_c_39_9_esigin_altinda_executor_cagrilmaz(monkeypatch):
+    """Gercek karar yolu: 39.9 BUY dalina HIC girmemeli."""
     bumps, should_buy_calls = _analyze_with_confidence(
-        monkeypatch, confidence=44.9, regime="NORMAL"
+        monkeypatch, confidence=39.9, regime="NORMAL"
     )
     assert "conf_below_min_buy" in bumps
     assert should_buy_calls == [], "esigin altindaki sinyal BUY dalina girdi"
 
 
-def test_c2_44_9_sizer_da_bant_bulamaz():
+def test_c2_39_9_sizer_da_bant_bulamaz():
     """Cift emniyet: esigin altindaki guven bant yolunda da boyut uretmez."""
-    assert size_at(live_config(), 44.9) == 0.0
+    assert size_at(live_config(), 39.9) == 0.0
 
 
 # ------------------------------------------------------- (d) bant kademeleri
 @pytest.mark.parametrize("guven,beklenen", [
-    (45, 100.0), (47, 100.0), (59.9, 100.0),
+    (40, 100.0), (47, 100.0), (59.9, 100.0),
     (60, 150.0), (69.9, 150.0),
     (70, 200.0), (79.9, 200.0),
     (80, 300.0), (100, 300.0),
@@ -126,25 +126,25 @@ def test_d2_equity_tavani_bandi_kirpar(monkeypatch):
 
 
 # --------------------------------------------------------------- (e) BEAR
-def test_e_bear_rejimde_50_blok_55_gecer(monkeypatch):
-    """BEAR +10 aynen: efektif esik 55."""
+def test_e_bear_rejimde_49_9_blok_50_gecer(monkeypatch):
+    """BEAR +10 aynen: efektif esik 50."""
     from config import MARKET_REGIME_CONFIG, STOCK_CONFIG
     assert (
         STOCK_CONFIG["min_confidence_score"]
         + MARKET_REGIME_CONFIG.get("bear_buy_conf_increase", 10)
-    ) == 55
+    ) == 50
+
+    bumps, calls = _analyze_with_confidence(monkeypatch, confidence=49.9, regime="BEAR")
+    assert "conf_below_min_buy" in bumps
+    assert calls == [], "BEAR'da 49.9 guven BUY dalina girdi"
 
     bumps, calls = _analyze_with_confidence(monkeypatch, confidence=50, regime="BEAR")
-    assert "conf_below_min_buy" in bumps
-    assert calls == [], "BEAR'da 50 guven BUY dalina girdi"
-
-    bumps, calls = _analyze_with_confidence(monkeypatch, confidence=55, regime="BEAR")
     assert "conf_below_min_buy" not in bumps
-    assert calls == ["TEST"], "BEAR'da 55 guven BUY dalina girmedi"
+    assert calls == ["TEST"], "BEAR'da 50 guven BUY dalina girmedi"
 
 
-def test_e2_normal_rejimde_45_gecer(monkeypatch):
-    bumps, calls = _analyze_with_confidence(monkeypatch, confidence=45, regime="NORMAL")
+def test_e2_normal_rejimde_40_gecer(monkeypatch):
+    bumps, calls = _analyze_with_confidence(monkeypatch, confidence=40, regime="NORMAL")
     assert "conf_below_min_buy" not in bumps
     assert calls == ["TEST"]
 
@@ -178,11 +178,10 @@ def test_g_canli_esik_literali_kalmadi():
                     bulunan.append((dosya.relative_to(kok).as_posix(), no, int(eslesme.group(1))))
 
     # Kabul edilen yedek degerler ve GEREKCELERI:
-    #   45 , canli esik (tek dogru deger)
-    #   40 , backtest tarafinin KENDI tabani (canli yol degil, parity B kolu)
+    #   40 , R25 canli esik (tek dogru deger; parity B tabani da 40)
     #    0 , agent_stats telemetri sentinel'i: "esik kaydedilmedi" demek,
     #        bir esik VARSAYIMI degil (stock_bot.py, AgentStats.kaydet cagrisi)
-    kotu = [b for b in bulunan if b[2] not in (0, 40, 45)]
+    kotu = [b for b in bulunan if b[2] not in (0, 40)]
     assert not kotu, f"canli esik varsayimi olan eski literaller: {kotu}"
     # 50 bir daha sizmasin: bu deger artik hicbir yerde yedek olamaz.
     assert not [b for b in bulunan if b[2] == 50], (

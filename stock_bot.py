@@ -1139,10 +1139,10 @@ class StockBot:
                 return
 
             # Rejim bazli guven ayarlamasi
-            # R21: yedek deger canli esikle AYNI (45). Config anahtari her zaman
-            # dolu; burada 50 birakmak, anahtarin dustugu bir durumda sessizce
+            # R25: yedek deger canli esikle AYNI (40). Config anahtari her zaman
+            # dolu; burada eski degeri birakmak, anahtar dustugunde sessizce
             # ESKI esige donmek demekti.
-            effective_buy_conf = config.get("min_confidence_score", 45)
+            effective_buy_conf = config.get("min_confidence_score", 40)
             effective_short_conf = SHORT_CONFIG.get("short_min_confidence", 45)
 
             if self._market_regime == "BEAR":
@@ -1741,16 +1741,30 @@ class StockBot:
 
     def _get_symbols_to_analyze(self) -> List[str]:
         """Analiz edilecek hisseleri döndür ,  tarama sonucuna göre sırala."""
+        raw_limit = STOCK_CONFIG.get("scan_max_symbols")
+        if type(raw_limit) is not int or raw_limit < 1:
+            scan_limit = 10
+            if not getattr(self, "_scan_limit_warning_emitted", False):
+                logger.warning(
+                    f"Gecersiz scan_max_symbols={raw_limit!r}, "
+                    "eski guvenli deger 10 kullaniliyor"
+                )
+                self._scan_limit_warning_emitted = True
+        else:
+            scan_limit = min(raw_limit, 30)
+
         # Tarama sonuçları varsa öncelikli
         if self.screener.scan_cache:
             symbols = sorted(
                 self.screener.scan_cache.keys(),
                 key=lambda s: self.screener.scan_cache[s].get("score", 0),
                 reverse=True,
-            )[:10]
+            )[:scan_limit]
         else:
             # Yoksa varsayılan havuz
-            symbols = STOCK_CONFIG.get("symbols", list(STOCK_IDS.keys()))[:10]
+            symbols = STOCK_CONFIG.get(
+                "symbols", list(STOCK_IDS.keys())
+            )[:scan_limit]
 
         # v4.11: ters-ETF'ler tarama evreninden ÇIKTI ,  onları BearBrain kendi
         # piyasa-geneli skoruyla alıp satar (v4.8'in BEAR-rejim prepend'i, hiç

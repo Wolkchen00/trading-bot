@@ -31,6 +31,8 @@ class PeakNotInitialised(RuntimeError):
 
 # The two breaching readings that halt the engine must belong to the same decision window.
 CONFIRMATION_MAX_SECONDS = 600.0
+# A missing row is different from a corrupt stored value: with no row there is nothing to cross-check.
+NO_ROW = object()
 
 
 def _number(value) -> float | None:
@@ -41,6 +43,22 @@ def _number(value) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
     return result if math.isfinite(result) else None
+
+
+def breaker_cause(reading, stored_close, breaker_day):
+    """The breaker's read-only decision, shared by the engine and operator checks."""
+    if not reading.ok:
+        return None
+    baseline = _number(reading.last_equity)
+    if baseline is None or baseline <= 0.0:
+        return "BASELINE_DOUBT"
+    if stored_close is not NO_ROW:
+        stored = _number(stored_close)
+        if stored is None or abs(stored - baseline) > 0.02 * baseline:
+            return "BASELINE_DOUBT"
+    if reading.equity <= (1.0 - breaker_day) * baseline:
+        return "BREACH"
+    return None
 
 
 def read_equity(broker, now) -> EquityReading:
@@ -230,29 +248,21 @@ class Rails:
             current = document.get("breaker")
             if current and current.get("session") == session:
                 return True, False
-            baseline = _number(reading.last_equity)
-            cause = None
-            if baseline is None or baseline <= 0.0:
-                cause = "BASELINE_DOUBT"
-            else:
-                prior = [
-                    row
-                    for row in document.get("equity_history", [])
-                    if (
-                        str(row.get("session", "")) == previous
-                        if previous is not None
-                        else str(row.get("session", "")) < session
-                    )
-                ]
-                if prior:
-                    latest = max(prior, key=lambda row: str(row.get("session", "")))
-                    stored = _number(latest.get("equity"))
-                    if stored is None or abs(stored - baseline) > 0.02 * baseline:
-                        cause = "BASELINE_DOUBT"
-            if cause is None and reading.equity <= (1.0 - self.settings.rails.breaker_day) * baseline:
-                cause = "BREACH"
+            prior = [
+                row
+                for row in document.get("equity_history", [])
+                if (
+                    str(row.get("session", "")) == previous
+                    if previous is not None
+                    else str(row.get("session", "")) < session
+                )
+            ]
+            latest = max(prior, key=lambda row: str(row.get("session", ""))) if prior else None
+            stored = latest.get("equity") if latest is not None else NO_ROW
+            cause = breaker_cause(reading, stored, self.settings.rails.breaker_day)
             if cause is None:
                 return False, False
+            baseline = _number(reading.last_equity)
             document["breaker"] = {
                 "session": session,
                 "cause": cause,

@@ -315,3 +315,15 @@ AS BUILT, second part (2026-11-19, after the independent review; plan Revision 1
     then read on every tick); `UNRESOLVED` also for any record left open after its reconcile deadline.
 18. Digest context: `outcome` (NOT_SENT, REFUSED, UNKNOWN, FLOOR) replaces the reasons; `action` may be
     "unknown"; `day_usd` is None when the base is not known.
+
+AS BUILT, third part (2026-11-19, fix round R5c; builder Codex from `rf6/fix-r5c.md` and its second part, reviewer
+Claude with `tests_v5/test_r5c_saldirgan.py`; plan Revision 12)
+19. `_continue_block` takes the engine snapshot after the NOTIFY_MISSING check: SNAPSHOT_INVALID, BROKER_DOWN,
+    FOREIGN_ASSET (with its alert); any other fault there is ENGINE_FAULT and is re-raised after the chain
+    was driven.
+20. FAILED with detail NOT_FOUND on a strategy record: `NOT_SENT` (alert, digest outcome, status line), also
+    when the record is settled late.
+21. Digest context: `as_of_now`; dry-run actions `would_buy` / `would_sell` / `would_sell_all` from the DRY_RUN
+    record's last intent (floor record first); `OVERLAY_ENTER` / `OVERLAY_EXIT` filtered by what was filled.
+22. `rails.breaker_cause(reading, stored_close, breaker_day)` with the sentinel `NO_ROW` is the one breaker
+    rule; `Rails.check_breaker` and `ops._blockers` both use it.

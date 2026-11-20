@@ -38,6 +38,7 @@ REASON_SENTENCES = {
     "VOL_CALM": "Piyasa sakin.",
     "BAND_HOLD": "Hedefe yeterince yakınım, işlem gerekmedi.",
     "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım.",
+    "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum.",
     "OVERLAY_KEEP": "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum.",
     "OVERLAY_EXIT": "Dünkü ek alımı sattım.",
     "OVERLAY_DATA_MISSING": "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım.",
@@ -98,6 +99,7 @@ CAUSE_SENTENCES = {
     "FLOOR_HALT": "güvenlik sınırı aşıldığı için durmuş durumdayım",
     "BREAKER": "bugün sert düşüş olduğu için yeni alım yapmıyorum",
     "TIME_OUT": "süre yetmedi",
+    "NOT_FOUND": "emrim Alpaca'ya ulaşmadı",
 }
 
 
@@ -142,9 +144,13 @@ def build_digest(ctx) -> str:
     date_text = session.strftime("%d.%m.%Y")
     lines = [prefixes[ctx["prefix"]] + f"Gün sonu özeti ({date_text})"]
 
-    account = f"Hesap: {fmt_money(ctx['equity'])} dolar."
+    account = (
+        f"Hesap şu an {fmt_money(ctx['equity'])} dolar."
+        if ctx.get("as_of_now")
+        else f"Hesap: {fmt_money(ctx['equity'])} dolar."
+    )
     day_usd = ctx["day_usd"]
-    if day_usd is None:
+    if ctx.get("as_of_now") or day_usd is None:
         pass                            # the day's change is not known: nothing is claimed about it
     elif fmt_money(day_usd) == "0,00":
         account += " Bugün değişmedi."
@@ -166,7 +172,10 @@ def build_digest(ctx) -> str:
     else:
         lines.append(f"Elimde: yüzde {product} Nasdaq fonu, yüzde {100 - product} nakit.")
     action = ctx["action"]
-    if action not in {"none", "buy", "sell", "sell_all", "unknown"}:
+    if action not in {
+        "none", "buy", "sell", "sell_all", "unknown",
+        "would_buy", "would_sell", "would_sell_all",
+    }:
         raise ValueError("unknown digest action")
     if action == "none":
         action_text = "İşlem yapmadım."
@@ -176,6 +185,12 @@ def build_digest(ctx) -> str:
         action_text = f"{fmt_money(ctx['action_usd'])} dolarlık Nasdaq fonu aldım."
     elif action == "sell":
         action_text = f"{fmt_money(ctx['action_usd'])} dolarlık Nasdaq fonu sattım."
+    elif action == "would_buy":
+        action_text = f"Gerçek emir açık olsaydı {fmt_money(ctx['action_usd'])} dolarlık Nasdaq fonu alırdım."
+    elif action == "would_sell":
+        action_text = f"Gerçek emir açık olsaydı {fmt_money(ctx['action_usd'])} dolarlık Nasdaq fonu satardım."
+    elif action == "would_sell_all":
+        action_text = "Gerçek emir açık olsaydı elimdeki fonun tamamını satardım."
     else:
         action_text = "Elimdeki fonun tamamını sattım."
     lines.append("Bugün ne yaptım: " + action_text)

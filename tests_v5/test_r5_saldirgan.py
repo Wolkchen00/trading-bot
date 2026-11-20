@@ -314,7 +314,7 @@ def assert_only_known_sentences(sim):
     for text in sim.digests():
         lines = text.split("\n")
         assert len(lines) == 7 and "{" not in text and "None" not in text, text
-        assert lines[1].startswith("Hesap: ") and lines[2].startswith("Elimde: yüzde ") and lines[3].startswith("Bugün ne yaptım: ")
+        assert lines[1].startswith(("Hesap: ", "Hesap şu an ")) and lines[2].startswith("Elimde: yüzde ") and lines[3].startswith("Bugün ne yaptım: ")
         assert lines[4].startswith("Neden: ") and lines[5].startswith("Bu ay: ") and lines[6].startswith("Durum: ")
         reasons = lines[4][len("Neden: "):]
         rest = reasons

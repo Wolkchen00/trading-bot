@@ -486,6 +486,7 @@ def test_reason_and_cause_sentences_are_exact():
         "VOL_CALM": "Piyasa sakin.",
         "BAND_HOLD": "Hedefe yeterince yakınım, işlem gerekmedi.",
         "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım.",
+        "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum.",
         "OVERLAY_KEEP": "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum.",
         "OVERLAY_EXIT": "Dünkü ek alımı sattım.",
         "OVERLAY_DATA_MISSING": "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım.",
@@ -508,6 +509,7 @@ def test_reason_and_cause_sentences_are_exact():
         "güvenlik sınırı aşıldığı için durmuş durumdayım": ["FLOOR_HALT"],
         "bugün sert düşüş olduğu için yeni alım yapmıyorum": ["BREAKER"],
         "süre yetmedi": ["TIME_OUT"],
+        "emrim Alpaca'ya ulaşmadı": ["NOT_FOUND"],
     }
     assert vn.OUTCOME_SENTENCES == {
         "NOT_SENT": "Karar verdim ama emri gönderemedim.",

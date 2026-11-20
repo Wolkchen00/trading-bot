@@ -56,6 +56,18 @@
 > nothing blocks; `replay` recomputes the order plan too and compares types strictly; `notify-test` sends one
 > test message to the process's own topic. The drill never sells a position it did not buy and also closes
 > short positions. The watchdog announces every new outage and labels the practice service.
+> **Revision 12** (2026-11-19) , from Codex's whole-tree review (cut short by its own content filter after
+> seven minutes, but it left four reproduction scripts; `RF-ISSUES-6.md` item 28). (1) The gate of a chain
+> under way also looks at the account: an unreadable or untrusted snapshot, or a foreign asset, stops any new
+> submission (a chain resumed after a crash used to re-send without that look). (2) A record that ends FAILED
+> because the order never reached the broker (`NOT_FOUND`) is told as "not sent", not as "refused".
+> (3) The two reason sentences that state an order are only shown when such an order was filled:
+> `OVERLAY_ENTER` needs a buy (when the books took the overlay without a buy, the new `OVERLAY_HELD` sentence
+> is shown instead), `OVERLAY_EXIT` needs a sale. (4) A dry-run summary says what would have been done.
+> (5) A summary sent late without a closing value says "Hesap şu an ..." (the value of the moment).
+> (6) `decide-now` uses the engine's own breaker rule (`rails.breaker_cause`); `health.assess` no longer
+> calls an incomplete or future-dated heartbeat healthy. (7) The drill's clean-up step leaves dust alone and
+> waits for its cancels before it closes positions.
 > Builder note: Codex's quota ran out on 2026-11-16 08:49 PT in the R1 fix round. From there the builder is a
 > fresh Claude agent per rock working from the same written contracts; Claude (this session) stays the
 > reviewer with its own adversarial suites; Codex reviews the whole v5 tree when its quota returns.
@@ -553,16 +565,21 @@ Reason keys returned by `decide` and their sentences:
 - `VOL_HIGH`: "Piyasa çok oynak, bu yüzden payı azalttım." (used when `target_vol / vol < 1`)
 - `VOL_CALM`: "Piyasa sakin." (used when `target_vol / vol >= 3`)
 - `BAND_HOLD`: "Hedefe yeterince yakınım, işlem gerekmedi."
-- `OVERLAY_ENTER`: "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım."
+- `OVERLAY_ENTER`: "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım." (Revision 12: shown
+  only on a day with a filled buy)
+- `OVERLAY_HELD` (Revision 12; replaces `OVERLAY_ENTER` in the summary when the books took the overlay without
+  a buy, for example when the core's exit and the overlay's entry cancel out): "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum."
 - `OVERLAY_KEEP`: "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum."
-- `OVERLAY_EXIT`: "Dünkü ek alımı sattım."
+- `OVERLAY_EXIT`: "Dünkü ek alımı sattım." (Revision 12: shown only on a day with a filled sale)
 - `OVERLAY_DATA_MISSING`: "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım."
 - `BREAKER_REDUCE_ONLY` (added by the rails when the breaker is active): "Bugün sert düşüş olduğu için yeni alım yapmadım."
 
 Digest (kind `DIGEST`), seven lines, numbers with a comma as decimal mark and a dot for thousands:
 1. "Gün sonu özeti ({date})" with the date as 16.11.2026. Prefix for paper: "DENEME HESABI. " Prefix for live
    dry-run: "DENEME, gerçek emir gönderilmedi. "
-2. "Hesap: {equity} dolar." followed by " Bugün yüzde {p} arttı ({usd} dolar)." or
+2. (Revision 12: "Hesap şu an {equity} dolar." and nothing else when the summary is sent late and no closing
+   value of that session could be determined.) Otherwise:
+   "Hesap: {equity} dolar." followed by " Bugün yüzde {p} arttı ({usd} dolar)." or
    " Bugün yüzde {p} azaldı ({usd} dolar)." or " Bugün değişmedi."; nothing follows when the day's change is
    not known (Revision 11: a late report, or no usable value for the session before).
 3. "Elimde: yüzde {product_pct} Nasdaq fonu, yüzde {cash_pct} nakit." When the owner holds shares of his own
@@ -570,7 +587,10 @@ Digest (kind `DIGEST`), seven lines, numbers with a comma as decimal mark and a 
    aldığın hisse ({symbols}), yüzde {cash_pct} nakit." (all three as shares of the whole account)
 4. "Bugün ne yaptım: " followed by "İşlem yapmadım." | "{usd} dolarlık Nasdaq fonu aldım." |
    "{usd} dolarlık Nasdaq fonu sattım." | "Elimdeki fonun tamamını sattım." |
-   "Bir emir gönderdim ama sonucunu henüz öğrenemedim." (Revision 11: an order of the day is still open)
+   "Bir emir gönderdim ama sonucunu henüz öğrenemedim." (Revision 11: an order of the day is still open) |
+   dry-run only (Revision 12): "Gerçek emir açık olsaydı {usd} dolarlık Nasdaq fonu alırdım." |
+   "Gerçek emir açık olsaydı {usd} dolarlık Nasdaq fonu satardım." |
+   "Gerçek emir açık olsaydı elimdeki fonun tamamını satardım."
 5. "Neden: " followed by the reason sentences, or "Bugün karar veremedim.". When the decision was not carried
    out the reasons are replaced (Revision 11) by: "Karar verdim ama emri gönderemedim." (NOT_SUBMITTED) |
    "Karar verdim ama Alpaca emrimi kabul etmedi." (FAILED) | "Emrimin sonucunu henüz öğrenemedim." (still
@@ -594,7 +614,7 @@ write to the owner's phone):
   "hesap değerini doğrulayamadım" | (Revision 11) "hesapta benim almadığım bir varlık ya da emir var" |
   "önceki emrimin akıbeti hala belli değil" | "bot duraklatılmış durumda" |
   "güvenlik sınırı aşıldığı için durmuş durumdayım" | "bugün sert düşüş olduğu için yeni alım yapmıyorum" |
-  "süre yetmedi"
+  "süre yetmedi" | (Revision 12) "emrim Alpaca'ya ulaşmadı"
 - `NOT_SENT` (Revision 11; a trade was decided but its order was never sent): "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden karar veririm."
 - `MISSED`: "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim."
 - `ORDER_FAILED`: "Alpaca emrimi kabul etmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Claude'a 'trading botuna bak' yazarsan sebebini inceler."

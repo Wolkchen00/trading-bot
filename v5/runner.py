@@ -21,7 +21,7 @@ from .clock import ET, SessionCalendar, parse_calendar, window_for
 from .config import ConfigError, load_settings
 from .data import InputsNotReady, build_inputs
 from .executor import (
-    CAPPED, FAILED, HOLD_NOT_READY, MISSED, NOT_READY, NOT_SUBMITTED, NO_TRADE, PARTIAL, UNRESOLVED,
+    CAPPED, DRY_RUN, FAILED, HOLD_NOT_READY, MISSED, NOT_READY, NOT_SUBMITTED, NO_TRADE, PARTIAL, UNRESOLVED,
     Executor, SessionRecord, SnapshotInvalid, take_snapshot,
 )
 from .health import write_heartbeat
@@ -650,6 +650,18 @@ class Runner:
             return "MARKET_CLOSED", None
         if not self.notifier.configured:
             return "NOTIFY_MISSING", None
+        try:
+            snapshot = self._snapshot()
+        except SnapshotInvalid:
+            return "SNAPSHOT_INVALID", None
+        except BrokerError:
+            return "BROKER_DOWN", None
+        except Exception as exc:
+            return ("STATE_CORRUPT" if isinstance(exc, StateCorrupt) else "ENGINE_FAULT"), exc
+        if snapshot.foreign:
+            symbol = _item_symbol(snapshot.foreign[0])
+            self.notifier.alert("FOREIGN_ASSET", state_key=symbol, symbol=symbol)
+            return "FOREIGN_ASSET", None
         if paused:
             return "PAUSED", None
         if breaker and self._is_buy(record):
@@ -692,6 +704,11 @@ class Runner:
         day = session.date.isoformat()
         if record.status == UNRESOLVED:
             self.notifier.alert("UNRESOLVED", state_key=day)
+        elif (
+            record.status == FAILED and record.data.get("status_detail") == "NOT_FOUND"
+            and record.data.get("purpose") == "dec"
+        ):
+            self.notifier.alert("NOT_SENT", state_key=day, cause=self._not_sent_cause(record))
         elif record.status == FAILED:
             self.notifier.alert("ORDER_FAILED", state_key=day, product_pct=self._account_weight(record))
         elif record.status == NOT_SUBMITTED and record.data.get("purpose") == "dec" and not late:
@@ -865,13 +882,19 @@ class Runner:
         missing = bool(isinstance(decision, dict) and decision.get("overlay_data_missing"))
         state["overlay_missing_streak"] = int(state.get("overlay_missing_streak") or 0) + 1 if missing else 0
 
-        self.notifier.digest(day, self._digest_context(now, day, reading, shown, base, record, floor_record))
+        self.notifier.digest(
+            day,
+            self._digest_context(
+                now, day, reading, shown, base, record, floor_record,
+                as_of_now=close_equity is None,
+            ),
+        )
         state["closed_session"] = day.isoformat()
         self._save_state(state)
         self._digest_pending = False
         log.info("session %s closed: equity %.2f%s", day, shown, " (reported late)" if late else "")
 
-    def _digest_context(self, now, day, reading, equity, base, record, floor_record) -> dict:
+    def _digest_context(self, now, day, reading, equity, base, record, floor_record, as_of_now=False) -> dict:
         try:
             snapshot = self._snapshot()
             account = snapshot.account_equity or snapshot.equity
@@ -911,6 +934,22 @@ class Runner:
         else:
             action, action_usd = "none", 0.0
 
+        dry_record = (
+            floor_record if floor_record is not None and floor_record.status == DRY_RUN
+            else record if record is not None and record.status == DRY_RUN
+            else None
+        )
+        if dry_record is not None:
+            intents = dry_record.data.get("intents")
+            intent = intents[-1] if isinstance(intents, list) and intents else None
+            if isinstance(intent, dict):
+                action = {
+                    "buy": "would_buy", "sell": "would_sell", "sell_all": "would_sell_all", "none": "none",
+                }.get(intent.get("kind"), "none")
+                action_usd = intent.get("desired_usd") or 0.0
+            else:
+                action, action_usd = "none", 0.0
+
         # The reasons of a decision are only shown when the decision was carried out. Otherwise the summary says
         # what happened to it, never what it would have done.
         outcome = None
@@ -919,13 +958,28 @@ class Runner:
         elif record is not None and record.status == NOT_SUBMITTED:
             outcome = "NOT_SENT"
         elif record is not None and record.status == FAILED:
-            outcome = "REFUSED"
+            outcome = "NOT_SENT" if record.data.get("status_detail") == "NOT_FOUND" else "REFUSED"
         elif floor_record is not None or self._hold_code(record) == "FLOOR_HALT":
             outcome = "FLOOR"
         decision = record.data.get("decision") if record is not None else None
         reason_keys = None
         if outcome is None and isinstance(decision, dict):
             reason_keys = list(decision.get("reason_keys") or [])
+        if isinstance(reason_keys, list):
+            if "OVERLAY_ENTER" in reason_keys and bought <= 0:
+                before = record.data.get("before") if record is not None else None
+                entered = (
+                    isinstance(before, dict)
+                    and float(record.data.get("overlay_fraction_committed") or 0.0) > 1e-12
+                    and float(before.get("overlay_fraction_committed") or 0.0) <= 1e-12
+                )
+                reason_keys = [
+                    "OVERLAY_HELD" if key == "OVERLAY_ENTER" and entered else key
+                    for key in reason_keys
+                    if key != "OVERLAY_ENTER" or entered
+                ]
+            if sold <= 0:
+                reason_keys = [key for key in reason_keys if key != "OVERLAY_EXIT"]
 
         history = self.rails.state().get("equity_history", [])
         month_start = day.replace(day=1).isoformat()
@@ -942,6 +996,7 @@ class Runner:
             "date": day,
             "prefix": prefix,
             "equity": equity,
+            "as_of_now": bool(as_of_now),
             "day_usd": day_usd,
             "day_pct": None if day_usd is None else day_usd / base,
             "product_weight": product_weight,
@@ -971,6 +1026,16 @@ class Runner:
         if code == "FOREIGN_ASSET":
             return build_alert("FOREIGN_ASSET", symbol=_item_symbol(record.data["inputs"].get("detail") or ""))
         records = [item for item in (record, floor_record) if item is not None]
+        not_found = next(
+            (
+                item for item in records
+                if item.status == FAILED and item.data.get("status_detail") == "NOT_FOUND"
+                and item.data.get("purpose") == "dec"
+            ),
+            None,
+        )
+        if not_found is not None:
+            return build_alert("NOT_SENT", cause=self._not_sent_cause(not_found))
         if any(item.status == FAILED for item in records):
             return build_alert("ORDER_FAILED", product_pct=product_weight)
         for item in records:

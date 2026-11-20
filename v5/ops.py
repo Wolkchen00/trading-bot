@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import shutil
 import sys
@@ -23,7 +22,7 @@ from .executor import Executor, SnapshotInvalid, plan_order, take_snapshot
 from .health import assess, read_heartbeat
 from .notify import Notifier, Outbox, default_post
 from .packages import get_package
-from .rails import Rails, read_equity, reduce_only
+from .rails import NO_ROW, Rails, breaker_cause, read_equity, reduce_only
 from .state import StateCorrupt, read_json
 from .strategy import READY, decide
 
@@ -177,7 +176,7 @@ def _same(left, right) -> bool:
     return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
 
 
-def _blockers(settings, broker, now, session, snapshot, executor, reading):
+def _blockers(settings, broker, now, calendar, session, snapshot, executor, reading):
     """Everything that would stop the running engine from placing a new strategy order at this moment, in the
     engine's own order, and whether today's breaker leaves it sells only. Read-only."""
     found, breaker = [], False
@@ -201,12 +200,14 @@ def _blockers(settings, broker, now, session, snapshot, executor, reading):
             found.append("RAIL_CONFIRMING")
         stored = document.get("breaker")
         breaker = bool(stored and stored.get("session") == session.date.isoformat())
-    baseline = reading.last_equity
-    if (
-        reading.ok and isinstance(baseline, (int, float)) and not isinstance(baseline, bool)
-        and math.isfinite(baseline) and baseline > 0
-    ):
-        breaker = breaker or reading.equity <= (1.0 - settings.rails.breaker_day) * baseline
+        previous = calendar.previous(session.date, 1)
+        previous_text = previous[-1].isoformat() if previous else None
+        rows = document.get("equity_history", [])
+        prior = next((row for row in rows if row.get("session") == previous_text), None)
+        stored_close = prior.get("equity") if prior is not None else NO_ROW
+        breaker = breaker or (
+            reading.ok and breaker_cause(reading, stored_close, settings.rails.breaker_day) is not None
+        )
     try:
         clock = broker.get_clock()
         if abs((clock.timestamp - now).total_seconds()) > 60.0:
@@ -246,7 +247,7 @@ def cmd_decide_now(settings, broker, now, out_path=None):
             )
             fraction = executor.load_overlay_fraction()
             reading = read_equity(broker, now)
-            blockers, breaker = _blockers(settings, broker, now, session, snapshot, executor, reading)
+            blockers, breaker = _blockers(settings, broker, now, calendar, session, snapshot, executor, reading)
             document["snapshot"] = {
                 "equity": snapshot.equity, "account_equity": snapshot.account_equity,
                 "owner_value": snapshot.owner_value, "cash": snapshot.cash, "spendable": snapshot.spendable,

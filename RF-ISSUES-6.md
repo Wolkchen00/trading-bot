@@ -134,3 +134,15 @@
     close was missed stayed unreported when the process came back after the next close, or when one account
     reading failed during the catch-up. Fixed by the catch-up rule of Revision 11 (2) (tests at the end of
     `tests_v5/test_r5b_inceleme.py`); the same seeds and one new range are clean.
+
+28. [done, 2026-11-19] Codex's whole-tree review started when its quota returned (19:10 PT) and was stopped by
+    its own content filter after seven minutes (the request was worded as an attack exercise). It had read the
+    plan and most of the tree and left four reproduction scripts, which the reviewer ran. All four were real:
+    (1) a chain resumed after a crash re-sent its order although a foreign asset had appeared; (2) a NETTED
+    re-assignment was described as an extra buy; (3) a summary sent late showed the value of the moment under
+    an earlier date; (4) `decide-now` ignored the breaker's baseline cross-check, and the health check called
+    an incomplete or future-dated heartbeat healthy. While tracing them the reviewer added: a FAILED record
+    whose order never reached the broker was reported as refused, and the drill's clean-up step failed on the
+    real practice account (dust, cancels still pending). Fix round R5c: Codex built from `rf6/fix-r5c.md`
+    (two parts), Claude reviewed with its own suite. Plan Revision 12.
+    Still owed: a complete Codex review with a request that is worded as a correctness review.

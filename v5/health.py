@@ -47,18 +47,31 @@ def _age(heartbeat, now) -> float | None:
 def assess(heartbeat, now):
     if not isinstance(heartbeat, dict):
         return 2, ["Heartbeat is missing or unreadable."]
+    incomplete = (
+        not isinstance(heartbeat.get("states"), list)
+        or not isinstance(heartbeat.get("readiness"), dict)
+    )
     age = _age(heartbeat, now)
     if age is None:
-        return 2, ["Heartbeat time is missing or unreadable."]
+        lines = ["Heartbeat time is missing or unreadable."]
+        if incomplete:
+            lines.append("Heartbeat is incomplete.")
+        return 2, lines
 
     lines = []
     level = 0
+    if incomplete:
+        level = 1
+        lines.append("Heartbeat is incomplete.")
+    if age < -60:
+        level = 2
+        lines.append(f"Heartbeat time is in the future ({int(-age)} seconds).")
     if age > 300:
         level = 2
         lines.append(f"Heartbeat is stale ({int(age)} seconds old).")
 
     raw_states = heartbeat.get("states", [])
-    states = raw_states if isinstance(raw_states, list) else ["UNKNOWN_STATE"]
+    states = raw_states if isinstance(raw_states, list) else []
     for state in states:
         if state in CRITICAL_STATES:
             level = 2
@@ -68,8 +81,8 @@ def assess(heartbeat, now):
             lines.append(f"Degraded state is active: {state}.")
 
     readiness = heartbeat.get("readiness", {})
-    problems = readiness.get("problems", []) if isinstance(readiness, dict) else ["unreadable"]
-    readiness_bad = not isinstance(readiness, dict) or readiness.get("ok") is False or bool(problems)
+    problems = readiness.get("problems", []) if isinstance(readiness, dict) else []
+    readiness_bad = isinstance(readiness, dict) and (readiness.get("ok") is False or bool(problems))
     if readiness_bad:
         level = max(level, 1)
         detail = ", ".join(str(item) for item in problems) or "not ready"

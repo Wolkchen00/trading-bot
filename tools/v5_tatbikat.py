@@ -120,14 +120,28 @@ class _Drill:
             return False, "skipped: this step sells positions, run it again with --yes"
         stamp = int(self.now_fn().timestamp())
         cancelled = sold = 0
+        owners = {s.upper() for s in self.owner_symbols}
         for order in self.broker.get_open_orders():
-            if order.symbol.upper() in {s.upper() for s in self.owner_symbols}:
+            if order.symbol.upper() in owners:
                 continue
             self.broker.cancel_order(order.id)
             cancelled += 1
-        owners = {s.upper() for s in self.owner_symbols}
+        open_symbols = []
+        for attempt in range(30):
+            open_symbols = sorted({
+                order.symbol for order in self.broker.get_open_orders()
+                if order.symbol.upper() not in owners
+            })
+            if not open_symbols:
+                break
+            if attempt != 29:
+                self.sleep_fn(1)
+        if open_symbols:
+            return False, "open orders did not cancel: " + ", ".join(open_symbols)
         for position in self.broker.get_positions():
             if position.symbol == self.product or position.symbol.upper() in owners:
+                continue
+            if abs(position.market_value) < 1.0:
                 continue
             quantity = Decimal(position.qty)
             if quantity == 0:
@@ -143,7 +157,10 @@ class _Drill:
         for _ in range(30):
             left = [
                 p.symbol for p in self.broker.get_positions()
-                if p.symbol != self.product and p.symbol.upper() not in owners and Decimal(p.qty) != 0
+                if (
+                    p.symbol != self.product and p.symbol.upper() not in owners
+                    and abs(p.market_value) >= 1.0 and Decimal(p.qty) != 0
+                )
             ]
             if not left:
                 break

@@ -386,7 +386,7 @@ def test_a_report_made_the_next_morning_never_stores_the_overnight_move(tmp_path
     assert len(sim.digests()) == 1
     lines = sim.digests()[0].split("\n")
     assert lines[0] == "DENEME HESABI. Gün sonu özeti (16.11.2026)"
-    assert lines[1] == "Hesap: %s dolar." % vn.fmt_money(morning_value)               # no "today" claim at all
+    assert lines[1] == "Hesap şu an %s dolar." % vn.fmt_money(morning_value)        # the value belongs to now, not D1
     assert D1.isoformat() not in rows(sim) and sim.rails().peak() == 490.0            # nothing stored, peak untouched
 
     def broker_baseline(t, r):

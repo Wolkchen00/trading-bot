@@ -50,7 +50,7 @@ REASON_SENTENCES = {
 
 
 TEMPLATES = {
-    "CLOSE_CORRECTED": "Dünkü özetteki hesap değeri yanlış okunmuş. Doğru kapanış değeri {equity} dolar.",
+    "CLOSE_CORRECTED": "Gün sonu özetindeki hesap değeri yanlış okunmuş ({date}). Doğru kapanış değeri {equity} dolar.",
     "DRAWDOWN_ALERT": "Hesap en yüksek değerinden yüzde {pct} aşağıda, şu an {equity} dolar. Bu risk seviyesinde geçmişte görülen en derin düşüşe geldik. Kurala göre çalışmaya devam ediyorum. Durdurmak istersen Claude'a 'botu durdur' yaz.",
     "BREAKER": "Hesap bugün yüzde {pct} düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum.",
     "FLOOR_DONE": "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz.",
@@ -68,7 +68,7 @@ TEMPLATES = {
     "CAPPED_IDLE": "Hedefin tamamı için boş nakit yok.",
     "UNRESOLVED": "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
     "FOREIGN_ASSET": "Hesapta benim almadığım bir varlık ya da emir var ({symbol}). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver.",
-    "DATA_DOUBT": "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye satış yapmadım, izlemeye devam ediyorum.",
+    "DATA_DOUBT": "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye güvenlik satışı yapmadım, izlemeye devam ediyorum.",
     "PAUSED": "Bot duraklatılmış durumda. Elimdekiler duruyor, yeni işlem yapmıyorum.",
     "NOT_STARTED": "Bot başlayamadı. Claude'a 'trading botuna bak' yaz.",
     "WATCHDOG": "Trading botu çalışmıyor görünüyor. Claude'a 'trading botuna bak' yaz.",
@@ -272,6 +272,8 @@ def build_alert(kind, **fields) -> str:
         formatted["equity"] = fmt_money(formatted["equity"])
     if "product_pct" in names:
         formatted["product_pct"] = fmt_weight(formatted["product_pct"])
+    if "date" in names:
+        formatted["date"] = formatted["date"].strftime("%d.%m.%Y")     # like the first line of the summary
     return template.format(**formatted)
 
 

@@ -71,7 +71,7 @@ def test_a_named_official_close_replaces_the_bad_row_and_the_owner_is_told_once(
     sim.run_day(D2, runner)
     row = [row for row in sim.rails().state()["equity_history"] if row["session"] == D1.isoformat()][0]
     assert row["equity"] == pytest.approx(true_close) and "provisional" not in row and row["corrected_from"] > 1000
-    told = [text for text in sim.alerts() if text.startswith("Dünkü özetteki hesap değeri yanlış okunmuş.")]
+    told = [text for text in sim.alerts() if text.startswith("Gün sonu özetindeki hesap değeri yanlış okunmuş (16.11.2026).")]
     assert len(told) == 1 and told[0].endswith("Doğru kapanış değeri %s dolar." % vn.fmt_money(true_close))
     assert not [text for text in sim.alerts() if text.startswith(DOUBT)]             # no doubt: the broker settled it
     info = sim.rails().breaker_info()

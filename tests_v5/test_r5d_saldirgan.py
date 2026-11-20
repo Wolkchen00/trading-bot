@@ -23,7 +23,7 @@ from v5 import runner as vrun
 
 HOURS = dt.timedelta(hours=1)
 LIQUIDATING = "Güvenlik satışı hala bitmedi."
-DOUBT = "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye satış yapmadım, izlemeye devam ediyorum."
+DOUBT = "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye güvenlik satışı yapmadım, izlemeye devam ediyorum."
 WOULD = "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım."
 UNFILLED_REASON = "Neden: Karar verdim ama emrim gerçekleşmedi."
 

@@ -60,7 +60,9 @@ def test_h1_named_official_close_corrects_the_provisional_row(tmp_path):
     sim.fb.balance_asof = D1
     sim.run_day(D2, runner)
     assert rows(sim)[D1.isoformat()] == 490.0
-    assert sum("Dünkü özetteki hesap değeri yanlış okunmuş" in text for text in sim.alerts()) == 1
+    assert sum(
+        "Gün sonu özetindeki hesap değeri yanlış okunmuş (16.11.2026)." in text for text in sim.alerts()
+    ) == 1
     assert not any(text.startswith("Hesap değeri tutarsız göründü") for text in sim.alerts())
     info = sim.rails().breaker_info()
     assert not info or info.get("session") != D2.isoformat()

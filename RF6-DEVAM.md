@@ -149,13 +149,49 @@ Read on the server at 16:09 ET, nine minutes after both summaries.
 - The owner's own share is still held and both exit legs rest at the broker (figures in the operator's private
   notes). The real account's change of the day is that share's move alone.
 
+## 2026-11-20 , fourth deploy after the close: fix round R5e
+
+- Sources: the six-reviewer sweep (`RF-ISSUES-6.md` items 31 and 32, plan Revision 14). Codex built
+  `rf6/fix-r5e.md` and `rf6/fix-r5e-2.md` in two runs; when its quota ran out again Claude wrote the last five
+  small items (`rf6/fix-r5e-3.md`) and its own suite (`tests_v5/test_r5e_saldirgan.py`, 29 tests).
+- Proof: 937 passed on Windows; 937 passed inside a separately built image on the server with the network
+  off, on exactly the published tree (347 s).
+- Rehearsal before the deploy: a copy of both state folders as R5d left them after the first decision day was
+  put under the simulator and the new engine ran on it through the weekend, Monday and Tuesday. Nothing was
+  sent a second time and every file was accepted; with the extra share expiring on Monday the practice engine
+  sold it with ONE order (also when the process was replaced in the middle of the chain); with a second dip it
+  kept the share; on Tuesday Monday's provisional row was confirmed; the real account with orders off reported
+  once a day and named the owner's share. (The rehearsal reads account values, so it lives in the operator's
+  private folder, not here.)
+- Independent review of the upgrade itself (four reviewers, each with its own scripts: the state files one by
+  one including a roll-back to R5d, the timeline of the first week, everything the owner is told, the watchdog
+  and the health tool): no blocker. Its six small findings are `RF-ISSUES-6.md` item 33.
+- Before the publish, three places that named the amount reserved by the owner's own resting order got
+  neutral numbers; the scan of everything the publish adds (keys, topics, addresses, the owner's levels) was
+  clean.
+- Publish: `main` got one more commit, `42258c5` (the tree of the working branch at `b91fcaf`).
+- Deploy at 13:30 PT (21:30:39 to 21:31:58 UTC, 79 seconds), started right after the watchdog's ten-minute
+  mark so that no watchdog run met the gap. Verified in both containers:
+  - nine files (the six engine modules that changed, the watchdog, the two tools) have the same hash as in the
+    published tree;
+  - no state file was rewritten by the start (modification times unchanged): peaks 491.08 and 61900.58, both
+    equity rows, the practice account's extra share (fraction 1.0), `started_at` and the closed sessions;
+  - heartbeats twenty seconds after the start: phase `after_close`, real `['DRY_RUN']`, practice `[]`;
+    `v5.health --json`: practice level 0, real level 1 (orders off counts as "degraded" by design, the
+    watchdog is silent about it), `owner_unreachable` false on both;
+  - logs: the start line only; no message on either topic during or after the deploy.
+- The watchdog on the host was replaced by the new script (copied out of the image, same hash as in the
+  repository, checked with the host's `sh`; the previous one is kept beside it). One run by hand: silent, no
+  log line, no stamp.
+- The temporary test image, the build folder, its logs and the state copy were removed from the server.
+
 Still to do (in this order)
-1. Done the same evening (see above).
-2. Done on the morning of the 20th (see above).
-3. 20 November 15:50 ET: watch the first paper decision and both evening summaries.
-4. Codex whole-tree review: done and processed in R5d (see the third deploy above).
-5. Fix round R5e: built and reviewed on the morning of the 20th (`RF-ISSUES-6.md` item 32, plan Revision
-   14). Its deploy (the fourth) follows after the first session has closed and its two summaries were read.
-6. The notification channel gets a new name before real money trades (the owner subscribes on the phone
+1. Done: first deploy, the morning checks, the first decision day, the Codex whole-tree review (R5d), fix
+   round R5e and its deploy (all above).
+2. Monday 23 November, the first session on R5e: after the open (both rows of the 20th unchanged, no alert),
+   the decision at 15:50 ET (the practice engine holds the extra share of the 20th and must sell or keep it by
+   the rule), both summaries; Tuesday morning: Monday's provisional rows are confirmed by the broker's close.
+3. The small items of `RF-ISSUES-6.md` item 33 (two sentences, the health tool), then a fifth deploy.
+4. The notification channel gets a new name before real money trades (the owner subscribes on the phone
    first; details are in the operator's private notes).
-7. Ask the owner; only then the live flag.
+5. Ask the owner; only then the live flag.

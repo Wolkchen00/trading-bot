@@ -110,6 +110,23 @@ Sahip başka bir hisse alırsa sembolü bu değişkene ekle ve konteyneri yenide
 6. Sahibe SOR. Onay gelirse `LIVE_TRADING_ENABLED=true` (Coolify ortam deposu + host `.env`), canlı konteyneri
    AYNI imajla yeniden oluştur, ilk canlı kararı izle (emir, dolum, kayıt DONE, günlük özet).
 
+Çalışan sistemi yeni sürüme yükseltme (20 Kasım'daki dördüncü kurulumda uygulanan sıra):
+1. İki konteynerin kayıt klasörünün kopyasını al (depoya KOYMA, hesap değerleri içerir). Yeni sürümü
+   simülatörde bu kopyanın üstünde hafta sonu ve sonraki iki seans boyunca yürüt: hiçbir mesaj ikinci kez
+   gitmemeli, her dosya kabul edilmeli, elde tutulan pay kurala göre satılmalı ya da tutulmalı.
+2. Yayınlanacak ağacın tamamını ayrı bir imajda, ağ kapalıyken sına. Yayının ekleyeceği her satırı anahtar,
+   kanal adı, adres ve sahibin emir seviyeleri için tara (seviyelerden türeyen sayılar da sayılır: nakit ile
+   alım gücü arasındaki fark gibi).
+3. Kurulumu bekçinin on dakikalık turundan HEMEN SONRA başlat (kurulum yaklaşık 80 saniye sürer). Tur tam o
+   boşluğa denk gelirse sahibe bir kez "bot çalışmıyor" mesajı gider.
+4. Kurulumdan sonra iki konteynerde: değişen dosyaların özeti yayınlanan ağaçla aynı mı, kayıt dosyalarının
+   değişme zamanı aynı kaldı mı (zirve, kapanış satırları, ek pay, `started_at`), kalp atışı taze mi,
+   `python -m v5.health --json` ne diyor (deneme 0; canlı kuru çalışırken 1 ve `DRY_RUN`, bu beklenen durumdur),
+   günlükte yalnız başlangıç satırı mı var, iki kanala da yeni mesaj gitmedi mi.
+5. Bekçi betiğini imajdan hosta kopyala, özetini depodakiyle karşılaştır, `sh -n` ile sına, eskisini yanında
+   bırak, bir kez elle koş (sessiz kalmalı, günlük ve sayaç dosyası oluşmamalı).
+6. Sunucudaki geçici imajı, klasörü ve kayıt kopyasını sil.
+
 Geri alma: bayrağı İKİ yerden de kaldır (Coolify ortam deposu ve host `.env`; biri kalırsa sonraki deploy
 bayrağı geri getirir) ve konteyneri yeniden oluştur; `pause`; açık emir varsa iptal et. Pozisyon sahibin kararı
 olmadan satılmaz. Bayrak kapalıyken taban aşılırsa bot satamaz, ama "DENEME, gerçek emir gönderilmedi." etiketiyle

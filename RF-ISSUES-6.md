@@ -237,3 +237,47 @@
     reviewer's, the rest in older files). One older assertion pinned a line 3 that added up to 101 and was
     changed with S1.
     Plan Revision 14.
+33. [done, 2026-11-20; its three code items were built as fix round R5f, item 34] Review of the upgrade itself before the fourth
+    deploy. Four independent reviewers (each with its own scripts, on a copy of the state both containers held
+    after the first decision day) looked at: every state file R5d writes against every reader in R5e, and the
+    reverse for a roll-back; the timeline of the first week on that state (the expiring extra share, a second
+    dip, a trend turn, a broker close far from the stored row, a crash of 17 percent, partial, refused, unfilled
+    and ambiguous sales, a new process on every tick); everything the owner is told; the watchdog and the health
+    tool. Result: no blocker. R5e accepts every file, sends nothing a second time, and R5d would read R5e's
+    files again if a roll-back were needed. Six small findings:
+    - (a) wording, goes into R5f as T1: the doubt alert says "satış yapmadım" on a day on which the rule's own
+      sale still goes through; it will speak of the safety sale.
+    - (b) wording, R5f T2: a corrected close speaks of "yesterday's" summary; after a weekend or a holiday it
+      is an older one. The sentence will carry the date.
+    - (c) hardening, R5f T3: the health tool computes "the owner cannot be reached" outside any guard; an
+      unreadable message file would end it without output and the watchdog would call the engine dead.
+    - (d) procedure, done: a watchdog run that falls into the minute in which a deploy replaces the containers
+      tells the owner once that the bot is not running. A deploy is started right after a ten-minute mark
+      (`RF6-CALISMA-KILAVUZU.md`); the fourth deploy was.
+    - (e) accepted: if the "delivered" mark of a message cannot be written (a failing disk), the watchdog
+      reports the owner as unreachable after two hours and the message is sent once more after a restart.
+      With a disk in that state the call to look at the bot is the right one.
+    - (f) moot: a rails file written by R5d with the drawdown alert active would have made R5e tell that alert
+      once more. Neither account was in that state at the deploy.
+34. [done, 2026-11-20] Fix round R5f (`rf6/fix-r5f.md`, plan Revision 15): the three code items of item 33
+    and a fourth one found while the round was read.
+    - Builder: the reviewer. On that afternoon the Codex tool ended right after starting on this machine (five
+      of six attempts ended with exit code 127 and no error text, in write mode and in read-only mode; the one
+      that ran was a one-word answer). The owner's standing rule for that case is that the reviewer takes over.
+    - Because builder and reviewer were the same, the order was kept strict: the contract first, then the
+      reviewer's suite from the contract (`tests_v5/test_r5f_saldirgan.py`), then the proof that those tests
+      fail on the code as it was, then the code; and a fresh reader with no part in the round read the diff.
+    - What the fresh reader found: the three items meet the contract; but the doubt sentence, old or new, is
+      false while the engine is halted (the safety sale has then been made or is under way). That became T4:
+      every place that sends `DATA_DOUBT` goes through one helper that says nothing in the state `HALT`. The
+      reviewer's test for it failed on the code before the change with exactly the false sentence (the day
+      after a completed safety sale: "güvenlik satışı yapmadım"). The fresh reader then read T4 as well.
+    - T1: `DATA_DOUBT` now reads "... Yanlış alarm olmasın diye güvenlik satışı yapmadım, ...". T2:
+      `CLOSE_CORRECTED` now reads "Gün sonu özetindeki hesap değeri yanlış okunmuş ({date}). Doğru kapanış
+      değeri {equity} dolar." T3: `v5.health` answers when the message file cannot be read
+      (`owner_unreachable` true, level 1 at least, its own line).
+    - Proof: 946 passed on Windows (937 before the round; 9 new cases in the reviewer's file); the run inside
+      the image on the server is recorded with the fifth deploy in `RF6-DEVAM.md`. Two older assertions that
+      pinned the old sentences were changed in the builder's files (`tests_v5/test_r4_notify.py`,
+      `tests_v5/test_r5e_duzeltme.py`) and four in the reviewer's. The rehearsal on the copy of the real
+      state was repeated on the new code: unchanged.

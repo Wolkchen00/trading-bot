@@ -112,11 +112,18 @@ def main(argv=None):
     heartbeat = read_heartbeat(settings.state_dir)
     now = datetime.now(timezone.utc)
     level, lines = assess(heartbeat, now)
-    owner_unreachable = bool(
-        not isinstance(heartbeat, dict)
-        or heartbeat.get("ntfy_configured") is False
-        or Outbox(settings.state_dir).owner_unreachable(now)
-    )
+    try:
+        owner_unreachable = bool(
+            not isinstance(heartbeat, dict)
+            or heartbeat.get("ntfy_configured") is False
+            or Outbox(settings.state_dir).owner_unreachable(now)
+        )
+    except Exception:
+        # The message file could not be read, so it cannot be shown that the owner can be reached. The tool
+        # still answers: the watchdog must report this, not an engine that looks dead.
+        owner_unreachable = True
+        level = max(level, 1)
+        lines = [line for line in lines if line != "Healthy."] + ["The owner message file could not be read."]
     if args.as_json:
         print(
             json.dumps(

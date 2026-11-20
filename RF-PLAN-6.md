@@ -132,6 +132,15 @@
 > the clocks disagree the catch-up of earlier sessions waits; a refusal that was never written down (a death
 > between the broker's answer and the record) is sent once more after the restart; a summary whose
 > "delivered" mark was lost in a death can arrive twice.
+> **Revision 15** (2026-11-20) , fix round R5f: three small items from the review of the R5d -> R5e upgrade
+> on a copy of the real state (`RF-ISSUES-6.md` item 33). (1) `DATA_DOUBT` speaks of the safety sale: on a day
+> with a doubtful reading the rule's own sale may still go through, and the alert must not read as "no sale
+> at all". (2) `CLOSE_CORRECTED` names the summary it corrects by its date: the correction is told in the
+> next session, which after a weekend or a holiday is not the day after. (3) `v5.health` answers even when
+> the message file cannot be read: it then reports `owner_unreachable` and at least level 1, so the watchdog
+> names that and not a dead engine. No owner sentence begins with a placeholder. (4) `DATA_DOUBT` is not
+> sent while the floor state is `HALT`: the safety sale has then been made or is under way, and the floor
+> messages and the status line of the summary speak for it.
 > Builder note: Codex's quota ran out on 2026-11-16 08:49 PT in the R1 fix round. From there the builder is a
 > fresh Claude agent per rock working from the same written contracts; Claude (this session) stays the
 > reviewer with its own adversarial suites; Codex reviews the whole v5 tree when its quota returns.
@@ -696,7 +705,7 @@ write to the owner's phone):
   "hesapta benim vermediğim bir Nasdaq fonu emri var" | "Alpaca'ya bağlanamadım" |
   "hesap değerini doğrulayamadım" | "kayıt dosyam bozuk" | (a dry run) "gerçek emir gönderme kapalı"
 - `FLOOR_WAITING_BLIND` (Revision 14; the same when the holding could not be read): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Güvenlik satışını henüz başlatamadım, çünkü {cause}. Denemeye devam ediyorum."
-- `CLOSE_CORRECTED` (Revision 14; the broker's official close contradicts the value of yesterday's summary): "Dünkü özetteki hesap değeri yanlış okunmuş. Doğru kapanış değeri {equity} dolar."
+- `CLOSE_CORRECTED` (Revision 14; the broker's official close contradicts the value of the summary of that session; Revision 15: the session is named by its date, written like the summary's first line): "Gün sonu özetindeki hesap değeri yanlış okunmuş ({date}). Doğru kapanış değeri {equity} dolar."
 - `FLOOR_PENDING`: "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Satışa başladım ama henüz bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum."
 - `RAIL_LIQUIDATING`: "Güvenlik satışı hala bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler."
 - `HOLD_NOT_READY`: "Bugün karar veremedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden denerim."
@@ -713,7 +722,7 @@ write to the owner's phone):
 - `ORDER_PARTIAL`: "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın duruma yeniden bakarım."
 - `UNRESOLVED`: "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler."
 - `FOREIGN_ASSET`: "Hesapta benim almadığım bir varlık ya da emir var ({symbol}). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver."
-- `DATA_DOUBT`: "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye satış yapmadım, izlemeye devam ediyorum."
+- `DATA_DOUBT` (Revision 15: it speaks of the safety sale; the rule's own sale can still happen that day; never sent while the engine is halted): "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye güvenlik satışı yapmadım, izlemeye devam ediyorum."
 - `PAUSED`: "Bot duraklatılmış durumda. Elimdekiler duruyor, yeni işlem yapmıyorum."
 - `NOT_STARTED`: "Bot başlayamadı. Claude'a 'trading botuna bak' yaz."
 - `READINESS` (Revision 14: only ever sent before the open): "Bugün borsa açılmadan önce bir sorun gördüm: {cause}. Düzelmezse bugün işlem yapmayacağım."

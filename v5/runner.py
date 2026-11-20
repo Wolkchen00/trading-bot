@@ -672,8 +672,14 @@ class Runner:
             previous, float(value), raise_peak=True, current_equity=reading.equity,
         )
         if result == "stored_peak_refused":
-            self.notifier.alert("DATA_DOUBT", state_key=session.date.isoformat())
+            self._tell_doubt(session.date.isoformat())
         log.info("closing value of %s taken from the broker: %.2f", previous, value)
+
+    def _tell_doubt(self, state_key) -> None:
+        """`DATA_DOUBT` says that no safety sale was made. While the engine is halted that sale has been made
+        or is under way: the floor messages and the status line of the summary speak for it instead."""
+        if self.rails.floor_state() != "HALT":
+            self.notifier.alert("DATA_DOUBT", state_key=state_key)
 
     def _watch_breaker(self, reading, session, decisive=False) -> bool:
         day = session.date.isoformat()
@@ -681,7 +687,7 @@ class Runner:
         was = bool(info and info.get("session") == day)
         if not reading.ok:
             if reading.problem in ("EQUITY_BAD", "INCONSISTENT"):
-                self.notifier.alert("DATA_DOUBT", state_key=day)
+                self._tell_doubt(day)
             return was
         if "BROKER_DOWN" in self._readiness_problems or "EQUITY_DOUBT" in self._readiness_problems:
             self._readiness_problems = [p for p in self._readiness_problems if p not in ("BROKER_DOWN", "EQUITY_DOUBT")]
@@ -694,10 +700,11 @@ class Runner:
             )
             if confirmed == "corrected":
                 self.notifier.alert(
-                    "CLOSE_CORRECTED", state_key=previous.isoformat(), equity=reading.last_equity,
+                    "CLOSE_CORRECTED", state_key=previous.isoformat(), date=previous,
+                    equity=reading.last_equity,
                 )
             elif confirmed == "confirmed_peak_refused":
-                self.notifier.alert("DATA_DOUBT", state_key=day)
+                self._tell_doubt(day)
         active = self.rails.check_breaker(
             reading, session.date, self._previous_day(session.date), decisive=decisive
         )
@@ -707,7 +714,7 @@ class Runner:
             if info.get("cause") == "BREACH" and baseline and equity is not None:
                 self.notifier.alert("BREAKER", state_key=day, pct=1.0 - equity / baseline)
             else:
-                self.notifier.alert("DATA_DOUBT", state_key=day)
+                self._tell_doubt(day)
         return active
 
     def _breaker_hold(self, session, active):
@@ -779,7 +786,7 @@ class Runner:
                 if reading.problem in ACCOUNT_PROBLEMS:
                     self._not_ready(day, reading.problem)
                 else:
-                    self.notifier.alert("DATA_DOUBT", state_key=day.isoformat())
+                    self._tell_doubt(day.isoformat())
                     self._not_ready(day, "EQUITY_DOUBT")
                 return
         if floor == "HALT":
@@ -1210,7 +1217,7 @@ class Runner:
                 current_equity=reading.equity if late else None,
             )
             if result == "stored_peak_refused":
-                self.notifier.alert("DATA_DOUBT", state_key=now.astimezone(ET).date().isoformat())
+                self._tell_doubt(now.astimezone(ET).date().isoformat())
         if self.rails.floor_state() != "HALT":
             drawdown = self.rails.check_alert(reading)
             if self.rails.alert_pending():

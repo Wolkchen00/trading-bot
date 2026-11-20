@@ -32,7 +32,7 @@ EXPECTED_TEMPLATES = {
     "ORDER_PARTIAL": "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Yarın duruma yeniden bakarım.",
     "UNRESOLVED": "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
     "FOREIGN_ASSET": "Hesapta benim almadığım bir varlık ya da emir var (XYZ). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver.",
-    "DATA_DOUBT": "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye satış yapmadım, izlemeye devam ediyorum.",
+    "DATA_DOUBT": "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye güvenlik satışı yapmadım, izlemeye devam ediyorum.",
     "PAUSED": "Bot duraklatılmış durumda. Elimdekiler duruyor, yeni işlem yapmıyorum.",
     "NOT_STARTED": "Bot başlayamadı. Claude'a 'trading botuna bak' yaz.",
     "WATCHDOG": "Trading botu çalışmıyor görünüyor. Claude'a 'trading botuna bak' yaz.",

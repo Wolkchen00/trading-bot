@@ -1,0 +1,27 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/positions/TQQQ"
+ },
+ "status": 200,
+ "body": {
+  "asset_id": "dce2ac30-c928-4416-be25-2213d057f30a",
+  "symbol": "TQQQ",
+  "exchange": "NASDAQ",
+  "asset_class": "us_equity",
+  "asset_marginable": true,
+  "qty": "0.550448601",
+  "qty_available": "0.550448601",
+  "avg_entry_price": "54.464667",
+  "side": "long",
+  "market_value": "29.971926",
+  "cost_basis": "29.98",
+  "unrealized_pl": "-0.008074",
+  "unrealized_plpc": "-0.00027",
+  "unrealized_intraday_pl": "-0.008074",
+  "unrealized_intraday_plpc": "-0.00027",
+  "current_price": "54.45",
+  "lastday_price": "57.68",
+  "change_today": "-0.056"
+ }
+}

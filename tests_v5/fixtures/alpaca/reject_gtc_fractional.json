@@ -1,0 +1,8 @@
+{
+ "request": null,
+ "status": 422,
+ "body": {
+  "code": 42210000,
+  "message": "fractional orders must be DAY orders"
+ }
+}

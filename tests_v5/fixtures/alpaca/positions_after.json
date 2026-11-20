@@ -1,0 +1,46 @@
+{
+ "request": null,
+ "status": 200,
+ "body": [
+  {
+   "asset_id": "b28f4066-5c6d-479b-a2af-85dc1a8f16fb",
+   "symbol": "SPY",
+   "exchange": "ARCA",
+   "asset_class": "us_equity",
+   "asset_marginable": true,
+   "qty": "33.221113325",
+   "qty_available": "33.221113325",
+   "avg_entry_price": "747.937725",
+   "side": "long",
+   "market_value": "24773.648629",
+   "cost_basis": "24847.323922",
+   "unrealized_pl": "-73.675293",
+   "unrealized_plpc": "-0.00297",
+   "unrealized_intraday_pl": "-287.36263",
+   "unrealized_intraday_plpc": "-0.01147",
+   "current_price": "745.72",
+   "lastday_price": "754.37",
+   "change_today": "-0.01147"
+  },
+  {
+   "asset_id": "88a31675-a504-47ae-9906-79e44ff8a1e8",
+   "symbol": "XRPUSD",
+   "exchange": "CRYPTO",
+   "asset_class": "crypto",
+   "asset_marginable": false,
+   "qty": "0.000000001",
+   "qty_available": "0.000000001",
+   "avg_entry_price": "0",
+   "side": "long",
+   "market_value": "0",
+   "cost_basis": "0",
+   "unrealized_pl": "0",
+   "unrealized_plpc": "0",
+   "unrealized_intraday_pl": "0",
+   "unrealized_intraday_plpc": "0",
+   "current_price": "0.9519",
+   "lastday_price": "0.966132",
+   "change_today": "-0.01473"
+  }
+ ]
+}

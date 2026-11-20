@@ -1,0 +1,12 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/orders",
+  "query": {
+   "status": "open",
+   "limit": 500
+  }
+ },
+ "status": 200,
+ "body": []
+}

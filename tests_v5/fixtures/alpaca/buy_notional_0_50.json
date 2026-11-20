@@ -1,0 +1,8 @@
+{
+ "request": null,
+ "status": 422,
+ "body": {
+  "code": 42210000,
+  "message": "notional amount must be >= 1.00"
+ }
+}

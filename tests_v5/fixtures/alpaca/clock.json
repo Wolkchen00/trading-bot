@@ -1,0 +1,13 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/clock"
+ },
+ "status": 200,
+ "body": {
+  "is_open": true,
+  "next_close": "2026-11-16T16:00:00-05:00",
+  "next_open": "2026-11-17T09:30:00-05:00",
+  "timestamp": "2026-11-16T11:10:41.446130114-05:00"
+ }
+}

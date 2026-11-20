@@ -1,0 +1,24 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/stocks/TQQQ/trades/latest",
+  "query": {
+   "feed": "iex"
+  }
+ },
+ "status": 200,
+ "body": {
+  "symbol": "TQQQ",
+  "trade": {
+   "c": [
+    "@"
+   ],
+   "i": 4845,
+   "p": 54.49,
+   "s": 300,
+   "t": "2026-11-16T16:10:27.093984488Z",
+   "x": "V",
+   "z": "C"
+  }
+ }
+}

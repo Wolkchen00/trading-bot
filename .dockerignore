@@ -1,20 +1,15 @@
-.env
-__pycache__/
-*.pyc
-logs/
-crypto_trade_history.json
-kill_switch_state.json
-*.log
-.git/
-_legacy/
-# v4.8.1: araştırma artefaktları ve cache imaja girmesin
-.bt_cache/
-backtest_results.json
-walk_forward_results.json
-regime_experiment_results.json
-report.json
-report.txt
-status_report.txt
-.agent/
-.vscode/
-*.bat
+# Everything is left out except what the image copies.
+*
+!requirements-v5.lock.txt
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
+!v5/
+!tests_v5/
+!ops/
+!tools/
+tools/*
+!tools/v5_durum.py
+!tools/v5_tatbikat.py
+**/__pycache__
+**/.pytest_tmp*

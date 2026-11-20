@@ -1,0 +1,19 @@
+# v5 runtime and test dependencies, pinned exactly (RF-PLAN-6.md P9).
+# Versions are the ones the test suite was run with on 2026-11-16 (Python 3.12).
+# Runtime: requests (HTTP to Alpaca and ntfy), tzdata (zoneinfo data), pandas + numpy (replay and parity tests).
+requests==2.34.2
+urllib3==2.7.0
+certifi==2026.10.23
+idna==3.18
+charset-normalizer==3.4.9
+tzdata==2026.3
+pandas==3.0.5
+numpy==2.5.1
+python-dateutil==2.9.0.post0
+six==1.17.0
+# Test gate inside the image
+pytest==9.1.1
+pluggy==1.6.0
+iniconfig==2.3.0
+packaging==26.2
+Pygments==2.20.0

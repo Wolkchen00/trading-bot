@@ -1,0 +1,15 @@
+{
+ "request": null,
+ "status": 403,
+ "body": {
+  "available": "0.518154067",
+  "code": 40310000,
+  "existing_qty": "0.660311839",
+  "held_for_orders": "0.142157772",
+  "message": "insufficient qty available for order (requested: 0.568631087, available: 0.518154067)",
+  "related_orders": [
+   "784e26ee-6c47-47b7-b86c-7ee0b8afa600"
+  ],
+  "symbol": "TQQQ"
+ }
+}

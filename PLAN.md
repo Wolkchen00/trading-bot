@@ -8,9 +8,9 @@ _Hazırlanma: 2026-07-02 · Güncelleme: 2026-07-15 v4.12.2 3. canlı gün bakı
   hızlı öğrenme verisi. Index parking açık; lokal kopya durdurulmuş (STOP_BOT).
 - **Repo:** `Wolkchen00/trading-bot` (public; eski Wolkchen0 push-ölü, o da public'ti).
 - **Deploy akışı:** push SONRASI deploy OTOMATİK DEĞİL ,  API ile tetiklenir:
-  `TOKEN=$(ssh root@91.99.9.121 cat /root/.coolify_claude_token)` →
-  `curl -H "Authorization: Bearer $TOKEN" "http://91.99.9.121:8000/api/v1/deploy?uuid=dlyojlxudkezk2bze3f3ypp2"`
-  (Claude'un SSH erişimi var: `~/.ssh/coolify_vps2` anahtarı, root@91.99.9.121)
+  `TOKEN=$(ssh root@<SUNUCU> cat /root/.coolify_claude_token)` →
+  `curl -H "Authorization: Bearer $TOKEN" "http://<SUNUCU>:8000/api/v1/deploy?uuid=<UYGULAMA>"`
+  (Claude'un SSH erişimi var: `~/.ssh/<ANAHTAR>` anahtarı, root@<SUNUCU>)
 
 ## FAZ 0 ,  Coolify bağlantısı ✅ TAMAMLANDI (2026-07-02)
 - Coolify app `trading-bot` kaynağı `Wolkchen00/trading-bot`'a çevrildi (API ile).
@@ -1034,7 +1034,7 @@ uyarlandi ve **hicbiri zayiflatilmadi** (assert sayisi 43 -> 43):
 ### v4.16 DEPLOY KAYDI (2026-08-24, Ihsan onayi: "Evet, piyasa kapanisinda deploy et")
 
 - Piyasa kapanisindan **78 dk sonra** (17:18 ET Pazartesi) deploy edildi.
-- Coolify app `dlyojlxudkezk2bze3f3ypp2`, deployment `smz4h70543uxttubeyia2b1p`,
+- Coolify app `<UYGULAMA>`, deployment `smz4h70543uxttubeyia2b1p`,
   commit `539643b`. Durum: `finished` 21:21:38 UTC. Iki konteyner de yeniden kuruldu.
 - **Deploy oncesi canli fotograf:** equity $490.95, nakit $145.82, **tek pozisyon
   SPY $345.13** , hicbir strateji pozisyonu YOK, yani etkilenecek acik islem yoktu.
@@ -1245,7 +1245,7 @@ cok da buyuk bir etkisi olamayacak." Deploy piyasa acikken yapildi.
 - PAPER: equity $63,294.47, 6 pozisyon, 4 koruma emri , **hepsi Alpaca
   SUNUCUSUNDA** (STOP_LIMIT + BRACKET LIMIT), konteyner restart'i etkilemez.
 
-**Deploy:** Coolify app `dlyojlxudkezk2bze3f3ypp2`, deployment
+**Deploy:** Coolify app `<UYGULAMA>`, deployment
 `h4n7zyi58fqihtcfnbmsguve`, commit `334b483`. `finished` 18:33:23 UTC.
 
 **Uretimde dogrulandi:**

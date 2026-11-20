@@ -220,7 +220,7 @@ bekleyen kill tasfiyesi YOK · `TRADING_MODE=live`.
 3. `docker compose up --force-recreate --no-build --no-start trading-live`
    -> **başlatmadan önce** image ve env doğrulandı -> `docker compose start`.
    Image `sha256:92c29611d97f...` **birebir aynı kaldı**, volume
-   `dlyojlxudkezk2bze3f3ypp2_state-live` korundu.
+   `<UYGULAMA>_state-live` korundu.
 
 ### Açılış sonrası doğrulama
 - `live_entries_enabled=True`, `live_bear_entries_enabled=False`, eşik 45.
@@ -260,9 +260,9 @@ Sonra Level 10: tam diff + proof'ları Claude koşar + Claude kendi saldırgan t
 - Codex modeli `gpt-5.6-sol`, çaba `high`. R20 inşası ~15 dk sürdü.
 - Canlı durum fixture'ları: `tests/fixtures/canlandirma_2026_09_11/`.
 - Bot durumu: `docker exec <konteyner> python tools/saglik.py`.
-  live: `trading-live-dlyojlxudkezk2bze3f3ypp2-060315052850`
-  paper: `trading-paper-livecfg-dlyojlxudkezk2bze3f3ypp2-060315077491`
-- VPS: `ssh -i ~/.ssh/coolify_vps2 root@91.99.9.121`. Deploy otomatik DEĞİL (Coolify API).
+  live: `trading-live-<UYGULAMA>-060315052850`
+  paper: `trading-paper-livecfg-<UYGULAMA>-060315077491`
+- VPS: `ssh -i ~/.ssh/<ANAHTAR> root@<SUNUCU>`. Deploy otomatik DEĞİL (Coolify API).
 
 ## Açık kalan riskler (İhsan biliyor)
 
@@ -383,8 +383,8 @@ ama R20-R24b sonrası kanıt YOK.
 Günlük izleme (30 saniye):
 
 ```bash
-C=trading-live-dlyojlxudkezk2bze3f3ypp2-172014467471
-ssh -i ~/.ssh/coolify_vps2 root@91.99.9.121 "docker exec $C python tools/saglik.py"
+C=trading-live-<UYGULAMA>-172014467471
+ssh -i ~/.ssh/<ANAHTAR> root@<SUNUCU> "docker exec $C python tools/saglik.py"
 ```
 
 - `entry_flow=SESSIZ` + marj negatif  -> normal, aday yok, bir şey yapma.

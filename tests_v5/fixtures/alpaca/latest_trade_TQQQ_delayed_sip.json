@@ -1,0 +1,24 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/stocks/TQQQ/trades/latest",
+  "query": {
+   "feed": "delayed_sip"
+  }
+ },
+ "status": 200,
+ "body": {
+  "symbol": "TQQQ",
+  "trade": {
+   "c": [
+    "@"
+   ],
+   "i": 108144,
+   "p": 54.7224,
+   "s": 150,
+   "t": "2026-11-16T15:55:46.287305321Z",
+   "x": "D",
+   "z": "C"
+  }
+ }
+}

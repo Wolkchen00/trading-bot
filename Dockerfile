@@ -1,50 +1,22 @@
+# v5 image: the new engine and nothing else (no v4 module, no model download, no secrets).
 FROM python:3.12-slim
 
-# Python stdout buffer'ını kapat — loglar anında Docker'a yazılsın
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-# Python bağımlılıkları (ONNX Runtime — PyTorch yok, RAM 150MB)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Exact versions only (plan principle P9).
+COPY requirements-v5.lock.txt /app/requirements-v5.lock.txt
+RUN pip install --no-cache-dir -r /app/requirements-v5.lock.txt
 
-# FinBERT ONNX modelini build sırasında indir (container başlarken bekleme yok)
-# PyTorch/optimum KULLANILMIYOR — sadece pre-exported model indiriliyor
-# Kaynak: jonngan/finbert-onnx (~440MB, BERT ONNX + tokenizer)
-# RAM kullanımı: ~200MB (eskiden 2GB+ idi)
-RUN python -c "\
-from huggingface_hub import hf_hub_download; \
-import os; \
-cache_dir = '/app/models/finbert'; \
-os.makedirs(cache_dir, exist_ok=True); \
-repo = 'jonngan/finbert-onnx'; \
-files = ['model.onnx', 'tokenizer.json', 'tokenizer_config.json', 'vocab.txt', 'special_tokens_map.json', 'config.json']; \
-print(f'Downloading FinBERT ONNX from {repo}...'); \
-for f in files: \
-    try: \
-        hf_hub_download(repo, f, local_dir=cache_dir); \
-        size = os.path.getsize(os.path.join(cache_dir, f)); \
-        print(f'  ✓ {f} ({size/1024/1024:.1f}MB)'); \
-    except Exception as e: \
-        print(f'  ✗ {f}: {e}'); \
-print('FinBERT ONNX download complete.'); \
-# Kritik dosyalari dogrula \
-model_ok = os.path.exists(os.path.join(cache_dir, 'model.onnx')); \
-tok_ok = os.path.exists(os.path.join(cache_dir, 'tokenizer.json')); \
-print(f'Dogrulama: model.onnx={model_ok}, tokenizer.json={tok_ok}'); \
-if not model_ok or not tok_ok: \
-    print('UYARI: Kritik dosyalar eksik! FinBERT VADER fallback ile calisacak.'); \
-" || echo "Model pre-download failed, will download at runtime"
+COPY v5/ /app/v5/
+COPY tools/v5_durum.py tools/v5_tatbikat.py /app/tools/
+COPY tests_v5/ /app/tests_v5/
+COPY ops/ /app/ops/
+# The packaging files themselves, so the test suite can check them inside the image too.
+COPY Dockerfile docker-compose.yml .dockerignore /app/
 
-# HuggingFace cache temizle (Docker image küçültsün)
-RUN rm -rf /root/.cache/huggingface
+RUN mkdir -p /app/logs
 
-# Uygulama dosyaları
-COPY . .
-
-# Log klasörünü oluştur
-RUN mkdir -p logs
-
-# STOCK BOT: Ana botu çalıştır
-CMD ["python", "-u", "stock_bot.py"]
+# No health check on purpose: a blocked state must report itself, not restart the container.
+CMD ["python", "-u", "-m", "v5.runner"]

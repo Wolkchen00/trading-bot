@@ -1,0 +1,10 @@
+{
+ "request": null,
+ "status": 403,
+ "body": {
+  "buying_power": "219576.33",
+  "code": 40310000,
+  "cost_basis": "50000000",
+  "message": "insufficient buying power"
+ }
+}

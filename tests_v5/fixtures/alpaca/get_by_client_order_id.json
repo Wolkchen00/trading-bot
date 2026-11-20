@@ -1,0 +1,48 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/orders:by_client_order_id",
+  "query": {
+   "client_order_id": "v5probe-6e02e58d-buy1"
+  }
+ },
+ "status": 200,
+ "body": {
+  "id": "7ff458f3-a02e-4e7d-a532-6ca02b4b8c73",
+  "client_order_id": "v5probe-6e02e58d-buy1",
+  "created_at": "2026-11-16T16:10:50.681368893Z",
+  "updated_at": "2026-11-16T16:10:50.687377345Z",
+  "submitted_at": "2026-11-16T16:10:50.681368893Z",
+  "filled_at": "2026-11-16T16:10:50.686511839Z",
+  "expired_at": null,
+  "canceled_at": null,
+  "failed_at": null,
+  "replaced_at": null,
+  "replaced_by": null,
+  "replaces": null,
+  "asset_id": "dce2ac30-c928-4416-be25-2213d057f30a",
+  "symbol": "TQQQ",
+  "asset_class": "us_equity",
+  "notional": "20",
+  "qty": null,
+  "filled_qty": "0.367004479",
+  "filled_avg_price": "54.468",
+  "order_class": "",
+  "order_type": "market",
+  "type": "market",
+  "side": "buy",
+  "position_intent": "buy_to_open",
+  "time_in_force": "day",
+  "limit_price": null,
+  "stop_price": null,
+  "status": "filled",
+  "extended_hours": false,
+  "legs": null,
+  "trail_percent": null,
+  "trail_price": null,
+  "hwm": null,
+  "subtag": null,
+  "source": null,
+  "expires_at": "2026-11-16T21:00:00Z"
+ }
+}

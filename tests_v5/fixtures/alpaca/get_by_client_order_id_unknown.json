@@ -1,0 +1,14 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/orders:by_client_order_id",
+  "query": {
+   "client_order_id": "<unknown>"
+  }
+ },
+ "status": 404,
+ "body": {
+  "code": 40410000,
+  "message": "order not found for v5probe-6e02e58d-nope"
+ }
+}

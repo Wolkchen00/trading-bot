@@ -38,3 +38,7 @@ status_report.txt
 pattern_test.txt
 earnings_calendar.json
 test_kill.json
+
+# v5 test scratch (Windows sandbox safe basetemp)
+.pytest_tmp/
+.pytest_tmp_*/

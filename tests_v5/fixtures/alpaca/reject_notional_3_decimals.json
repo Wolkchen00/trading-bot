@@ -1,0 +1,8 @@
+{
+ "request": null,
+ "status": 422,
+ "body": {
+  "code": 42210000,
+  "message": "notional value must be limited to 2 decimal places"
+ }
+}

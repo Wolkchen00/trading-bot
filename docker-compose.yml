@@ -1,24 +1,18 @@
-version: '3.8'
-
+# v5: two services, one image, one code path. They differ only in keys, endpoint and state folder.
+# The real-money service starts in dry-run: it sends orders only when the owner's flag is set in the
+# environment store, never from this file.
 services:
-  # ============================================================
-  # CONTAINER 1: LIVE — Sadece LONG islemler (hedef: $500 → $2000)
-  # ============================================================
   trading-live:
     build: .
     image: trading-bot:latest
-    container_name: trading-bot-live
     restart: unless-stopped
     env_file:
       - .env
     environment:
       - TRADING_MODE=live
-      - BOT_MODE=long_only
       - ALPACA_KEY_PREFIX=LIVE
-      - PYTHONUNBUFFERED=1
-      - FINBERT_CACHE_DIR=/app/models/finbert
     volumes:
-      - state-live:/app/state_live          # KALICI: pdt/kill_switch/agent_perf (redeploy'da silinmez)
+      - state-live:/app/state_live
       - ./logs/live:/app/logs
     logging:
       driver: "json-file"
@@ -26,85 +20,16 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ============================================================
-  # CONTAINER 2: PAPER — Long + Short (test & pratik)
-  # ============================================================
-  # AGRESIF PAPER , 2026-09-03'ten itibaren OPT-IN (Ihsan karari: "kavga
-  # cikmasin"). Ayni Alpaca paper hesabinda iki bot birbirinin pozisyonlariyla
-  # kavga eder; hesap artik CANLI KARAR PROFILINE verildi.
-  # Agresif gozlemler zaten kilit kapisinda KANIT SAYILMIYORDU (esik 30,
-  # pozisyon $9000, tarama 15sn canli davranisi temsil etmez).
-  # Geri acmak: docker compose --profile aggressive up -d trading-short
-  # (once trading-paper-livecfg'yi DURDUR , ayni hesap.)
-  trading-short:
-    image: trading-bot:latest
-    profiles: ["aggressive"]
-    depends_on:
-      trading-live:
-        condition: service_started
-    container_name: trading-bot-paper
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - TRADING_MODE=paper
-      - BOT_MODE=both
-      - ALPACA_KEY_PREFIX=PAPER
-      - PYTHONUNBUFFERED=1
-      - FINBERT_CACHE_DIR=/app/models/finbert
-    volumes:
-      - state-paper:/app/state_paper        # KALICI: meta_labeler verisi (agent_performance.json) burada birikir
-      - ./logs/short:/app/logs
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # ============================================================
-  # CONTAINER 3: PAPER + CANLI KARAR PROFILI (R19) , OPT-IN
-  # ------------------------------------------------------------
-  # Kilit kapisinin ihtiyaci olan CALISTIRMA KANITINI ureten servis:
-  # paper broker'inda ama CANLI karar profiliyle (esik 50, max 3 pozisyon,
-  # 30sn tarama) kosar. Gercek dolum, gercek kismi dolum, gercek stop
-  # davranisi, gercek broker-defter mutabakati , SIFIR DOLAR RISKLE.
-  # Golge defter (R18) 'ne yapardim' der; bu servis 'ne oldu' der.
-  #
-  # NEDEN OTOMATIK BASLAMIYOR:
-  # Ayni Alpaca paper hesabinda iki bot birbirinin pozisyonlariyla kavga eder.
-  # Bu servis AYRI bir paper anahtar cifti ister:
-  #   ALPACA_PAPER2_API_KEY / ALPACA_PAPER2_SECRET_KEY
-  # Alpaca birden cok paper hesabina izin verir; ikincisini acip anahtarlari
-  # .env'e ekledikten sonra su komutla baslatilir:
-  #   docker compose --profile livecfg up -d trading-paper-livecfg
-  #
-  # Baslatilana kadar R19 kapisi PAPER_AGGRESSIVE gozlemlerini KANIT SAYMAZ
-  # (core/run_profile.kapi_icin_gecerli) , yani kilit kapali kalir. Kasitli.
-  # ============================================================
   trading-paper-livecfg:
+    build: .
     image: trading-bot:latest
-
-    depends_on:
-      trading-live:
-        condition: service_started
-    container_name: trading-bot-paper-livecfg
     restart: unless-stopped
     env_file:
       - .env
     environment:
       - TRADING_MODE=paper
-      - BOT_MODE=both
-      - PAPER_PROFILE=live_config   # R19: agresif override UYGULANMAZ
-      # Agresif bot kapatildigi icin MEVCUT paper hesabi kullanilir , ikinci
-      # Alpaca hesabina gerek kalmadi ve kavga imkansiz (tek bot, tek hesap).
       - ALPACA_KEY_PREFIX=PAPER
-      - PYTHONUNBUFFERED=1
-      - FINBERT_CACHE_DIR=/app/models/finbert
     volumes:
-      # AYNI state volume: acik 5 pozisyonun metadata'si (stop seviyeleri,
-      # giris bayraklari) devredilmeli. Kopararsak Temmuz'daki "korumasiz yetim
-      # pozisyon" hatasi tekrarlanir (PLAN.md v4.7.1). Olcum katmani epoch/profil
-      # kimligiyle zaten ayirt ediyor , ayri volume'a gerek yok.
       - state-paper:/app/state_paper
       - ./logs/livecfg:/app/logs
     logging:
@@ -113,7 +38,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-# Named volume'lar — container'dan bağımsız, redeploy'da KORUNUR (state kalıcılığı).
+# Named volumes survive a redeploy: records, rails, outbox and calendar live there.
 volumes:
   state-live:
   state-paper:

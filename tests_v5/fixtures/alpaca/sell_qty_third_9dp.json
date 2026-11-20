@@ -1,0 +1,53 @@
+{
+ "request": {
+  "method": "POST",
+  "path": "/v2/orders",
+  "json": {
+   "symbol": "TQQQ",
+   "qty": "0.220103946",
+   "side": "sell",
+   "type": "market",
+   "time_in_force": "day",
+   "client_order_id": "v5probe-6e02e58d-sell1"
+  }
+ },
+ "status": 200,
+ "body": {
+  "id": "c59ad303-e527-4a89-92c9-e2ac9e214e86",
+  "client_order_id": "v5probe-6e02e58d-sell1",
+  "created_at": "2026-11-16T16:11:05.229223837Z",
+  "updated_at": "2026-11-16T16:11:05.229770537Z",
+  "submitted_at": "2026-11-16T16:11:05.229223837Z",
+  "filled_at": null,
+  "expired_at": null,
+  "canceled_at": null,
+  "failed_at": null,
+  "replaced_at": null,
+  "replaced_by": null,
+  "replaces": null,
+  "asset_id": "dce2ac30-c928-4416-be25-2213d057f30a",
+  "symbol": "TQQQ",
+  "asset_class": "us_equity",
+  "notional": null,
+  "qty": "0.220103946",
+  "filled_qty": "0",
+  "filled_avg_price": null,
+  "order_class": "",
+  "order_type": "market",
+  "type": "market",
+  "side": "sell",
+  "position_intent": "sell_to_close",
+  "time_in_force": "day",
+  "limit_price": null,
+  "stop_price": null,
+  "status": "pending_new",
+  "extended_hours": false,
+  "legs": null,
+  "trail_percent": null,
+  "trail_price": null,
+  "hwm": null,
+  "subtag": null,
+  "source": null,
+  "expires_at": "2026-11-16T21:00:00Z"
+ }
+}

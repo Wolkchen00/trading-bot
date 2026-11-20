@@ -10,7 +10,7 @@ bunu gürültülü şekilde haber versin; performans onarımı ve kilit açma an
 
 ## Kanıt ,  2026-07-28 itibarıyla ölçülen gerçek durum
 
-Veri kaynağı: VPS 91.99.9.121, iki konteyner, `state_*/trade_history.json`,
+Veri kaynağı: VPS <SUNUCU>, iki konteyner, `state_*/trade_history.json`,
 `state_*/bot_positions.json`, `logs/bot_2026-07-15.log`, `logs/health_check.txt`.
 
 | Hesap | İşlem | Kazanan | Kaybeden | Kazanma oranı | Net |

@@ -1,0 +1,23 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/stocks/QQQ/bars/latest",
+  "query": {
+   "feed": "iex"
+  }
+ },
+ "status": 200,
+ "body": {
+  "bar": {
+   "c": 668.02,
+   "h": 668.23,
+   "l": 667.83,
+   "n": 16,
+   "o": 668.11,
+   "t": "2026-11-16T16:09:00Z",
+   "v": 1020,
+   "vw": 667.988085
+  },
+  "symbol": "QQQ"
+ }
+}

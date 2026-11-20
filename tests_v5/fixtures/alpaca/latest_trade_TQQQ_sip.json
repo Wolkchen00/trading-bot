@@ -1,0 +1,13 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/v2/stocks/TQQQ/trades/latest",
+  "query": {
+   "feed": "sip"
+  }
+ },
+ "status": 403,
+ "body": {
+  "message": "subscription does not permit querying recent SIP data"
+ }
+}

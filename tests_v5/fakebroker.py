@@ -67,6 +67,7 @@ class FakeBroker:
         self.positions = {symbol: _floor9(_decimal(qty)) for symbol, qty in (positions or {}).items()}
         self.prices = {symbol: _decimal(price) for symbol, price in (prices or {}).items()}
         self.last_equity = _decimal(last_equity) if last_equity is not None else self.equity
+        self.balance_asof = None
         now = datetime(2026, 11, 16, 16, 10, tzinfo=timezone.utc)
         self.clock = clock or BrokerClock(now, True, now + timedelta(hours=22), now + timedelta(hours=5))
         self.calendar = list(calendar or [])
@@ -201,6 +202,7 @@ class FakeBroker:
             buying_power=float(self.cash),
             trading_blocked=False,
             account_blocked=False,
+            balance_asof=self.balance_asof,
         )
 
     def _available(self, symbol) -> Decimal:

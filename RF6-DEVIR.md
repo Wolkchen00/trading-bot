@@ -72,18 +72,23 @@ tipik yıl yaklaşık 60-75 dolar artı, kötü yılda derin düşüş olağand�
   `owner-ant-20261119-1`. 20 Kas açılışında dolması beklenir. Fiyat seviyeleri bu herkese açık depoda değil,
   Claude belleğinde (`trading-bot-stock-engine`) durur.
 
+- 19 Kas akşamı KURULDU (sahip onayı: "Başlat"). Kayıt: `RF6-DEVAM.md`. Canlı konteyner KURU çalışıyor (emir
+  göndermez), deneme hesabı konteyneri gerçek gibi çalışıyor. `main` iki commit aldı (`96d510b`, `7196c39`);
+  her biri çalışma dalının ağacının tek commit'lik kopyası. Çalışma dalı (`v5-yenileme`) ASLA push edilmez.
+- Codex'in yarım kalan incelemesinden çıkan bulgular (R5c) Codex'e yazdırıldı, Claude denetledi: commit
+  `536ddcf`, plan Revizyon 12, 795 test (Windows ve sunucuda imaj içi).
+
 ### Borç (yapılmadı ya da doğrulanmadı)
 
-- Codex'in tüm v5 ağacını salt okuma denetimi (kotası 19 Kas 19:08 PT'de açılıyordu). Canlı bayraktan ÖNCE
-  yapılmalı. Özellikle: Revizyon 8, 9, 10 maddeleri ve Claude'un yazdığı `v5/runner.py`.
+- Codex'in tüm v5 ağacını denetimi: ilk koşu Codex'in kendi içerik süzgecine takıldı (yarım bulguları R5c'de
+  kapandı). 19 Kas 20:56 PT'de yeniden başlatıldı; bulguları canlı bayraktan ÖNCE işlenmeli.
+- 20 Kas açılışında: ANT emrine bak, `last_equity` ölçümü, deneme hesabı temizliği + tatbikat, `decide-now` ve
+  çapraz `replay`; 12:50 PT'de ilk deneme kararını ve iki özeti izle (`RF6-DEVAM.md` sonundaki liste).
 - Codex denetiminin görev yazısı hazır: lab `rf6\review-codex-tree.md`. Ayrı bir çalışma kopyasında
   (`git worktree`) koşturulacak ki ana ağaç etkilenmesin.
 - `last_equity` değerinin tam ne zaman döndüğü ölçülmedi (bir sonraki açılıştan önce ve sonra okunacak).
 - Kabul edilen sınırlar: `RF-ISSUES-6.md` madde 26 (taban yalnız günün kararı kesinleşene kadar ölçülür; birden
   çok kapanışı kaçıran kesintide eski günler raporlanmaz).
-- R6 deploy: `main`'e birleştirme + push + Coolify deploy, imaj içi test koşusu (Linux, ağ kapalı), iki
-  konteynerde `init-peak`, bekçi kurulumu, deneme hesabında v4 kalıntılarının temizliği ve tatbikat (borsa
-  AÇIKKEN), kuru karar + çapraz `replay`, ilk paper kararının izlenmesi.
 - Canlıya geçiş: sahibe SORULACAK (söz verildi). Sonra `LIVE_TRADING_ENABLED=true`.
 - Sunucuda `v5-pretest:branch` deneme imajı ve `/root/v5_build_tmp` klasörü duruyor; gerçek deploy'dan sonra
   silinebilir (`docker rmi v5-pretest:branch`, `rm -rf /root/v5_build_tmp /root/v5_pretest*.log`).

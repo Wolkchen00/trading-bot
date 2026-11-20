@@ -30,7 +30,10 @@ for PREFIX in trading-live- trading-paper-livecfg-; do
   SERVICE=${PREFIX%-}
   STAMP=/var/tmp/v5_watchdog_${SERVICE}
   PROBLEM=""
-  NAME=$(docker ps --format '{{.Names}}' | grep "^${PREFIX}" | head -n 1)
+  NAME=$(docker ps --filter "label=com.docker.compose.service=${SERVICE}" --format '{{.Names}}' 2>/dev/null | head -n 1)
+  if [ -z "$NAME" ]; then
+    NAME=$(docker ps --format '{{.Names}}' | grep "^${PREFIX}" | head -n 1)
+  fi
   if [ -z "$NAME" ]; then
     PROBLEM="no running container"
   else

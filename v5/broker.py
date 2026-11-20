@@ -45,6 +45,7 @@ class Account:
     buying_power: float
     trading_blocked: bool
     account_blocked: bool
+    balance_asof: date | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +291,13 @@ class AlpacaBroker:
     @staticmethod
     def _account(row) -> Account:
         try:
+            balance_asof = None
+            raw_asof = row.get("balance_asof")
+            if isinstance(raw_asof, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_asof):
+                try:
+                    balance_asof = date.fromisoformat(raw_asof)
+                except ValueError:
+                    pass
             return Account(
                 status=_required_text(row, "status"),
                 equity=float(row["equity"]),
@@ -298,6 +306,7 @@ class AlpacaBroker:
                 buying_power=float(row["buying_power"]),
                 trading_blocked=_required_bool(row, "trading_blocked"),
                 account_blocked=_required_bool(row, "account_blocked"),
+                balance_asof=balance_asof,
             )
         except _PARSE_ERRORS as exc:
             raise BrokerError("invalid account response") from exc

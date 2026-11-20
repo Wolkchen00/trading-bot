@@ -309,6 +309,7 @@ class Executor:
         self.now_fn, self.sleep_fn = now_fn, sleep_fn
         self._cache = None
         self._blocked = None
+        self._buys_blocked = False
 
     def _now(self):
         return self.now_fn().isoformat()
@@ -462,6 +463,7 @@ class Executor:
             raise ValueError("decision cannot be attached")
         record.data["inputs"] = inputs.to_bundle()
         record.data["decision"] = self._decision(decision)
+        record.data["status_detail"] = ""
         record.data["target"] = {
             "core_new": decision.core_new, "ovl_new": decision.ovl_new,
             "total_new": decision.total_new,
@@ -599,6 +601,10 @@ class Executor:
             self._event(record, "SNAPSHOT")
         target = record.data["target"]
         plan = plan_order(snapshot, target["total_new"], self.params)
+        if self._buys_blocked and plan.side == "buy":
+            record.data["hold"] = "BREAKER"
+            self._event(record, "HOLD:BREAKER")
+            return record
         if replan:
             attempt = record.data["intents"][-1]["attempt"]
         else:
@@ -685,6 +691,10 @@ class Executor:
             if self._blocked:
                 record.data["hold"] = self._blocked
                 self._event(record, "HOLD:" + str(self._blocked))
+                return record
+            if self._buys_blocked and intent["side"] == "buy":
+                record.data["hold"] = "BREAKER"
+                self._event(record, "HOLD:BREAKER")
                 return record
             intent["submit_count"] += 1
             record.save()
@@ -799,6 +809,8 @@ class Executor:
                     record.data.update(status=UNRESOLVED, hold="UNRESOLVED")
                     self._event(record, UNRESOLVED)
                     return record
+                if self._inspect(record) is None:
+                    return record
                 return self._submit(record, window)
             intent["broker_order_id"] = order.id
             record.data.update(status=SUBMITTED, hold=None)
@@ -821,9 +833,25 @@ class Executor:
             return self._terminal(record, order, window)
         return self._start(record, window)
 
-    def run_chain(self, record, window, blocked=None):
+    def _check_provenance(self, record):
+        """A record belongs to the mode that wrote it, and its order ids must be the ones this engine would
+        build for it. Anything else is a foreign or damaged record: no broker call may follow from it."""
+        data = record.data
+        if data.get("mode") != self.settings.mode:
+            raise StateCorrupt(record.path)
+        try:
+            day = date.fromisoformat(str(data["session"]))
+            for intent in data["intents"]:
+                expected = client_order_id(data["mode"], day, data["purpose"], intent["attempt"])
+                if intent["client_order_id"] != expected:
+                    raise StateCorrupt(record.path)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise StateCorrupt(record.path) from exc
+
+    def run_chain(self, record, window, blocked=None, buys_blocked=False):
         """Drive the chain one step. `blocked` (a reason code) forbids any NEW submission in this call; an order
         that was already accepted is still polled, cancelled at the cancel time and booked."""
+        self._check_provenance(record)
         if record.data["dry_run"] != (not self.settings.orders_enabled):
             raise ValueError("dry-run mismatch")
         if record.is_final:
@@ -834,6 +862,7 @@ class Executor:
             self._cache[record.path] = record.data
             getattr(self, "_stamps", {}).pop(record.path, None)
         self._blocked = blocked
+        self._buys_blocked = bool(buys_blocked)
         try:
             return self._resume(record, window)
         except (BrokerError, SnapshotInvalid) as exc:
@@ -841,6 +870,7 @@ class Executor:
             return record
         finally:
             self._blocked = None
+            self._buys_blocked = False
 
     def _not_found(self, record):
         intent = record.data["intents"][-1]
@@ -861,6 +891,7 @@ class Executor:
     def reconcile(self, record, session):
         if record.is_final:
             return record
+        self._check_provenance(record)
         if record.data.get("target") is None:
             raise ValueError("target missing")
         try:

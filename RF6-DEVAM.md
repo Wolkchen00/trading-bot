@@ -51,11 +51,26 @@ Notifications
 - The same command in the live container: delivered to the owner's topic (text starts with
   "DENEME, gerçek emir gönderilmedi.").
 
+## 2026-11-19 , second deploy the same evening: fix round R5c
+
+- Codex built the fixes from `rf6/fix-r5c.md` and `rf6/fix-r5c-2.md`; the reviewer read the whole diff, ran its
+  own suite (`tests_v5/test_r5c_saldirgan.py`) and the proof: 795 passed on Windows, 795 passed inside a
+  separately built image on the server with the network off (201 s). Codex's four original scripts and the
+  first reviewer's scripts are clean on the new code.
+- Publish: `main` got one more commit, `7196c39` (the tree of the working branch at `536ddcf`).
+- Deploy at 20:54 PT (04:54 UTC): finished in about one minute. Both containers came back with their state
+  (peaks 491.08 and 61784.59 kept), the new code is in the image, no error line in either log; live states
+  `['DRY_RUN']`, paper `[]`. The watchdog stayed quiet through the restart (no log line, no stamp).
+- The temporary test image and build folder were removed from the server. The two old v4 images are still
+  there in case a rollback is needed.
+
 Still to do (in this order)
-1. Deploy the fix round R5c (five defects found by Codex's partial review: `RF-ISSUES-6.md` item 28).
+1. Done the same evening (see above).
 2. 20 November, at the open: read `last_equity` before and after 09:30 ET (when does it turn over?); check the
    owner's ANT order; paper: clear the v4 leftovers, run the drill, then `decide-now` in both containers and a
    cross `replay`.
 3. 20 November 15:50 ET: watch the first paper decision and both evening summaries.
-4. Codex whole-tree review (its first run was cut off by its own content filter after seven minutes).
+4. Codex whole-tree review: started again at 20:56 PT with a request worded as a correctness review
+   (`rf6/review-codex-tree-2.md` in the operator's backup folder), in a copy of the tree outside the repository;
+   it writes its findings to a file as it goes. Its findings are processed before the live flag.
 5. Ask the owner; only then the live flag.

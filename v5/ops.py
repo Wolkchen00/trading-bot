@@ -18,7 +18,7 @@ from .broker import BrokerError
 from .clock import ET, SessionCalendar, parse_calendar, window_for
 from .config import load_settings
 from .data import DecisionInputs, InputsNotReady, build_inputs
-from .executor import Executor, SnapshotInvalid, plan_order, take_snapshot
+from .executor import Executor, SessionRecord, SnapshotInvalid, plan_order, take_snapshot
 from .health import assess, read_heartbeat
 from .notify import Notifier, Outbox, default_post
 from .packages import get_package
@@ -125,6 +125,23 @@ def cmd_clear_halt(
     )
 
 
+def clear_halt_refusal(reading, new_peak):
+    """Why a typed new peak is not accepted, or None. The peak is the base of the floor: a slip of the keyboard
+    would either switch the floor off for a day or trigger it at once."""
+    if reading is None or not reading.ok:
+        return "the account could not be read, so the new peak cannot be checked"
+    try:
+        value = float(new_peak)
+    except (TypeError, ValueError):
+        return "the new peak is not a number"
+    if not reading.equity <= value <= 3.0 * reading.equity:
+        return (
+            f"the new peak {value:.2f} is outside the plausible range "
+            f"{reading.equity:.2f} to {3.0 * reading.equity:.2f} (the account is worth {reading.equity:.2f})"
+        )
+    return None
+
+
 def cmd_status(state_dir, settings, now_fn=_utcnow, sleep_fn=time.sleep):
     rails = Rails(settings, state_dir, now_fn, sleep_fn)
     heartbeat = read_heartbeat(state_dir)
@@ -180,6 +197,14 @@ def _blockers(settings, broker, now, calendar, session, snapshot, executor, read
     """Everything that would stop the running engine from placing a new strategy order at this moment, in the
     engine's own order, and whether today's breaker leaves it sells only. Read-only."""
     found, breaker = [], False
+    window = window_for(session)
+    if not window.decide_from <= now <= window.decide_until:
+        found.append("OUTSIDE_DECISION_WINDOW")
+    record = SessionRecord.load(
+        settings.state_dir, session.date, purpose="dec", dry_run=not settings.orders_enabled,
+    )
+    if record is not None and (record.is_final or record.data.get("target") is not None):
+        found.append("ALREADY_DECIDED")
     try:
         document = Rails(settings, settings.state_dir, lambda: now, lambda seconds: None).state()
     except StateCorrupt:
@@ -206,7 +231,10 @@ def _blockers(settings, broker, now, calendar, session, snapshot, executor, read
         prior = next((row for row in rows if row.get("session") == previous_text), None)
         stored_close = prior.get("equity") if prior is not None else NO_ROW
         breaker = breaker or (
-            reading.ok and breaker_cause(reading, stored_close, settings.rails.breaker_day) is not None
+            reading.ok and breaker_cause(
+                reading, stored_close, settings.rails.breaker_day,
+                previous[-1] if previous else None,
+            ) is not None
         )
     try:
         clock = broker.get_clock()
@@ -363,6 +391,7 @@ def _add_actor(parser):
 def _add_clear_halt(parser):
     _add_actor(parser)
     parser.add_argument("--new-peak", required=True, type=float)
+    parser.add_argument("--force", action="store_true", help="skip the check of the new peak against the account")
 
 
 def _add_status(parser):
@@ -387,7 +416,18 @@ def _run_resume(namespace, settings):
     return cmd_resume(settings.state_dir, settings, namespace.by, namespace.note)
 
 
-def _run_clear_halt(namespace, settings):
+def _run_clear_halt(namespace, settings, broker=None):
+    halted = Rails(settings, settings.state_dir, _utcnow).floor_state() in ("HALT", "CONFIRMING")
+    if halted and not getattr(namespace, "force", False):
+        # Only when there is a halt to lift is the typed peak about to become the safety baseline.
+        if broker is None:
+            from .broker import AlpacaBroker
+
+            broker = AlpacaBroker(settings)
+        refusal = clear_halt_refusal(read_equity(broker, _utcnow()), namespace.new_peak)
+        if refusal is not None:
+            print(f"clear-halt refused: {refusal}. Nothing was changed. Use --force only if you are sure.")
+            return 1
     return cmd_clear_halt(
         settings.state_dir, settings, namespace.by, namespace.note, namespace.new_peak
     )

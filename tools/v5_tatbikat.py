@@ -18,7 +18,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from v5.broker import AlpacaBroker, BrokerRejected  # noqa: E402
+from v5.broker import AlpacaBroker, BrokerRejected, is_terminal  # noqa: E402
 from v5.clock import Window  # noqa: E402
 from v5.config import load_settings  # noqa: E402
 from v5.executor import CAPPED, DONE, Executor, SessionRecord, client_order_id, take_snapshot  # noqa: E402
@@ -104,6 +104,37 @@ class _Drill:
     def _flat(self) -> bool:
         return Decimal(self._snapshot().product_qty) <= 0
 
+    @staticmethod
+    def _bought(record) -> Decimal:
+        """What the entry chain of a step really left in the account: its filled buys less its filled sells."""
+        total = Decimal(0)
+        for intent in record.data["intents"]:
+            if not intent.get("filled_qty"):
+                continue
+            filled = Decimal(str(intent["filled_qty"]))
+            total += filled if intent.get("side") == "buy" else -filled
+        return total
+
+    def _settled(self, client_id):
+        """The order with this client id once it can no longer change (a short wait), or as it stands."""
+        order = self.broker.get_order_by_client_id(client_id)
+        for _ in range(10):
+            if order is None or is_terminal(order.status):
+                break
+            self.sleep_fn(2)
+            order = self.broker.get_order_by_client_id(client_id)
+        return order
+
+    def _exit(self, bought):
+        """Sell what this step bought, and only that. Returns (closing record or None, reason nothing was sold)."""
+        held = Decimal(self._snapshot().product_qty)
+        if held != bought:
+            return None, (
+                f"the account changed during the drill: it holds {held.normalize():f}, "
+                f"the drill bought {bought.normalize():f}; nothing was sold"
+            )
+        return self._chain(0.0), None
+
     # ------------------------------------------------------------------ steps
     def step_inventory(self):
         account = self.broker.get_account()
@@ -180,7 +211,9 @@ class _Drill:
             self._known_client_id = intents[0]["client_order_id"]
         if opened.status not in (DONE, CAPPED) or abs(weight - DRILL_WEIGHT) > 0.02:
             return False, f"entry ended {opened.status} at weight {weight:.4f}"
-        closed = self._chain(0.0)
+        closed, problem = self._exit(self._bought(opened))
+        if problem:
+            return False, problem
         flat = self._flat()
         return (
             closed.status == DONE and flat,
@@ -205,7 +238,14 @@ class _Drill:
         else:
             result = False, f"second submit of {self._known_client_id} was ACCEPTED"
         if created or not result[0]:
-            self._chain(0.0)                              # put back what this step bought
+            # Put back what this step bought, and only that: the one order it knows by its client id.
+            known = self._settled(self._known_client_id)
+            if known is not None and not is_terminal(known.status):
+                return False, result[1] + f"; the order {self._known_client_id} is still open, nothing was sold"
+            bought = Decimal(str(known.filled_qty)) if known is not None and known.filled_qty else Decimal(0)
+            _, problem = self._exit(bought)
+            if problem:
+                return False, result[1] + "; " + problem
         return result
 
     def step_restart(self):
@@ -229,7 +269,9 @@ class _Drill:
             finished.status in (DONE, CAPPED) and order is not None
             and Decimal(order.filled_qty) > 0 and abs(weight - DRILL_WEIGHT) <= 0.02
         )
-        closed = self._chain(0.0)
+        closed, problem = self._exit(self._bought(finished))
+        if problem:
+            return False, problem
         return (
             ok and closed.status == DONE and self._flat(),
             f"died at {before}, restart ended {finished.status} after {intent['submit_count']} submit calls, "

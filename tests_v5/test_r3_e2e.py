@@ -62,7 +62,7 @@ def test_ideal_executor_matches_complete_golden(filename, tmp_path, monkeypatch)
     broker = FakeBroker(cash=1_000_000, prices={"TQQQ": 100})
     now = [datetime(2010, 1, 1, 19, 50, tzinfo=UTC)]
     executor = Executor(
-        broker, SimpleNamespace(orders_enabled=True), tmp_path,
+        broker, SimpleNamespace(orders_enabled=True, mode="paper"), tmp_path,
         PACKAGES["high"], lambda: now[0], lambda _: None,
     )
     trade_days = []
@@ -142,7 +142,7 @@ def test_small_account_stochastic_safety(seed, tmp_path, monkeypatch):
         now[0] += timedelta(seconds=seconds)
 
     executor = Executor(
-        broker, SimpleNamespace(orders_enabled=True), tmp_path,
+        broker, SimpleNamespace(orders_enabled=True, mode="paper"), tmp_path,
         PACKAGES["high"], lambda: now[0], sleep,
     )
     within = 0

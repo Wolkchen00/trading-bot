@@ -452,6 +452,8 @@ ALERTS = {
                   "Bugün borsa açılmadan önce bir sorun gördüm: Alpaca'ya bağlanamadım. Düzelmezse bugün işlem yapmayacağım."),
     "ERROR": ({}, "Bot beklenmeyen bir sorunla karşılaştı. Elimdekilere dokunmadım. Claude'a 'trading botuna bak' yaz."),
     "TEST": ({}, "Deneme bildirimi: bu mesajı görüyorsan bildirimler çalışıyor."),
+    "ORDER_UNFILLED": (dict(product_pct=0.3),
+                       "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde 30 Nasdaq fonu var. Yarın yeniden karar veririm."),
     "NOT_SENT": (dict(cause="Alpaca'ya bağlanamadım"),
                  "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü Alpaca'ya bağlanamadım. Elimdekilere dokunmadım. Yarın yeniden karar veririm."),
 }
@@ -482,11 +484,12 @@ def test_reason_and_cause_sentences_are_exact():
         "TREND_UP": "Nasdaq yükseliş eğiliminde.",
         "TREND_MIXED": "Nasdaq kararsız, bu yüzden ana payı küçük tutuyorum.",
         "TREND_DOWN": "Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor.",
-        "VOL_HIGH": "Piyasa çok oynak, bu yüzden payı azalttım.",
+        "VOL_HIGH": "Piyasa çok oynak, bu yüzden payı küçük tutuyorum.",
         "VOL_CALM": "Piyasa sakin.",
-        "BAND_HOLD": "Hedefe yeterince yakınım, işlem gerekmedi.",
+        "BAND_HOLD": "Ana pay hedefe yeterince yakın.",
         "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım.",
         "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum.",
+        "OVERLAY_WOULD": "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım.",
         "OVERLAY_KEEP": "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum.",
         "OVERLAY_EXIT": "Dünkü ek alımı sattım.",
         "OVERLAY_DATA_MISSING": "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım.",
@@ -514,6 +517,7 @@ def test_reason_and_cause_sentences_are_exact():
     assert vn.OUTCOME_SENTENCES == {
         "NOT_SENT": "Karar verdim ama emri gönderemedim.",
         "REFUSED": "Karar verdim ama Alpaca emrimi kabul etmedi.",
+        "UNFILLED": "Karar verdim ama emrim gerçekleşmedi.",
         "UNKNOWN": "Emrimin sonucunu henüz öğrenemedim.",
         "FLOOR": "Hesap güvenlik sınırının altına düştü.",
     }
@@ -530,7 +534,7 @@ LINES = ["Gün sonu özeti (16.11.2026)",
          "Hesap: 512,30 dolar. Bugün yüzde 1,2 arttı (6,10 dolar).",
          "Elimde: yüzde 9 Nasdaq fonu, yüzde 91 nakit.",
          "Bugün ne yaptım: İşlem yapmadım.",
-         "Neden: Nasdaq kararsız, bu yüzden ana payı küçük tutuyorum. Hedefe yeterince yakınım, işlem gerekmedi.",
+         "Neden: Nasdaq kararsız, bu yüzden ana payı küçük tutuyorum. Ana pay hedefe yeterince yakın.",
          "Bu ay: yüzde 3,1 artıda. Başlangıçtan beri: yüzde 4,5 artıda.",
          "Durum: Her şey normal."]
 
@@ -565,8 +569,9 @@ def test_digest_is_exact_in_every_variant():
     assert digest(reason_keys=["TREND_DOWN", "NOT_A_KEY", "OVERLAY_EXIT"])[4] == \
         "Neden: Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor. Dünkü ek alımı sattım."
     assert digest(month_pct=-0.02, total_pct=-0.005)[5] == "Bu ay: yüzde 2,0 ekside. Başlangıçtan beri: yüzde 0,5 ekside."
-    assert digest(month_pct=0.0, total_pct=None)[5] == "Bu ay: değişim yok. Başlangıçtan beri: değişim yok."
-    assert digest(month_pct=None, total_pct=0.0004)[5] == "Bu ay: değişim yok. Başlangıçtan beri: değişim yok."
+    assert digest(month_pct=0.0, total_pct=None)[5] == "Bu ay: değişim yok. Başlangıçtan beri: bilgi yok."
+    assert digest(month_pct=None, total_pct=0.0004)[5] == "Bu ay: bilgi yok. Başlangıçtan beri: değişim yok."
+    assert digest(month_pct=None, total_pct=None)[5] == "Bu ay: bilgi yok. Başlangıçtan beri: bilgi yok."
     assert digest(month_pct=0.1, total_pct=-0.25)[5] == "Bu ay: yüzde 10,0 artıda. Başlangıçtan beri: yüzde 25,0 ekside."
     paused = "Bot duraklatılmış durumda. Elimdekiler duruyor, yeni işlem yapmıyorum."
     assert digest(status_text=paused)[6] == "Durum: " + paused
@@ -862,7 +867,7 @@ def test_ops_commands_change_the_shared_state_and_are_logged(ops_env, capsys):
     assert rails.floor_state() == "HALT"
     assert run_ops(["clear-halt", "--by", "owner", "--note", "devam"]) != 0                      # the new peak is required
     assert rails.floor_state() == "HALT"
-    assert run_ops(["clear-halt", "--by", "owner", "--note", "devam", "--new-peak", "200"]) == 0
+    assert run_ops(["clear-halt", "--by", "owner", "--note", "devam", "--new-peak", "200", "--force"]) == 0
     assert rails.floor_state() == "OK" and rails.peak() == 200.0 and rails.liquidating() is False
     capsys.readouterr()
     assert run_ops(["status"]) == 0

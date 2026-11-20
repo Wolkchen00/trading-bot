@@ -105,7 +105,7 @@ def test_digest_literal_and_variants():
     flat = build_digest(context(prefix="dry_run", day_usd=0.004, day_pct=0, action="none", reason_keys=None, month_pct=None, total_pct=0, status_text="Bot duraklatılmış durumda."))
     assert "Bugün değişmedi." in flat and "İşlem yapmadım." in flat
     assert "Neden: Bugün karar veremedim." in flat
-    assert "Bu ay: değişim yok. Başlangıçtan beri: değişim yok." in flat
+    assert "Bu ay: bilgi yok. Başlangıçtan beri: değişim yok." in flat
     assert flat.endswith("Durum: Bot duraklatılmış durumda.")
     assert "Elimdeki fonun tamamını sattım." in build_digest(context(action="sell_all"))
     with pytest.raises(ValueError):

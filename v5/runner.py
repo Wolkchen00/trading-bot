@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -21,13 +22,13 @@ from .clock import ET, SessionCalendar, parse_calendar, window_for
 from .config import ConfigError, load_settings
 from .data import InputsNotReady, build_inputs
 from .executor import (
-    CAPPED, DRY_RUN, FAILED, HOLD_NOT_READY, MISSED, NOT_READY, NOT_SUBMITTED, NO_TRADE, PARTIAL, UNRESOLVED,
+    CAPPED, DONE, DRY_RUN, FAILED, HOLD_NOT_READY, MISSED, NOT_READY, NOT_SUBMITTED, NO_TRADE, PARTIAL, UNRESOLVED,
     Executor, SessionRecord, SnapshotInvalid, take_snapshot,
 )
 from .health import write_heartbeat
 from .notify import Notifier, Outbox, build_alert, cause_for, default_post
 from .packages import get_package
-from .rails import Rails, floor_order_allowed, read_equity, reduce_only
+from .rails import Rails, floor_order_allowed, last_equity_is_close_of, read_equity, reduce_only
 from .state import ProcessLock, StateCorrupt, StateDirError, atomic_write_json, ensure_state_dir, read_json
 from .strategy import READY, decide
 
@@ -39,7 +40,7 @@ QUIET_CUTOFF_CODES = {"PAUSED", "FOREIGN_ASSET", "UNRESOLVED", "FLOOR_HALT"}
 ACCOUNT_PROBLEMS = {"BROKER_DOWN", "ACCOUNT_STATUS", "BLOCKED"}
 FIVE_MINUTES = timedelta(minutes=5)
 # This long after the reconcile time an account reading no longer shows the closing value of the session.
-LATE_CLOSE = timedelta(minutes=30)
+LATE_CLOSE = timedelta(minutes=5)
 # Failing ticks are counted inside this span, so a fault that comes and goes is reported too.
 ERROR_WINDOW = timedelta(minutes=30)
 # How many sessions back a process that was away still reports (one dated summary each).
@@ -91,18 +92,66 @@ class Runner:
         self._last_decision = None
 
     # ------------------------------------------------------------------ small helpers
+    @staticmethod
+    def _state_shape_ok(obj) -> bool:
+        def is_date(value):
+            try:
+                return isinstance(value, str) and bool(date.fromisoformat(value))
+            except ValueError:
+                return False
+
+        def is_moment(value):
+            try:
+                return isinstance(value, str) and bool(datetime.fromisoformat(value))
+            except ValueError:
+                return False
+
+        if obj.get("started_at") is not None and not is_moment(obj["started_at"]):
+            return False
+        if obj.get("closed_session") is not None and not is_date(obj["closed_session"]):
+            return False
+        for key in ("closed_sessions", "unknown_sessions"):
+            if key in obj and not (isinstance(obj[key], list) and all(is_date(item) for item in obj[key])):
+                return False
+        if obj.get("cutoff_alerted") is not None and not isinstance(obj["cutoff_alerted"], str):
+            return False
+        streak = obj.get("overlay_missing_streak", 0)
+        return isinstance(streak, int) and not isinstance(streak, bool) and streak >= 0
+
     def _load_state(self) -> dict:
-        obj = read_json(self.state_dir / "runner.json", default=None)
-        if not isinstance(obj, dict):
-            obj = {}
+        path = self.state_dir / "runner.json"
+        obj = read_json(path, default=None)
+        if obj is None:
+            obj = {}                    # no file yet: a new engine
+        elif not isinstance(obj, dict) or not self._state_shape_ok(obj):
+            # Never replaced by defaults: that would forget which summaries are still owed and call it healthy.
+            raise StateCorrupt(path)
         obj.setdefault("started_at", None)
         obj.setdefault("closed_session", None)
+        sessions = obj.get("closed_sessions")
+        if not isinstance(sessions, list):
+            sessions = [obj["closed_session"]] if obj["closed_session"] else []
+        sessions = sorted({item for item in sessions if isinstance(item, str)})[-15:]
+        obj["closed_sessions"] = sessions
+        obj["closed_session"] = sessions[-1] if sessions else None
         obj.setdefault("cutoff_alerted", None)
         obj.setdefault("overlay_missing_streak", 0)
+        unknown = obj.get("unknown_sessions")
+        obj["unknown_sessions"] = (
+            sorted({item for item in unknown if isinstance(item, str)}) if isinstance(unknown, list) else []
+        )
         return obj
 
     def _save_state(self, obj) -> None:
         atomic_write_json(self.state_dir / "runner.json", obj)
+
+    def _finish_session(self, state, day) -> None:
+        sessions = set(state.get("closed_sessions") or [])
+        sessions.add(day.isoformat())
+        ordered = sorted(sessions)[-15:]
+        state["closed_sessions"] = ordered
+        state["closed_session"] = ordered[-1]
+        self._save_state(state)
 
     def _record(self, day, purpose="dec", create=False):
         record = SessionRecord.load(self.state_dir, day, purpose=purpose, dry_run=self.dry)
@@ -367,6 +416,35 @@ class Runner:
             if settled.status != before:
                 late = now > window_for(session).reconcile_until + LATE_CLOSE
                 self._after_chain(settled, session, late=late)
+        self._correction_step(now)
+
+    def _correction_step(self, now) -> None:
+        state = self._load_state()
+        for day_text in tuple(state["unknown_sessions"]):
+            try:
+                day = date.fromisoformat(day_text)
+            except ValueError:
+                state["unknown_sessions"].remove(day_text)
+                self._save_state(state)
+                continue
+            session = self.calendar.get(day)
+            if session is None:
+                continue
+            record, floor_record = self._record(day), self._record(day, "flr")
+            if any(_open(item) for item in (record, floor_record)):
+                continue
+            reading = read_equity(self.broker, now)
+            if not reading.ok:
+                continue
+            self.notifier.digest(
+                day,
+                self._digest_context(
+                    now, day, reading, reading.equity, None, record, floor_record,
+                    as_of_now=True, correction=True,
+                ),
+            )
+            state["unknown_sessions"].remove(day_text)
+            self._save_state(state)
 
     # ------------------------------------------------------------------ (5) the session by time
     def _session_step(self, now) -> None:
@@ -384,40 +462,40 @@ class Runner:
         self._session = session
         if session is None:
             self._phase = "closed"
-            self._catch_up(now, today, state)
+            self._digest_pending = not self._catch_up(now, today, state)
             return
         window = window_for(session)
         if now < session.open - timedelta(minutes=45):
             self._phase = "pre"
-            self._catch_up(now, today, state)
+            self._digest_pending = not self._catch_up(now, today, state)
         elif now < session.open:
             self._phase = "readiness"
             try:
                 self._readiness_step(now, session)
             finally:
-                self._catch_up(now, today, state)
+                self._digest_pending = not self._catch_up(now, today, state)
         elif now < window.decide_from:
             self._phase = "session"
             try:
                 self._breaker_step(now, session)
             finally:
-                self._catch_up(now, today, state)       # a process that came back after the open still owes it
+                self._digest_pending = not self._catch_up(now, today, state)
         elif now < session.close:
             self._phase = "decision"
             try:
                 self._decision_step(now, session, window, state)
             finally:
-                self._catch_up(now, today, state)       # today's decision never waits for yesterday's report
+                self._digest_pending = not self._catch_up(now, today, state)
         elif now < window.reconcile_from:
             self._phase = "closing"
         else:
             self._phase = "after_close"
+            older_done = True
             try:
-                # The reports still owed for earlier sessions go first, and this is their last chance: the
-                # marker of closed sessions only moves forward.
-                self._catch_up(now, today, state, give_up=True)
+                older_done = self._catch_up(now, today, state)
             finally:
-                self._after_close(now, session, state)
+                today_done = self._after_close(now, session, state)
+                self._digest_pending = not (older_done and today_done)
 
     def _no_calendar_cutoff(self, now, today, state) -> None:
         """A weekday whose session times are unknown: after the usual cutoff the owner is told, once."""
@@ -431,17 +509,31 @@ class Runner:
         self._not_ready(today, "CALENDAR_MISSING")
         self._cutoff(today, state)
 
-    def _catch_up(self, now, today, state, give_up=False) -> None:
+    def _catch_up(self, now, today, state) -> bool:
         """The after-close work of the sessions before today that never got it (the process was not running at
         their close, or the account could not be read): oldest first, at most the last five. A session whose
-        report is still pending holds the later ones back, so the marker of closed sessions moves in order."""
-        for day in self.calendar.previous(today, CATCH_UP_SESSIONS):
+        report is still pending is retried without holding the other sessions back."""
+        candidates = self.calendar.previous(today, CATCH_UP_SESSIONS + 1)
+        if len(candidates) > CATCH_UP_SESSIONS:
+            outside = candidates[0]
+            started = state.get("started_at")
+            session = self.calendar.get(outside)
+            if (
+                outside.isoformat() not in state["closed_sessions"]
+                and session is not None
+                and started is not None
+                and session.close > datetime.fromisoformat(started)
+            ):
+                log.error("no summary could be made for %s", outside)
+                self._finish_session(state, outside)
+        owed = False
+        for day in candidates[-CATCH_UP_SESSIONS:]:
             session = self.calendar.get(day)
             if session is None:
                 continue
-            self._after_close(now, session, state, give_up=give_up)
-            if (state.get("closed_session") or "") < day.isoformat():
-                return
+            if not self._after_close(now, session, state):
+                owed = True
+        return not owed
 
     # ------------------------------------------------------------------ readiness before the open
     def _readiness_step(self, now, session) -> None:
@@ -477,7 +569,7 @@ class Runner:
         if self._breaker_checked_at is not None and now - self._breaker_checked_at < FIVE_MINUTES:
             return
         self._breaker_checked_at = now
-        self._watch_breaker(read_equity(self.broker, now), session)
+        self._watch_breaker(read_equity(self.broker, now), session, decisive=False)
 
     def _backfill_close(self, reading, session) -> None:
         """The closing value of the session before `session`, taken from the broker when the engine has no row
@@ -485,7 +577,10 @@ class Runner:
         broker's `last_equity` still means exactly that close: during `session`, or shortly after its close."""
         previous = self._previous_day(session.date)
         value = reading.last_equity
-        if previous is None or not _positive(value):
+        if (
+            previous is None or not _positive(value)
+            or last_equity_is_close_of(reading, previous) is False
+        ):
             return
         history = self.rails.state().get("equity_history", [])
         if history and str(history[-1].get("session", "")) >= previous.isoformat():
@@ -493,7 +588,7 @@ class Runner:
         self.rails.record_close(previous, float(value))
         log.info("closing value of %s taken from the broker: %.2f", previous, value)
 
-    def _watch_breaker(self, reading, session) -> bool:
+    def _watch_breaker(self, reading, session, decisive=False) -> bool:
         day = session.date.isoformat()
         info = self.rails.breaker_info()
         was = bool(info and info.get("session") == day)
@@ -504,7 +599,9 @@ class Runner:
         if "BROKER_DOWN" in self._readiness_problems or "EQUITY_DOUBT" in self._readiness_problems:
             self._readiness_problems = [p for p in self._readiness_problems if p not in ("BROKER_DOWN", "EQUITY_DOUBT")]
         self._backfill_close(reading, session)
-        active = self.rails.check_breaker(reading, session.date, self._previous_day(session.date))
+        active = self.rails.check_breaker(
+            reading, session.date, self._previous_day(session.date), decisive=decisive
+        )
         if active and not was:
             info = self.rails.breaker_info() or {}
             baseline, equity = info.get("baseline"), info.get("equity")
@@ -533,8 +630,10 @@ class Runner:
             return
         if _open(record):
             # The chain began in an earlier tick. What it may still send is decided by the state of THIS tick.
-            blocked, problem = self._continue_block(now, session, record)
-            self._after_chain(self.executor.run_chain(record, window, blocked=blocked), session)
+            blocked, problem, breaker = self._continue_block(now, session, record)
+            self._after_chain(
+                self.executor.run_chain(record, window, blocked=blocked, buys_blocked=breaker), session
+            )
             if problem is not None:
                 raise problem
             return
@@ -568,7 +667,7 @@ class Runner:
         if floor == "CONFIRMING":
             self._not_ready(day, "RAIL_CONFIRMING")
             return
-        breaker = self._watch_breaker(reading, session)
+        breaker = self._watch_breaker(reading, session, decisive=True)
 
         if self.clock_ok is not True:
             self._not_ready(day, "CLOCK_DOUBT")
@@ -620,16 +719,7 @@ class Runner:
             return
         self.executor.attach_decision(record, inputs, decision)
         log.info("decision %s: target %.4f (%s)", day, decision.total_new, ",".join(decision.reason_keys))
-        self._after_chain(self.executor.run_chain(record, window), session)
-
-    @staticmethod
-    def _is_buy(record) -> bool:
-        decision = record.data.get("decision") or {}
-        try:
-            held = float(decision["core_held"]) + float(decision["ovl_held"])
-            return float(record.data["target"]["total_new"]) > held + 1e-9
-        except (KeyError, TypeError, ValueError):
-            return True                 # unknown: the cautious reading is that it buys
+        self._after_chain(self.executor.run_chain(record, window, buys_blocked=breaker), session)
 
     def _continue_block(self, now, session, record):
         """Why a strategy chain that is already under way may not send a NEW order in this tick (or None), and
@@ -637,36 +727,38 @@ class Runner:
         try:
             floor = self.rails.floor_state()
             paused = self.rails.paused()
-            breaker = self._watch_breaker(read_equity(self.broker, now), session)   # measured again, not remembered
+            reading = read_equity(self.broker, now)
+            breaker = self._watch_breaker(reading, session, decisive=True)   # measured again, not remembered
         except Exception as exc:        # whatever broke: nothing new is sent, the order already out is still followed
-            return ("STATE_CORRUPT" if isinstance(exc, StateCorrupt) else "ENGINE_FAULT"), exc
+            return ("STATE_CORRUPT" if isinstance(exc, StateCorrupt) else "ENGINE_FAULT"), exc, False
         if floor == "HALT":
-            return "FLOOR_HALT", None
+            return "FLOOR_HALT", None, breaker
         if floor == "CONFIRMING":
-            return "RAIL_CONFIRMING", None
+            return "RAIL_CONFIRMING", None, breaker
+        if not reading.ok:
+            code = reading.problem if reading.problem in ACCOUNT_PROBLEMS else "EQUITY_DOUBT"
+            return code, None, breaker
         if self.clock_ok is not True:
-            return "CLOCK_DOUBT", None
+            return "CLOCK_DOUBT", None, breaker
         if not self.market_open:
-            return "MARKET_CLOSED", None
+            return "MARKET_CLOSED", None, breaker
         if not self.notifier.configured:
-            return "NOTIFY_MISSING", None
+            return "NOTIFY_MISSING", None, breaker
         try:
             snapshot = self._snapshot()
         except SnapshotInvalid:
-            return "SNAPSHOT_INVALID", None
+            return "SNAPSHOT_INVALID", None, breaker
         except BrokerError:
-            return "BROKER_DOWN", None
+            return "BROKER_DOWN", None, breaker
         except Exception as exc:
-            return ("STATE_CORRUPT" if isinstance(exc, StateCorrupt) else "ENGINE_FAULT"), exc
+            return ("STATE_CORRUPT" if isinstance(exc, StateCorrupt) else "ENGINE_FAULT"), exc, breaker
         if snapshot.foreign:
             symbol = _item_symbol(snapshot.foreign[0])
             self.notifier.alert("FOREIGN_ASSET", state_key=symbol, symbol=symbol)
-            return "FOREIGN_ASSET", None
+            return "FOREIGN_ASSET", None, breaker
         if paused:
-            return "PAUSED", None
-        if breaker and self._is_buy(record):
-            return "BREAKER", None
-        return None, None
+            return "PAUSED", None, breaker
+        return None, None, breaker
 
     def _floor_block(self, now, session):
         """The same question for a safety sale that is under way."""
@@ -675,8 +767,17 @@ class Runner:
                 return "HALT_CLEARED", None     # the owner lifted the halt: nothing more is sold
         except Exception as exc:
             return ("STATE_CORRUPT" if isinstance(exc, StateCorrupt) else "ENGINE_FAULT"), exc
+        try:
+            snapshot = self._snapshot()
+        except SnapshotInvalid:
+            return "SNAPSHOT_INVALID", None
+        except BrokerError:
+            return "BROKER_DOWN", None
+        except Exception as exc:
+            return ("STATE_CORRUPT" if isinstance(exc, StateCorrupt) else "ENGINE_FAULT"), exc
         allowed, reason = floor_order_allowed(
-            self.clock_ok is True, True, self.market_open, (session.close - now).total_seconds(), False, False,
+            self.clock_ok is True, True, self.market_open, (session.close - now).total_seconds(),
+            self._other_open(session.date, "flr"), bool(snapshot.foreign_product_orders),
         )
         return (None if allowed else reason), None
 
@@ -697,6 +798,15 @@ class Runner:
             code = "TIME_OUT"
         return cause_for(code)
 
+    @staticmethod
+    def _failure_kind(record) -> str:
+        detail = str(record.data.get("status_detail") or "")
+        if re.match(r"^\d{3}:", detail):
+            return "REFUSED"
+        if detail in {"NOT_FOUND", "VALIDATION"}:
+            return "NOT_SENT"
+        return "UNFILLED"
+
     def _after_chain(self, record, session, late=False) -> None:
         """Messages that cannot wait for the evening: an order with an unknown outcome, a refused order, and a
         trade that was decided but never sent. `late`: the record was settled long after its session; "today I
@@ -704,13 +814,14 @@ class Runner:
         day = session.date.isoformat()
         if record.status == UNRESOLVED:
             self.notifier.alert("UNRESOLVED", state_key=day)
-        elif (
-            record.status == FAILED and record.data.get("status_detail") == "NOT_FOUND"
-            and record.data.get("purpose") == "dec"
-        ):
-            self.notifier.alert("NOT_SENT", state_key=day, cause=self._not_sent_cause(record))
         elif record.status == FAILED:
-            self.notifier.alert("ORDER_FAILED", state_key=day, product_pct=self._account_weight(record))
+            kind = self._failure_kind(record)
+            if kind == "REFUSED":
+                self.notifier.alert("ORDER_FAILED", state_key=day, product_pct=self._account_weight(record))
+            elif record.data.get("purpose") == "dec" and kind == "NOT_SENT" and not late:
+                self.notifier.alert("NOT_SENT", state_key=day, cause=self._not_sent_cause(record))
+            elif record.data.get("purpose") == "dec" and kind == "UNFILLED" and not late:
+                self.notifier.alert("ORDER_UNFILLED", state_key=day, product_pct=self._account_weight(record))
         elif record.status == NOT_SUBMITTED and record.data.get("purpose") == "dec" and not late:
             self.notifier.alert("NOT_SENT", state_key=day, cause=self._not_sent_cause(record))
 
@@ -804,28 +915,28 @@ class Runner:
 
     def _settle_floor(self, reading) -> None:
         """After the close: a safety sale that finished while nobody was looking is reported as finished."""
-        if self.rails.floor_state() != "HALT" or not self.rails.liquidating():
+        if self.rails.floor_state() != "HALT":
             return
         try:
             snapshot = self._snapshot()
         except (SnapshotInvalid, BrokerError):
             return
-        if Decimal(snapshot.product_qty) <= 0:
+        if Decimal(snapshot.product_qty) > 0:
+            self.rails.set_liquidating(True)
+        elif self.rails.liquidating():
             drawdown, equity, _ = self._floor_numbers(reading, snapshot)
             self._floor_done(drawdown, equity)
 
     # ------------------------------------------------------------------ after the close
-    def _after_close(self, now, session, state, give_up=False) -> None:
+    def _after_close(self, now, session, state) -> bool:
         day = session.date
-        marker = state.get("closed_session")
-        if marker is not None and marker >= day.isoformat():
-            return
+        if day.isoformat() in state["closed_sessions"]:
+            return True
         started = state.get("started_at")
         if started is not None and session.close <= datetime.fromisoformat(started):
             # This session ended before the engine ever ran: it is not ours to report.
-            state["closed_session"] = day.isoformat()
-            self._save_state(state)
-            return
+            self._finish_session(state, day)
+            return True
         window = window_for(session)
         late = now > window.reconcile_until + LATE_CLOSE
         if self.dry:
@@ -834,23 +945,16 @@ class Runner:
             for purpose in ("flr", "dec"):
                 leftover = self._record(day, purpose)
                 if _open(leftover):
-                    self._after_chain(self.executor.reconcile(leftover, session), session)
+                    self._after_chain(self.executor.reconcile(leftover, session), session, late=late)
         if any(_open(self._record(day, purpose)) for purpose in ("flr", "dec")) and now < window.reconcile_until:
             # Housekeeping is still asking the broker what became of the day's order: give it a few minutes
             # before a summary that would have to call the outcome unknown.
-            self._digest_pending = True
-            return
+            return False
         self._cutoff(day, state, quiet=late)
 
         reading = read_equity(self.broker, now)
         if not reading.ok:
-            self._digest_pending = True
-            if give_up:
-                log.error("no usable account reading after the close of %s; the digest is skipped", day)
-                state["closed_session"] = day.isoformat()
-                self._save_state(state)
-                self._digest_pending = False
-            return
+            return False
         self._settle_floor(reading)
 
         # Which number is the closing value of this session? On time: the reading itself. Late, during the next
@@ -860,7 +964,16 @@ class Runner:
         if not late:
             self._backfill_close(reading, session)
             close_equity = shown = reading.equity
-        elif following is not None and following.open <= now < following.close and _positive(reading.last_equity):
+        elif (
+            _positive(reading.last_equity)
+            and (
+                last_equity_is_close_of(reading, day) is True
+                or (
+                    last_equity_is_close_of(reading, day) is None
+                    and following is not None and following.open <= now < following.close
+                )
+            )
+        ):
             close_equity = shown = float(reading.last_equity)
         else:
             close_equity, shown = None, reading.equity
@@ -869,7 +982,7 @@ class Runner:
             rows = {str(row.get("session")): row.get("equity") for row in self.rails.state().get("equity_history", [])}
             if previous is not None and previous.isoformat() in rows:
                 base = rows[previous.isoformat()]
-            elif not late:
+            elif not late and last_equity_is_close_of(reading, previous) is not False:
                 base = reading.last_equity
             self.rails.record_close(day, close_equity)
         if self.rails.floor_state() != "HALT":
@@ -878,6 +991,10 @@ class Runner:
                 self.notifier.alert("DRAWDOWN_ALERT", state_key=day.isoformat(), pct=drawdown, equity=reading.equity)
 
         record, floor_record = self._record(day), self._record(day, "flr")
+        if any(_open(item) for item in (record, floor_record)):
+            unknown = set(state.get("unknown_sessions") or [])
+            unknown.add(day.isoformat())
+            state["unknown_sessions"] = sorted(unknown)
         decision = record.data.get("decision") if record is not None else None
         missing = bool(isinstance(decision, dict) and decision.get("overlay_data_missing"))
         state["overlay_missing_streak"] = int(state.get("overlay_missing_streak") or 0) + 1 if missing else 0
@@ -889,12 +1006,13 @@ class Runner:
                 as_of_now=close_equity is None,
             ),
         )
-        state["closed_session"] = day.isoformat()
-        self._save_state(state)
-        self._digest_pending = False
+        self._finish_session(state, day)
         log.info("session %s closed: equity %.2f%s", day, shown, " (reported late)" if late else "")
+        return True
 
-    def _digest_context(self, now, day, reading, equity, base, record, floor_record, as_of_now=False) -> dict:
+    def _digest_context(
+        self, now, day, reading, equity, base, record, floor_record, as_of_now=False, correction=False,
+    ) -> dict:
         try:
             snapshot = self._snapshot()
             account = snapshot.account_equity or snapshot.equity
@@ -907,6 +1025,7 @@ class Runner:
             owner_weight, owner_label, flat = 0.0, "", reading.positions_value <= 0
 
         bought = sold = 0.0
+        last_filled_kind = last_filled_status = None
         for item in (record, floor_record):
             if item is None:
                 continue
@@ -918,6 +1037,7 @@ class Runner:
                 price = intent.get("filled_avg_price")
                 if quantity <= 0 or not price:
                     continue
+                last_filled_kind, last_filled_status = intent.get("kind"), item.status
                 if intent.get("side") == "buy":
                     bought += float(quantity) * float(price)
                 elif intent.get("side") == "sell":
@@ -925,7 +1045,7 @@ class Runner:
         open_day = any(_open(item) for item in (record, floor_record))
         if open_day:
             action, action_usd = "unknown", 0.0         # an order went out and its outcome is not known yet
-        elif sold > 0 and flat:
+        elif last_filled_kind == "sell_all" and last_filled_status == DONE:
             action, action_usd = "sell_all", sold
         elif sold > 0 and sold >= bought:
             action, action_usd = "sell", sold
@@ -946,7 +1066,10 @@ class Runner:
                 action = {
                     "buy": "would_buy", "sell": "would_sell", "sell_all": "would_sell_all", "none": "none",
                 }.get(intent.get("kind"), "none")
-                action_usd = intent.get("desired_usd") or 0.0
+                if intent.get("side") == "buy":
+                    action_usd = intent.get("notional") or intent.get("desired_usd") or 0.0
+                else:
+                    action_usd = intent.get("desired_usd") or 0.0
             else:
                 action, action_usd = "none", 0.0
 
@@ -958,7 +1081,7 @@ class Runner:
         elif record is not None and record.status == NOT_SUBMITTED:
             outcome = "NOT_SENT"
         elif record is not None and record.status == FAILED:
-            outcome = "NOT_SENT" if record.data.get("status_detail") == "NOT_FOUND" else "REFUSED"
+            outcome = self._failure_kind(record)
         elif floor_record is not None or self._hold_code(record) == "FLOOR_HALT":
             outcome = "FLOOR"
         decision = record.data.get("decision") if record is not None else None
@@ -966,6 +1089,8 @@ class Runner:
         if outcome is None and isinstance(decision, dict):
             reason_keys = list(decision.get("reason_keys") or [])
         if isinstance(reason_keys, list):
+            if record is not None and record.status == DRY_RUN:
+                reason_keys = ["OVERLAY_WOULD" if key == "OVERLAY_ENTER" else key for key in reason_keys]
             if "OVERLAY_ENTER" in reason_keys and bought <= 0:
                 before = record.data.get("before") if record is not None else None
                 entered = (
@@ -997,6 +1122,7 @@ class Runner:
             "prefix": prefix,
             "equity": equity,
             "as_of_now": bool(as_of_now),
+            "correction": bool(correction),
             "day_usd": day_usd,
             "day_pct": None if day_usd is None else day_usd / base,
             "product_weight": product_weight,
@@ -1008,14 +1134,14 @@ class Runner:
             "outcome": outcome,
             "month_pct": None if not month_base else equity / month_base - 1.0,
             "total_pct": None if not total_base else equity / total_base - 1.0,
-            "status_text": self._status_text(now, reading, record, floor_record, product_weight, open_day),
+            "status_text": self._status_text(now, reading, record, floor_record, product_weight, open_day, flat),
         }
 
-    def _status_text(self, now, reading, record, floor_record, product_weight, open_day):
+    def _status_text(self, now, reading, record, floor_record, product_weight, open_day, flat):
         """The sentence of the highest active state, or None when everything is normal."""
         document = self.rails.state()
         if document.get("floor_state") == "HALT":
-            if document.get("liquidating"):
+            if not flat:
                 return build_alert("RAIL_LIQUIDATING", product_pct=product_weight)
             peak = document.get("peak")
             drawdown = 0.0 if not peak else max(0.0, 1.0 - reading.equity / peak)
@@ -1026,18 +1152,15 @@ class Runner:
         if code == "FOREIGN_ASSET":
             return build_alert("FOREIGN_ASSET", symbol=_item_symbol(record.data["inputs"].get("detail") or ""))
         records = [item for item in (record, floor_record) if item is not None]
-        not_found = next(
-            (
-                item for item in records
-                if item.status == FAILED and item.data.get("status_detail") == "NOT_FOUND"
-                and item.data.get("purpose") == "dec"
-            ),
-            None,
-        )
-        if not_found is not None:
-            return build_alert("NOT_SENT", cause=self._not_sent_cause(not_found))
-        if any(item.status == FAILED for item in records):
-            return build_alert("ORDER_FAILED", product_pct=product_weight)
+        for item in records:
+            if item.status != FAILED:
+                continue
+            kind = self._failure_kind(item)
+            if kind == "REFUSED":
+                return build_alert("ORDER_FAILED", product_pct=product_weight)
+            if kind == "NOT_SENT":
+                return build_alert("NOT_SENT", cause=self._not_sent_cause(item))
+            return build_alert("ORDER_UNFILLED", product_pct=product_weight)
         for item in records:
             residual = item.data.get("residual") or 0.0
             if item.status == PARTIAL or (item.status == CAPPED and abs(residual) > 0.03):

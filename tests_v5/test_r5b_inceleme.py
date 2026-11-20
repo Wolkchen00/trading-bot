@@ -319,7 +319,10 @@ def test_an_order_with_an_unknown_outcome_is_called_unknown_and_settled_later(tm
     rec = sim.record(D1)
     assert rec.is_final and rec.status in (ex.DONE, ex.CAPPED) and len(sim.submits()) == 1
     assert (sim.settings.state_dir / "overlay.json").exists()                         # the books are closed
-    assert "UNRESOLVED" not in sim.heartbeat()["states"] and len(sim.digests()) == 1
+    assert "UNRESOLVED" not in sim.heartbeat()["states"]
+    runner.tick()
+    assert len(sim.digests()) == 2 and sim.digests()[1].split("\n")[0].endswith("(16.11.2026), düzeltme")
+    assert sim.digests()[1].split("\n")[3].endswith(" dolarlık Nasdaq fonu aldım.")     # the real outcome
     sim.run_day(D2, runner)
     assert sim.record(D2).is_final and sim.digests()[-1].split("\n")[6] == "Durum: Her şey normal."
 
@@ -514,11 +517,11 @@ def test_one_pending_message_a_day_whatever_the_reason(tmp_path):
 # ============================================================================ 8. decide-now and replay
 def test_decide_now_names_everything_that_would_stop_the_engine(tmp_path):
     def run(sim):
-        sim.clock.now = window(sim, D1).decide_from - dt.timedelta(hours=2)
+        sim.clock.now = window(sim, D1).decide_from + dt.timedelta(minutes=1)         # inside the decision window
         return vo.cmd_decide_now(sim.settings, sim.fb, sim.clock.now)
 
     code, doc = run(Sim(tmp_path / "clean"))
-    assert code == 0 and doc["blockers"] == [] and doc["breaker"] is False and doc["in_window"] is False
+    assert code == 0 and doc["blockers"] == [] and doc["breaker"] is False and doc["in_window"] is True
     assert doc["plan"]["side"] == "buy"
     cases = {
         "PEAK_MISSING": Sim(tmp_path / "peak", peak=None),
@@ -570,7 +573,7 @@ def test_decide_now_applies_the_breaker_and_fails_when_the_rule_is_not_ready(tmp
 
 def test_replay_checks_the_order_plan_and_is_strict_about_types(tmp_path):
     sim = Sim(tmp_path)
-    sim.clock.now = window(sim, D1).decide_from - dt.timedelta(hours=2)
+    sim.clock.now = window(sim, D1).decide_from + dt.timedelta(minutes=1)
     code, stored = vo.cmd_decide_now(sim.settings, sim.fb, sim.clock.now)
     assert code == 0 and vo.cmd_replay(stored)[0] == 0
     for section, key, value in [("plan", "side", "sell"), ("plan", "notional", "1.00"), ("plan", "capped", True),
@@ -649,8 +652,18 @@ def watchdog(tmp_path):
         assert old in text
         text = text.replace(old, new)
     (work / "watchdog.sh").write_bytes(text.encode("utf-8"))
+    # Like the real one: with a label filter only the containers that carry the label are listed (file
+    # "labels", lines "<service> <container name>"); without the file no container carries one.
     fake_docker = ('#!/bin/sh\n'
-                   'if [ "$1" = "ps" ]; then cat "$FAKE_DIR/ps" 2>/dev/null; exit 0; fi\n'
+                   'if [ "$1" = "ps" ]; then\n'
+                   '  case "$*" in\n'
+                   '    *label=com.docker.compose.service=*)\n'
+                   '      wanted=$(printf "%s\\n" "$*" | sed -n "s/.*label=com\\.docker\\.compose\\.service=\\([^ ]*\\).*/\\1/p")\n'
+                   '      [ -r "$FAKE_DIR/labels" ] && sed -n "s/^${wanted} //p" "$FAKE_DIR/labels"\n'
+                   '      exit 0 ;;\n'
+                   '  esac\n'
+                   '  cat "$FAKE_DIR/ps" 2>/dev/null; exit 0\n'
+                   'fi\n'
                    'if [ "$1" = "exec" ]; then\n'
                    '  [ -r "$FAKE_DIR/exec_$2" ] || exit 1\n'
                    '  cat "$FAKE_DIR/exec_$2"; exit 0\n'

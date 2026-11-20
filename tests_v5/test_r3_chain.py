@@ -45,7 +45,7 @@ def setup(tmp_path, cash=10000, positions=None, enabled=True, purpose="dec"):
     )
     record.save()
     executor = Executor(
-        broker, SimpleNamespace(orders_enabled=enabled), tmp_path,
+        broker, SimpleNamespace(orders_enabled=enabled, mode="paper"), tmp_path,
         PACKAGES["high"], clock.now, clock.sleep,
     )
     return broker, clock, window, record, executor
@@ -53,7 +53,7 @@ def setup(tmp_path, cash=10000, positions=None, enabled=True, purpose="dec"):
 
 def restart(broker, clock, path, enabled=True):
     return Executor(
-        broker, SimpleNamespace(orders_enabled=enabled), path,
+        broker, SimpleNamespace(orders_enabled=enabled, mode="paper"), path,
         PACKAGES["high"], clock.now, clock.sleep,
     )
 
@@ -63,7 +63,7 @@ def test_record_helpers_and_client_ids(tmp_path):
     for args in (("x", DAY, "dec", 1), ("paper", DAY, "x", 1), ("paper", DAY, "dec", 4)):
         with pytest.raises(ValueError): client_order_id(*args)
     record = SessionRecord.new(tmp_path, DAY, "paper")
-    executor = Executor(None, SimpleNamespace(orders_enabled=True), tmp_path, PACKAGES["high"], lambda: datetime.now(UTC), lambda _: None)
+    executor = Executor(None, SimpleNamespace(orders_enabled=True, mode="paper"), tmp_path, PACKAGES["high"], lambda: datetime.now(UTC), lambda _: None)
     executor.mark_not_ready(record, "PRICE_STALE")
     assert not record.is_final
     executor.finalize(record, "HOLD_NOT_READY", "PRICE_STALE")

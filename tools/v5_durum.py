@@ -33,10 +33,12 @@ def _heartbeat_age(heartbeat, now):
 def render(state_dir, now) -> str:
     heartbeat = read_heartbeat(state_dir)
     age = _heartbeat_age(heartbeat, now)
-    fresh = age is not None and age < 300
+    fresh = age is not None and -60 <= age <= 300
     lines = ["Bot çalışıyor." if fresh else "Bot çalışmıyor görünüyor."]
     if age is None:
         lines.append("Kalp atışı kaydı yok.")
+    elif age < -60:
+        lines.append("Kalp atışı kaydının saati ileride görünüyor.")
     else:
         lines.append(f"Son kalp atışı: {max(0, int(age // 60))} dakika önce.")
     if age is None:

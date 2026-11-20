@@ -34,10 +34,11 @@ REASON_SENTENCES = {
     "TREND_UP": "Nasdaq yükseliş eğiliminde.",
     "TREND_MIXED": "Nasdaq kararsız, bu yüzden ana payı küçük tutuyorum.",
     "TREND_DOWN": "Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor.",
-    "VOL_HIGH": "Piyasa çok oynak, bu yüzden payı azalttım.",
+    "VOL_HIGH": "Piyasa çok oynak, bu yüzden payı küçük tutuyorum.",
     "VOL_CALM": "Piyasa sakin.",
-    "BAND_HOLD": "Hedefe yeterince yakınım, işlem gerekmedi.",
+    "BAND_HOLD": "Ana pay hedefe yeterince yakın.",
     "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım.",
+    "OVERLAY_WOULD": "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım.",
     "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum.",
     "OVERLAY_KEEP": "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum.",
     "OVERLAY_EXIT": "Dünkü ek alımı sattım.",
@@ -55,6 +56,7 @@ TEMPLATES = {
     "HOLD_NOT_READY": "Bugün karar veremedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden denerim.",
     "MISSED": "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim.",
     "ORDER_FAILED": "Alpaca emrimi kabul etmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Claude'a 'trading botuna bak' yazarsan sebebini inceler.",
+    "ORDER_UNFILLED": "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın yeniden karar veririm.",
     "ORDER_PARTIAL": "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın duruma yeniden bakarım.",
     "UNRESOLVED": "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
     "FOREIGN_ASSET": "Hesapta benim almadığım bir varlık ya da emir var ({symbol}). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver.",
@@ -108,6 +110,7 @@ CAUSE_SENTENCES = {
 OUTCOME_SENTENCES = {
     "NOT_SENT": "Karar verdim ama emri gönderemedim.",
     "REFUSED": "Karar verdim ama Alpaca emrimi kabul etmedi.",
+    "UNFILLED": "Karar verdim ama emrim gerçekleşmedi.",
     "UNKNOWN": "Emrimin sonucunu henüz öğrenemedim.",
     "FLOOR": "Hesap güvenlik sınırının altına düştü.",
 }
@@ -124,7 +127,9 @@ def cause_for(code) -> str:
 
 
 def _period(label, value) -> str:
-    if value is None or fmt_pct(value) == "0,0":
+    if value is None:
+        return f"{label}: bilgi yok."           # not computable: never reported as a computed zero
+    if fmt_pct(value) == "0,0":
         return f"{label}: değişim yok."
     direction = "artıda" if value > 0 else "ekside"
     return f"{label}: yüzde {fmt_pct(value)} {direction}."
@@ -142,7 +147,10 @@ def build_digest(ctx) -> str:
         raise ValueError("unknown digest prefix")
     session = ctx["date"]
     date_text = session.strftime("%d.%m.%Y")
-    lines = [prefixes[ctx["prefix"]] + f"Gün sonu özeti ({date_text})"]
+    title = f"Gün sonu özeti ({date_text})"
+    if ctx.get("correction"):
+        title += ", düzeltme"
+    lines = [prefixes[ctx["prefix"]] + title]
 
     account = (
         f"Hesap şu an {fmt_money(ctx['equity'])} dolar."
@@ -165,12 +173,14 @@ def build_digest(ctx) -> str:
     if owner >= 1:
         # The owner's own shares sit beside the fund: say so, or the cash figure would be wrong.
         label = ctx["owner_label"]
+        held = "Elimde şu an" if ctx.get("as_of_now") else "Elimde"
         lines.append(
-            f"Elimde: yüzde {product} Nasdaq fonu, yüzde {owner} senin aldığın hisse ({label}), "
+            f"{held}: yüzde {product} Nasdaq fonu, yüzde {owner} senin aldığın hisse ({label}), "
             f"yüzde {max(0, 100 - product - owner)} nakit."
         )
     else:
-        lines.append(f"Elimde: yüzde {product} Nasdaq fonu, yüzde {100 - product} nakit.")
+        held = "Elimde şu an" if ctx.get("as_of_now") else "Elimde"
+        lines.append(f"{held}: yüzde {product} Nasdaq fonu, yüzde {100 - product} nakit.")
     action = ctx["action"]
     if action not in {
         "none", "buy", "sell", "sell_all", "unknown",
@@ -417,11 +427,12 @@ class Notifier:
         return identifier
 
     def digest(self, session_date, ctx) -> str:
+        suffix = ":fix" if ctx.get("correction") else ""
         identifier = self.outbox.add(
             "DIGEST",
             build_digest(ctx),
             self.now_fn(),
-            dedupe_key=f"DIGEST:{session_date.isoformat()}:{ctx['prefix']}",
+            dedupe_key=f"DIGEST:{session_date.isoformat()}:{ctx['prefix']}{suffix}",
             priority=3,
         )
         self.flush()

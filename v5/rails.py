@@ -6,7 +6,7 @@ import math
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from .broker import BrokerError
@@ -23,6 +23,7 @@ class EquityReading:
     positions_value: float | None
     ok: bool
     problem: str | None
+    last_equity_asof: date | None = None
 
 
 class PeakNotInitialised(RuntimeError):
@@ -45,9 +46,26 @@ def _number(value) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def breaker_cause(reading, stored_close, breaker_day):
+def last_equity_is_close_of(reading, session_date) -> bool | None:
+    named = reading.last_equity_asof
+    if named is None:
+        return None
+    return named == session_date
+
+
+def breaker_cause(reading, stored_close, breaker_day, previous_session=None):
     """The breaker's read-only decision, shared by the engine and operator checks."""
     if not reading.ok:
+        return None
+    known = None if previous_session is None else last_equity_is_close_of(reading, previous_session)
+    if known is False:
+        if stored_close is NO_ROW:
+            return "BASELINE_PENDING"
+        baseline = _number(stored_close)
+        if baseline is None or baseline <= 0.0:
+            return "BASELINE_DOUBT"
+        if reading.equity <= (1.0 - breaker_day) * baseline:
+            return "BREACH"
         return None
     baseline = _number(reading.last_equity)
     if baseline is None or baseline <= 0.0:
@@ -92,6 +110,7 @@ def read_equity(broker, now) -> EquityReading:
         positions_value,
         problem is None,
         problem,
+        getattr(account, "balance_asof", None),
     )
 
 
@@ -224,7 +243,7 @@ class Rails:
 
         def change(document):
             history = document.setdefault("equity_history", [])
-            if any(row.get("session") == session for row in history):
+            if history and session <= max(str(row.get("session", "")) for row in history):
                 return None, False
             history.append({"session": session, "equity": number})
             peak = document.get("peak")
@@ -234,7 +253,7 @@ class Rails:
 
         return self._change(change)
 
-    def check_breaker(self, reading, session_date, previous_session=None) -> bool:
+    def check_breaker(self, reading, session_date, previous_session=None, decisive=False) -> bool:
         """`previous_session`: the session right before this one. When it is given, the broker's baseline is
         cross-checked against the stored close of exactly that session; a missing row means no cross-check
         (an older row says nothing about yesterday's close)."""
@@ -259,10 +278,20 @@ class Rails:
             ]
             latest = max(prior, key=lambda row: str(row.get("session", ""))) if prior else None
             stored = latest.get("equity") if latest is not None else NO_ROW
-            cause = breaker_cause(reading, stored, self.settings.rails.breaker_day)
+            cause = breaker_cause(reading, stored, self.settings.rails.breaker_day, previous_session)
+            if cause == "BASELINE_PENDING":
+                if not decisive:
+                    return False, False
+                cause = "BASELINE_DOUBT"
             if cause is None:
                 return False, False
-            baseline = _number(reading.last_equity)
+            baseline = (
+                _number(stored)
+                if previous_session is not None
+                and last_equity_is_close_of(reading, previous_session) is False
+                and stored is not NO_ROW
+                else _number(reading.last_equity)
+            )
             document["breaker"] = {
                 "session": session,
                 "cause": cause,

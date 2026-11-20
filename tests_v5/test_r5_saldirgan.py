@@ -314,7 +314,7 @@ def assert_only_known_sentences(sim):
     for text in sim.digests():
         lines = text.split("\n")
         assert len(lines) == 7 and "{" not in text and "None" not in text, text
-        assert lines[1].startswith(("Hesap: ", "Hesap şu an ")) and lines[2].startswith("Elimde: yüzde ") and lines[3].startswith("Bugün ne yaptım: ")
+        assert lines[1].startswith(("Hesap: ", "Hesap şu an ")) and lines[2].startswith(("Elimde: yüzde ", "Elimde şu an: yüzde ")) and lines[3].startswith("Bugün ne yaptım: ")
         assert lines[4].startswith("Neden: ") and lines[5].startswith("Bu ay: ") and lines[6].startswith("Durum: ")
         reasons = lines[4][len("Neden: "):]
         rest = reasons
@@ -362,7 +362,7 @@ def test_second_day_holds_and_still_reports(tmp_path):
     assert len(sim.digests()) == 2 and sim.alerts() == []
     lines = sim.digests()[1].split("\n")
     assert lines[0] == "DENEME HESABI. Gün sonu özeti (17.11.2026)" and lines[3] == "Bugün ne yaptım: İşlem yapmadım."
-    assert "Hedefe yeterince yakınım, işlem gerekmedi." in lines[4] and lines[6] == "Durum: Her şey normal."
+    assert "Ana pay hedefe yeterince yakın." in lines[4] and lines[6] == "Durum: Her şey normal."
     assert_only_known_sentences(sim)
 
 
@@ -917,7 +917,7 @@ def test_the_topic_never_reaches_a_log_or_a_heartbeat(tmp_path, caplog):
 def test_decide_now_is_read_only_and_replays_identically(tmp_path):
     sim = Sim(tmp_path)
     w = window(sim, D1)
-    sim.clock.now = w.decide_from - dt.timedelta(hours=2)
+    sim.clock.now = w.decide_from + dt.timedelta(minutes=1)                           # inside the decision window
     before_files = sorted(p.name for p in sim.settings.state_dir.rglob("*"))
     out = tmp_path / "decision.json"
     code, doc = vo.cmd_decide_now(sim.settings, sim.fb, sim.clock.now, out_path=out)

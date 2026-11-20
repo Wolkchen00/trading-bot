@@ -83,11 +83,11 @@ def test_not_found_is_not_sent_but_a_real_refusal_is_still_refused(tmp_path):
     runner = _runner_before_decision(missing)
     _die_in_submit(missing, runner)
     missing.clock.now = missing.session(D1).close + dt.timedelta(hours=3)
-    missing.runner().tick()                 # late=True: NOT_FOUND is still news and must still be sent
+    missing.runner().tick()                 # late=True: the dated summary carries the news (round R5d, E2)
 
     record = missing.record(D1)
     assert record.status == ex.FAILED and record.data["status_detail"] == "NOT_FOUND"
-    assert _not_sent("emrim Alpaca'ya ulaşmadı") in missing.alerts()
+    assert not [text for text in missing.alerts() if text.startswith("Bugün bir işlem yapmam gerekiyordu")]
     lines = missing.digests()[0].split("\n")
     assert lines[4] == "Neden: Karar verdim ama emri gönderemedim."
     assert lines[6] == "Durum: " + _not_sent("emrim Alpaca'ya ulaşmadı")
@@ -183,7 +183,7 @@ def test_dry_run_digest_says_what_the_order_would_have_done(tmp_path):
     line = sim.digests()[0].split("\n")[3]
     assert line == (
         "Bugün ne yaptım: Gerçek emir açık olsaydı %s dolarlık Nasdaq fonu alırdım."
-        % vn.fmt_money(intent["desired_usd"])
+        % vn.fmt_money(float(intent["notional"]))
     )
     assert "ek alım yaptım" not in sim.digests()[0]
 
@@ -248,7 +248,7 @@ def test_late_prior_digest_marks_current_equity_but_current_day_does_not(tmp_pat
 def test_decide_now_uses_the_same_baseline_cross_check_as_the_engine(tmp_path):
     sim = Sim(tmp_path)
     sim.ibs[D1] = 0.0
-    sim.clock.now = window(sim, D1).decide_from - dt.timedelta(hours=2)
+    sim.clock.now = window(sim, D1).decide_from + dt.timedelta(minutes=1)             # inside the decision window
     sim.rails().record_close(FRIDAY, 600.0)
     sim.fb.last_equity = Decimal("490")
 

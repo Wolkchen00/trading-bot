@@ -134,7 +134,7 @@ def test_a_dry_run_says_what_it_would_have_done(tmp_path):
     sim.run_day(D1)
     rec = sim.record(D1)
     assert rec.status == ex.DRY_RUN and sim.submits() == []
-    planned = rec.data["intents"][-1]["desired_usd"]
+    planned = float(rec.data["intents"][-1]["notional"])                              # the order that would have gone out
     lines = sim.digests()[0].split("\n")
     assert lines[0].startswith("DENEME, gerçek emir gönderilmedi. Gün sonu özeti (")
     assert lines[3] == "Bugün ne yaptım: Gerçek emir açık olsaydı %s dolarlık Nasdaq fonu alırdım." % vn.fmt_money(planned)

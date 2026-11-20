@@ -51,6 +51,11 @@ python -m v5.ops replay /tmp/karar.json                           # aynı girdid
 
 Sahip "botu durdur" derse: `pause`. "Botu devam ettir" derse: önce durumun ne olduğuna bak. Taban durduysa
 (`FLOOR_HALT`) `clear-halt` gerekir ve yeni zirve olarak O ANKİ hesap değeri verilir (yoksa ilk okumada yine durur).
+R5d'den beri `clear-halt` yazılan zirveyi hesapla karşılaştırır: hesap okunamıyorsa ya da değer, hesap değeri ile
+onun üç katı arasında değilse REDDEDER ve hiçbir şeyi değiştirmez (`--force` bu denetimi atlar).
+`decide-now` karar penceresinin (kapanıştan 10 dakika önce başlar, 4 dakika önce biter) DIŞINDA 1 döner ve `blockers`
+listesinde `OUTSIDE_DECISION_WINDOW` yazar; o gün karar verildiyse `ALREADY_DECIDED`. Karar ve emir planı
+yine belgede durur, yani pencere dışında da "şu an ne yapardı" okunabilir.
 
 ## 5. Durumlar ve anlamları
 

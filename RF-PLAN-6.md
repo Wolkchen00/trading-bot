@@ -68,6 +68,70 @@
 > (6) `decide-now` uses the engine's own breaker rule (`rails.breaker_cause`); `health.assess` no longer
 > calls an incomplete or future-dated heartbeat healthy. (7) The drill's clean-up step leaves dust alone and
 > waits for its cancels before it closes positions.
+> **Revision 13** (2026-11-19) , fix round R5d, from the reviewer's second pass, Codex's complete whole-tree
+> review and the first report of a six-reviewer sweep (`RF-ISSUES-6.md` items 29 to 31).
+> (1) Orders gate: an untrusted account reading stops any new submission of a chain under way; the daily
+> brake stops a buy at plan time, also a re-planned one; the floor chain looks at the account before each
+> step; a record is only driven by the mode that wrote it, with the order ids the engine would build for it.
+> (2) Whose close is `last_equity`: the broker's `balance_asof` names the session. When it names an older
+> session, the stored close of the previous session is the baseline; with no row the brake waits
+> (`BASELINE_PENDING`) and at the decision a missing baseline is a doubt.
+> (3) Sessions are closed one by one (`closed_sessions`): one failed reading no longer closes a missed session
+> without its summary. The engine's own reading is a closing value only up to five minutes after the settle
+> window (`LATE_CLOSE`).
+> (4) What the owner is told: FAILED is three outcomes (refused, not sent, not filled; new `ORDER_UNFILLED`);
+> a record settled late sends no message that says "today" or "tomorrow", the dated summary carries it; a
+> summary that had to call an outcome unknown is corrected once ("..., düzeltme"); a dry-run summary names its
+> reason (`OVERLAY_WOULD`) and the amount of the order it would have sent; an unknown month or total reads
+> "bilgi yok"; two reason sentences describe a state instead of an action.
+> (5) Corrupt state: a `runner.json` of the wrong shape is never replaced by defaults.
+> (6) Operator tools: `decide-now` exits 1 outside the decision window (`OUTSIDE_DECISION_WINDOW`) and after
+> the day's decision (`ALREADY_DECIDED`); `clear-halt` refuses a new peak outside the range from the account
+> value to three times that value unless `--force`; the watchdog finds its containers by the Compose service
+> label; the drill sells only what it bought.
+> Open after this revision (fix round R5e, `rf6/fix-r5e.md`): the peak must not move on one reading, and five
+> smaller items of the same reviewer; `RF-ISSUES-6.md` item 31.
+> **Revision 14** (2026-11-20) , fix round R5e, from the six-reviewer sweep (56 findings, `RF-ISSUES-6.md`
+> item 31) and the reviewer's two passes over the build (item 32).
+> (1) The peak: a closing value read by the engine itself is provisional and never moves the peak. The peak
+> moves when the broker's official close of that session (`last_equity`, named by `balance_asof`) agrees
+> with it within 2 %, or stands alone because the engine has no reading of its own; a raise that would by
+> itself put the account at the alert level is refused. A provisional value that the named official close
+> contradicts is replaced, and the owner is told once (`CLOSE_CORRECTED`).
+> (2) Two clocks: while the host clock and the broker's clock disagree, housekeeping and the session step run
+> on the EARLIER of the two, so nothing is booked before both say it has happened. No order is sent
+> (CLOCK_DOUBT), the owner is told at the cutoff and still gets the summary; the catch-up of earlier sessions
+> waits until the clocks agree. A reading is stamped when it is taken; the clock check compares the broker's
+> timestamp with the host time before and after the call.
+> (3) Gates: a chain under way measures the floor again on every tick; a lifted halt stops a safety sale that
+> has not been sent and cancels one that is working; the daily brake never turns the rule's "no trade" into
+> a sale; a doubt about the baseline is reported as a doubt and not as a fall.
+> (4) The safety sale does not depend on files it does not need: with a damaged `overlay.json`, a damaged
+> record of an earlier session or a damaged `runner.json` the floor is still measured in the decision window
+> and the sale is still sent. Corrupt state met in the decision marks the day, so the cutoff names it.
+> (5) What the owner is told: "everything sold" is only said about the fund (`FLOOR_DONE`, `FLOOR_FLAT`); a
+> sale that could not start is called that, with its cause (`FLOOR_WAITING`, `FLOOR_WAITING_BLIND`); ERROR
+> claims nothing about holdings; a day with a real order is never reported as a dry run after the flag was
+> switched off; a late summary marks the holdings as "now"; the overlay sentences no longer speak of a
+> purchase; PARTIAL and CAPPED days have their own outcome and status sentences; an alert delivered more
+> than an hour late carries its date; line 3 names a foreign asset and always adds up to 100; READINESS is
+> only said before the open.
+> (6) Alerts with a state key are sent once per key (the key carries the day or the event), alerts without a
+> key keep the four-hour cooldown, and one process never posts the same message twice.
+> (7) Books: the outcome of a filled order comes from the order (a later account reading cannot make it
+> CAPPED); the books are written before a final status; a definite refusal is not sent again after a restart.
+> (8) Tools: `v5.health --json` has `owner_unreachable` and the watchdog pushes when it is true, bounds every
+> docker call, asks a docker that does not answer only once and keeps its cooldown without `/var/tmp`;
+> `decide-now` names `ENGINE_FAULT` and shows the floor action when the floor is breached; `init-peak` checks
+> the number against the account (`--no-check`); the status tool says "Her şey normal" only at health level
+> 0; the drill's clean-up leaves the engine's own orders alone and the drill keeps away from the decision
+> window.
+> Limits accepted after this revision: `RF-ISSUES-6.md` item 26 (a) stays (once the day's record is closed
+> the floor is next looked at in the following session's decision window); money the owner moves in or out
+> reads as gain or loss; two halts completed on the same New York date share one completion message; while
+> the clocks disagree the catch-up of earlier sessions waits; a refusal that was never written down (a death
+> between the broker's answer and the record) is sent once more after the restart; a summary whose
+> "delivered" mark was lost in a death can arrive twice.
 > Builder note: Codex's quota ran out on 2026-11-16 08:49 PT in the R1 fix round. From there the builder is a
 > fresh Claude agent per rock working from the same written contracts; Claude (this session) stays the
 > reviewer with its own adversarial suites; Codex reviews the whole v5 tree when its quota returns.
@@ -562,27 +626,37 @@ Reason keys returned by `decide` and their sentences:
 - `TREND_UP`: "Nasdaq yükseliş eğiliminde."
 - `TREND_MIXED`: "Nasdaq kararsız, bu yüzden ana payı küçük tutuyorum."
 - `TREND_DOWN`: "Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor."
-- `VOL_HIGH`: "Piyasa çok oynak, bu yüzden payı azalttım." (used when `target_vol / vol < 1`)
+- `VOL_HIGH`: "Piyasa çok oynak, bu yüzden payı küçük tutuyorum." (used when `target_vol / vol < 1`;
+  Revision 13: it describes the state, it does not claim a sale)
 - `VOL_CALM`: "Piyasa sakin." (used when `target_vol / vol >= 3`)
-- `BAND_HOLD`: "Hedefe yeterince yakınım, işlem gerekmedi."
+- `BAND_HOLD`: "Ana pay hedefe yeterince yakın." (Revision 13: it no longer says that no trade was made;
+  the overlay may still trade on such a day)
 - `OVERLAY_ENTER`: "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım." (Revision 12: shown
   only on a day with a filled buy)
 - `OVERLAY_HELD` (Revision 12; replaces `OVERLAY_ENTER` in the summary when the books took the overlay without
   a buy, for example when the core's exit and the overlay's entry cancel out): "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum."
-- `OVERLAY_KEEP`: "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum."
-- `OVERLAY_EXIT`: "Dünkü ek alımı sattım." (Revision 12: shown only on a day with a filled sale)
+- `OVERLAY_WOULD` (Revision 13; a dry run on a day the rule wants the extra buy): "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım."
+- `OVERLAY_KEEP`: "Düşüş sürdü, ek payı bir gün daha tutuyorum." (Revision 14: the extra part may have
+  come from a re-assignment, so the sentence no longer speaks of a purchase)
+- `OVERLAY_EXIT`: "Dünkü düşüş için tuttuğum ek payı sattım." (Revision 12: shown only on a day with a
+  filled sale; Revision 14: reworded for the same reason)
 - `OVERLAY_DATA_MISSING`: "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım."
 - `BREAKER_REDUCE_ONLY` (added by the rails when the breaker is active): "Bugün sert düşüş olduğu için yeni alım yapmadım."
+- `DOUBT_REDUCE_ONLY` (Revision 14; added instead when the brake's cause is a doubt about the baseline, not a fall): "Hesap değerini doğrulayamadığım için bugün yeni alım yapmadım."
 
 Digest (kind `DIGEST`), seven lines, numbers with a comma as decimal mark and a dot for thousands:
 1. "Gün sonu özeti ({date})" with the date as 16.11.2026. Prefix for paper: "DENEME HESABI. " Prefix for live
-   dry-run: "DENEME, gerçek emir gönderilmedi. "
+   dry-run: "DENEME, gerçek emir gönderilmedi. " Revision 13: a summary that corrects an earlier one of the
+   same session (its order's outcome was unknown then) ends its first line with ", düzeltme".
 2. (Revision 12: "Hesap şu an {equity} dolar." and nothing else when the summary is sent late and no closing
    value of that session could be determined.) Otherwise:
    "Hesap: {equity} dolar." followed by " Bugün yüzde {p} arttı ({usd} dolar)." or
    " Bugün yüzde {p} azaldı ({usd} dolar)." or " Bugün değişmedi."; nothing follows when the day's change is
    not known (Revision 11: a late report, or no usable value for the session before).
-3. "Elimde: yüzde {product_pct} Nasdaq fonu, yüzde {cash_pct} nakit." When the owner holds shares of his own
+3. "Elimde: yüzde {product_pct} Nasdaq fonu, yüzde {cash_pct} nakit." (Revision 13: "Elimde şu an: ..."
+   whenever line 2 is "Hesap şu an ..."; Revision 14: also whenever the summary is sent late. Revision 14:
+   a foreign position of at least 1 % is named before the cash, "..., yüzde {other_pct} benim almadığım
+   varlık, yüzde {cash_pct} nakit."; the numbers of the line always add up to 100.) When the owner holds shares of his own
    worth at least 1% of the account: "Elimde: yüzde {product_pct} Nasdaq fonu, yüzde {owner_pct} senin
    aldığın hisse ({symbols}), yüzde {cash_pct} nakit." (all three as shares of the whole account)
 4. "Bugün ne yaptım: " followed by "İşlem yapmadım." | "{usd} dolarlık Nasdaq fonu aldım." |
@@ -593,11 +667,20 @@ Digest (kind `DIGEST`), seven lines, numbers with a comma as decimal mark and a 
    "Gerçek emir açık olsaydı elimdeki fonun tamamını satardım."
 5. "Neden: " followed by the reason sentences, or "Bugün karar veremedim.". When the decision was not carried
    out the reasons are replaced (Revision 11) by: "Karar verdim ama emri gönderemedim." (NOT_SUBMITTED) |
-   "Karar verdim ama Alpaca emrimi kabul etmedi." (FAILED) | "Emrimin sonucunu henüz öğrenemedim." (still
-   open) | "Hesap güvenlik sınırının altına düştü." (a halt day)
-6. "Bu ay: yüzde {p} artıda." | "Bu ay: yüzde {p} ekside." | "Bu ay: değişim yok." followed by
-   " Başlangıçtan beri: yüzde {p} artıda." (the same three forms)
+   "Karar verdim ama Alpaca emrimi kabul etmedi." (FAILED, refused by the broker) |
+   "Karar verdim ama emrim gerçekleşmedi." (Revision 13: FAILED, accepted and never filled) |
+   "Emrimin sonucunu henüz öğrenemedim." (still
+   open) | "Hesap güvenlik sınırının altına düştü." (a halt day) |
+   (Revision 14) "Karar verdim ama emrimin yalnız bir kısmı gerçekleşti." (PARTIAL) |
+   "Karar verdim ama alım için boş nakit yoktu." (CAPPED and no order could be sent)
+6. "Bu ay: yüzde {p} artıda." | "Bu ay: yüzde {p} ekside." | "Bu ay: değişim yok." |
+   (Revision 13, when the figure cannot be computed) "Bu ay: bilgi yok." followed by
+   " Başlangıçtan beri: yüzde {p} artıda." (the same four forms)
 7. "Durum: Her şey normal." or "Durum: " followed by the sentence of the highest active state below.
+   Revision 14, two status sentences that are not alerts: "Hedefin tamamı için boş nakit yetmedi;
+   alabildiğim kadarını aldım." (CAPPED, every order of the day filled completely) and "Hedefin tamamı için
+   boş nakit yok." (CAPPED, no order could be sent). `ORDER_PARTIAL` is only used when an order of the day
+   was sent and did not fill completely.
 
 Alerts and reminders (Revision 10: every alert or reminder from a paper process starts with
 "DENEME HESABI. " and from a live process in dry-run with "DENEME, gerçek emir gönderilmedi. ", like the
@@ -605,7 +688,15 @@ digest; in paper mode `NTFY_TOPIC_PAPER`, when set, replaces `NTFY_TOPIC`, so th
 write to the owner's phone):
 - `DRAWDOWN_ALERT`: "Hesap en yüksek değerinden yüzde {pct} aşağıda, şu an {equity} dolar. Bu risk seviyesinde geçmişte görülen en derin düşüşe geldik. Kurala göre çalışmaya devam ediyorum. Durdurmak istersen Claude'a 'botu durdur' yaz."
 - `BREAKER`: "Hesap bugün yüzde {pct} düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum."
-- `FLOOR_DONE`: "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Her şeyi sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."
+- `FLOOR_DONE` (Revision 14: it speaks of the fund only; the owner's own share is not touched): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."
+- `FLOOR_FLAT` (Revision 14; the halt found no fund to sell): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Elimde Nasdaq fonu yoktu, bu yüzden satış yapmadan durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."
+- `FLOOR_WAITING` (Revision 14; the sale is owed but no order could be sent yet; `FLOOR_PENDING` and `RAIL_LIQUIDATING` are only used once an order of the sale was sent): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Güvenlik satışını henüz başlatamadım, çünkü {cause}. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum."
+  `{cause}`: "saat bilgisi tutarsız göründü" | "bugünün borsa saatlerini öğrenemedim" | "borsa şu an kapalı" |
+  "kapanışa çok az kaldı" | "önceki emrimin akıbeti hala belli değil" |
+  "hesapta benim vermediğim bir Nasdaq fonu emri var" | "Alpaca'ya bağlanamadım" |
+  "hesap değerini doğrulayamadım" | "kayıt dosyam bozuk" | (a dry run) "gerçek emir gönderme kapalı"
+- `FLOOR_WAITING_BLIND` (Revision 14; the same when the holding could not be read): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Güvenlik satışını henüz başlatamadım, çünkü {cause}. Denemeye devam ediyorum."
+- `CLOSE_CORRECTED` (Revision 14; the broker's official close contradicts the value of yesterday's summary): "Dünkü özetteki hesap değeri yanlış okunmuş. Doğru kapanış değeri {equity} dolar."
 - `FLOOR_PENDING`: "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Satışa başladım ama henüz bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum."
 - `RAIL_LIQUIDATING`: "Güvenlik satışı hala bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler."
 - `HOLD_NOT_READY`: "Bugün karar veremedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden denerim."
@@ -618,16 +709,21 @@ write to the owner's phone):
 - `NOT_SENT` (Revision 11; a trade was decided but its order was never sent): "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden karar veririm."
 - `MISSED`: "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim."
 - `ORDER_FAILED`: "Alpaca emrimi kabul etmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Claude'a 'trading botuna bak' yazarsan sebebini inceler."
+- `ORDER_UNFILLED` (Revision 13; the order was accepted, never filled and cancelled): "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın yeniden karar veririm."
 - `ORDER_PARTIAL`: "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın duruma yeniden bakarım."
 - `UNRESOLVED`: "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler."
 - `FOREIGN_ASSET`: "Hesapta benim almadığım bir varlık ya da emir var ({symbol}). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver."
 - `DATA_DOUBT`: "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye satış yapmadım, izlemeye devam ediyorum."
 - `PAUSED`: "Bot duraklatılmış durumda. Elimdekiler duruyor, yeni işlem yapmıyorum."
 - `NOT_STARTED`: "Bot başlayamadı. Claude'a 'trading botuna bak' yaz."
-- `READINESS`: "Bugün borsa açılmadan önce bir sorun gördüm: {cause}. Düzelmezse bugün işlem yapmayacağım."
+- `READINESS` (Revision 14: only ever sent before the open): "Bugün borsa açılmadan önce bir sorun gördüm: {cause}. Düzelmezse bugün işlem yapmayacağım."
   (`{cause}` as in `HOLD_NOT_READY`, plus "bildirim kanalı tanımlı değil", "başlangıç değeri kayıtlı değil",
   "Alpaca hesabı işleme kapalı görünüyor" and, for an unknown cause, "beklenmeyen bir sorun çıktı")
-- `ERROR`: "Bot beklenmeyen bir sorunla karşılaştı. Elimdekilere dokunmadım. Claude'a 'trading botuna bak' yaz."
+- `ERROR` (Revision 14: nothing is claimed about the holdings; once per New York day while a fault lasts): "Bot beklenmeyen bir sorunla karşılaştı. Claude'a 'trading botuna bak' yaz."
+- Late delivery (Revision 14): an alert, not a summary, that is first delivered more than an hour after it was written gets "Gecikmiş mesaj ({date}): " in front of its text, after the account label, with the New York date it was written.
 - Drill message (sent by hand in R6): "Deneme bildirimi: bu mesajı görüyorsan bildirimler çalışıyor."
 - `WATCHDOG` (sent by the external script): "Trading botu çalışmıyor görünüyor. Claude'a 'trading botuna bak' yaz."
   For the practice service the script puts "DENEME HESABI. " in front (Revision 11).
+  Revision 14, a second sentence of the same script, sent when the engine runs but cannot reach the owner
+  (`owner_unreachable` in the health output): "Trading botu sana mesaj gönderemiyor. Claude'a 'trading
+  botuna bak' yaz."

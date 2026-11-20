@@ -23,7 +23,7 @@ NOW = datetime(2026, 11, 16, 21, tzinfo=timezone.utc)
 EXPECTED_TEMPLATES = {
     "DRAWDOWN_ALERT": "Hesap en yüksek değerinden yüzde 37,1 aşağıda, şu an 512,30 dolar. Bu risk seviyesinde geçmişte görülen en derin düşüşe geldik. Kurala göre çalışmaya devam ediyorum. Durdurmak istersen Claude'a 'botu durdur' yaz.",
     "BREAKER": "Hesap bugün yüzde 15,0 düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum.",
-    "FLOOR_DONE": "Hesap en yüksek değerinden yüzde 60,0 düştü, şu an 196,00 dolar. Her şeyi sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz.",
+    "FLOOR_DONE": "Hesap en yüksek değerinden yüzde 60,0 düştü, şu an 196,00 dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz.",
     "FLOOR_PENDING": "Hesap en yüksek değerinden yüzde 60,0 düştü, şu an 196,00 dolar. Satışa başladım ama henüz bitmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Denemeye devam ediyorum.",
     "RAIL_LIQUIDATING": "Güvenlik satışı hala bitmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
     "HOLD_NOT_READY": "Bugün karar veremedim, çünkü fiyat bilgisine ulaşamadım. Elimdekilere dokunmadım. Yarın yeniden denerim.",
@@ -37,7 +37,7 @@ EXPECTED_TEMPLATES = {
     "NOT_STARTED": "Bot başlayamadı. Claude'a 'trading botuna bak' yaz.",
     "WATCHDOG": "Trading botu çalışmıyor görünüyor. Claude'a 'trading botuna bak' yaz.",
     "READINESS": "Bugün borsa açılmadan önce bir sorun gördüm: fiyat bilgisine ulaşamadım. Düzelmezse bugün işlem yapmayacağım.",
-    "ERROR": "Bot beklenmeyen bir sorunla karşılaştı. Elimdekilere dokunmadım. Claude'a 'trading botuna bak' yaz.",
+    "ERROR": "Bot beklenmeyen bir sorunla karşılaştı. Claude'a 'trading botuna bak' yaz.",
     "TEST": "Deneme bildirimi: bu mesajı görüyorsan bildirimler çalışıyor.",
 }
 

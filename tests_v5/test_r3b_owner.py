@@ -214,7 +214,8 @@ def test_digest_names_the_owners_share():
     none = vn.build_digest({**BASE, "owner_weight": None, "owner_label": None}).split("\n")[2]
     assert none == "Elimde: yüzde 28 Nasdaq fonu, yüzde 72 nakit."
     full = vn.build_digest({**BASE, "product_weight": 0.795, "owner_weight": 0.205, "owner_label": "ANT, XYZ"}).split("\n")[2]
-    assert full == "Elimde: yüzde 80 Nasdaq fonu, yüzde 21 senin aldığın hisse (ANT, XYZ), yüzde 0 nakit."
+    # 79.5 and 20.5 round to 80 and 21; since R5e (S1) the largest part gives way, so the line adds up to 100
+    assert full == "Elimde: yüzde 79 Nasdaq fonu, yüzde 21 senin aldığın hisse (ANT, XYZ), yüzde 0 nakit."
     with pytest.raises(KeyError):
         vn.build_digest({**BASE, "owner_weight": 0.2})
     assert len(vn.build_digest({**BASE, "owner_weight": 0.2, "owner_label": "ANT"}).split("\n")) == 7

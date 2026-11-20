@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import load_settings
+from .notify import Outbox
 from .state import StateCorrupt, atomic_write_json, read_json
 
 
@@ -111,12 +112,18 @@ def main(argv=None):
     heartbeat = read_heartbeat(settings.state_dir)
     now = datetime.now(timezone.utc)
     level, lines = assess(heartbeat, now)
+    owner_unreachable = bool(
+        not isinstance(heartbeat, dict)
+        or heartbeat.get("ntfy_configured") is False
+        or Outbox(settings.state_dir).owner_unreachable(now)
+    )
     if args.as_json:
         print(
             json.dumps(
                 {
                     "level": level,
                     "heartbeat_age_seconds": _age(heartbeat, now),
+                    "owner_unreachable": owner_unreachable,
                     "lines": lines,
                     "heartbeat": heartbeat,
                 },

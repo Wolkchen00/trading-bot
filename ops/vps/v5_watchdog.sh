@@ -8,6 +8,7 @@
 
 TOPIC_FILE=/root/.v5_watchdog_topic
 MESSAGE="Trading botu çalışmıyor görünüyor. Claude'a 'trading botuna bak' yaz."
+OWNER_MESSAGE="Trading botu sana mesaj gönderemiyor. Claude'a 'trading botuna bak' yaz."
 COOLDOWN=14400
 LOG=/var/log/v5_watchdog.log
 
@@ -26,27 +27,55 @@ if command -v timeout >/dev/null 2>&1; then
   LIMIT="timeout 60"
 fi
 
+DOCKER_DEAD=""
 for PREFIX in trading-live- trading-paper-livecfg-; do
   SERVICE=${PREFIX%-}
   STAMP=/var/tmp/v5_watchdog_${SERVICE}
+  FALLBACK_STAMP=/dev/shm/v5_watchdog_${SERVICE}
   PROBLEM=""
-  NAME=$(docker ps --filter "label=com.docker.compose.service=${SERVICE}" --format '{{.Names}}' 2>/dev/null | head -n 1)
-  if [ -z "$NAME" ]; then
-    NAME=$(docker ps --format '{{.Names}}' | grep "^${PREFIX}" | head -n 1)
-  fi
-  if [ -z "$NAME" ]; then
-    PROBLEM="no running container"
+  NAME=""
+  if [ -n "$DOCKER_DEAD" ]; then
+    PROBLEM="docker does not answer"    # it was asked once in this run already: do not wait for it again
   else
-    AGE=$($LIMIT docker exec "$NAME" python -m v5.health --json 2>/dev/null \
-      | sed -n 's/.*"heartbeat_age_seconds": *\([0-9][0-9]*\).*/\1/p' | head -n 1)
+    LIST=$($LIMIT docker ps --filter "label=com.docker.compose.service=${SERVICE}" --format '{{.Names}}' 2>/dev/null)
+    LIST_OK=$?
+    if [ "$LIST_OK" -ne 0 ]; then
+      PROBLEM="docker does not answer"
+      DOCKER_DEAD=yes
+    else
+      NAME=$(printf '%s\n' "$LIST" | head -n 1)
+    fi
+    if [ -z "$PROBLEM" ] && [ -z "$NAME" ]; then
+      LIST=$($LIMIT docker ps --format '{{.Names}}' 2>/dev/null)
+      LIST_OK=$?
+      if [ "$LIST_OK" -ne 0 ]; then
+        PROBLEM="docker does not answer"
+        DOCKER_DEAD=yes
+      else
+        NAME=$(printf '%s\n' "$LIST" | grep "^${PREFIX}" | head -n 1)
+      fi
+    fi
+  fi
+  OWNER_BAD=false
+  if [ -z "$PROBLEM" ] && [ -z "$NAME" ]; then
+    PROBLEM="no running container"
+  elif [ -z "$PROBLEM" ]; then
+    HEALTH=$($LIMIT docker exec "$NAME" python -m v5.health --json 2>/dev/null)
+    AGE=$(printf '%s\n' "$HEALTH" | sed -n 's/.*"heartbeat_age_seconds": *\([0-9][0-9]*\).*/\1/p' | head -n 1)
     if [ -z "$AGE" ]; then
       PROBLEM="no heartbeat"
     elif [ "$AGE" -gt 300 ]; then
       PROBLEM="heartbeat is ${AGE} seconds old"
+    elif printf '%s\n' "$HEALTH" | grep '"owner_unreachable": *true' >/dev/null 2>&1; then
+      PROBLEM="owner is unreachable"
+      OWNER_BAD=true
+      STAMP=${STAMP}_owner
+      FALLBACK_STAMP=${FALLBACK_STAMP}_owner
     fi
   fi
   if [ -z "$PROBLEM" ]; then
-    rm -f "$STAMP"                      # healthy again: the next outage is a new one and is announced
+    rm -f "/var/tmp/v5_watchdog_${SERVICE}" "/dev/shm/v5_watchdog_${SERVICE}"
+    rm -f "/var/tmp/v5_watchdog_${SERVICE}_owner" "/dev/shm/v5_watchdog_${SERVICE}_owner"
     continue
   fi
   if [ -z "$TOPIC" ]; then
@@ -57,18 +86,26 @@ for PREFIX in trading-live- trading-paper-livecfg-; do
   LAST=0
   if [ -r "$STAMP" ]; then
     LAST=$(cat "$STAMP" 2>/dev/null)
+  elif [ -r "$FALLBACK_STAMP" ]; then
+    LAST=$(cat "$FALLBACK_STAMP" 2>/dev/null)
   fi
   case "$LAST" in
     ''|*[!0-9]*) LAST=0 ;;
   esac
   if [ $((NOW - LAST)) -ge "$COOLDOWN" ]; then
     TEXT="$MESSAGE"
+    if [ "$OWNER_BAD" = true ]; then
+      TEXT="$OWNER_MESSAGE"
+    fi
     if [ "$SERVICE" = "trading-paper-livecfg" ]; then
-      TEXT="DENEME HESABI. ${MESSAGE}"  # the practice account never reads like news about real money
+      TEXT="DENEME HESABI. ${TEXT}"  # the practice account never reads like news about real money
     fi
     if curl -fsS -m 20 -H "Title: Trading bot" -H "Priority: 5" -H "Tags: warning" \
         -d "$TEXT" "https://ntfy.sh/${TOPIC}" >/dev/null 2>&1; then
-      printf '%s\n' "$NOW" > "$STAMP"
+      if ! printf '%s\n' "$NOW" > "$STAMP" 2>/dev/null; then
+        printf '%s\n' "$NOW" > "$FALLBACK_STAMP"
+        note "${SERVICE}: cooldown stamp moved to /dev/shm"
+      fi
       RESULT="owner told"
     else
       RESULT="push failed"

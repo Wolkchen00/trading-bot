@@ -19,7 +19,7 @@ from .clock import ET, SessionCalendar, parse_calendar, window_for
 from .config import load_settings
 from .data import DecisionInputs, InputsNotReady, build_inputs
 from .executor import Executor, SessionRecord, SnapshotInvalid, plan_order, take_snapshot
-from .health import assess, read_heartbeat
+from .health import _age, assess, read_heartbeat
 from .notify import Notifier, Outbox, default_post
 from .packages import get_package
 from .rails import NO_ROW, Rails, breaker_cause, read_equity, reduce_only
@@ -65,8 +65,15 @@ def cmd_init_peak(
     force=False,
     now_fn=_utcnow,
     sleep_fn=time.sleep,
+    reading=None,
+    no_check=True,
 ):
     rails = Rails(settings, state_dir, now_fn, sleep_fn)
+    if not no_check:
+        refusal = clear_halt_refusal(reading, value)
+        if refusal is not None:
+            print(f"init-peak refused: {refusal}. Nothing was changed. Use --no-check only if you are sure.")
+            return 1
     arguments = {"value": value, "source": source, "force": bool(force)}
     return _run_change(
         state_dir,
@@ -74,7 +81,8 @@ def cmd_init_peak(
         "init-peak",
         arguments,
         lambda: rails.init_peak(value, source, force=force),
-        f"Peak initialised at {float(value)} from {source}.",
+        f"Peak initialised at {float(value)} from {source}; "
+        f"floor level: {float(value) * (1.0 - settings.rails.floor_dd):.2f}.",
     )
 
 
@@ -121,7 +129,8 @@ def cmd_clear_halt(
         "clear-halt",
         arguments,
         lambda: rails.clear_halt(by, note, new_peak),
-        f"Halt cleared by {by}; peak set to {float(new_peak)}.",
+        f"Halt cleared by {by}; peak set to {float(new_peak)}; "
+        f"floor level: {float(new_peak) * (1.0 - settings.rails.floor_dd):.2f}.",
     )
 
 
@@ -197,6 +206,13 @@ def _blockers(settings, broker, now, calendar, session, snapshot, executor, read
     """Everything that would stop the running engine from placing a new strategy order at this moment, in the
     engine's own order, and whether today's breaker leaves it sells only. Read-only."""
     found, breaker = [], False
+    heartbeat = read_heartbeat(settings.state_dir)
+    age = _age(heartbeat, now)
+    heartbeat_states = heartbeat.get("states", []) if isinstance(heartbeat, dict) else []
+    if heartbeat is None or age is None or age > 300 or any(
+        code in heartbeat_states for code in ("STATE_CORRUPT", "TICK_ERROR")
+    ):
+        found.append("ENGINE_FAULT")
     window = window_for(session)
     if not window.decide_from <= now <= window.decide_until:
         found.append("OUTSIDE_DECISION_WINDOW")
@@ -289,7 +305,15 @@ def cmd_decide_now(settings, broker, now, out_path=None):
             inputs = build_inputs(broker, calendar, session, now, params)
             if isinstance(inputs, InputsNotReady):
                 document["inputs"] = {"code": inputs.code, "detail": inputs.detail}
-                document["decision"], document["plan"] = None, None
+                document["decision"] = None
+                if any(code in blockers for code in ("FLOOR_HALT", "RAIL_CONFIRMING")):
+                    floor = plan_order(snapshot, 0.0, params)
+                    document["plan"] = {
+                        "kind": floor.kind, "side": floor.side, "qty": floor.qty,
+                        "notional": floor.notional, "capped": floor.capped,
+                    }
+                else:
+                    document["plan"] = None
             else:
                 decision = decide(
                     inputs.closes, inputs.px, inputs.session_high, inputs.session_low,
@@ -299,7 +323,14 @@ def cmd_decide_now(settings, broker, now, out_path=None):
                     decision = reduce_only(decision)
                 document["inputs"] = inputs.to_bundle()
                 document["decision"] = _decision_dict(decision)
-                document["plan"] = _plan_dict(snapshot, decision, params)
+                if any(code in blockers for code in ("FLOOR_HALT", "RAIL_CONFIRMING")):
+                    floor = plan_order(snapshot, 0.0, params)
+                    document["plan"] = {
+                        "kind": floor.kind, "side": floor.side, "qty": floor.qty,
+                        "notional": floor.notional, "capped": floor.capped,
+                    }
+                else:
+                    document["plan"] = _plan_dict(snapshot, decision, params)
                 if decision.status == READY and not blockers:
                     code = 0
     except (BrokerError, SnapshotInvalid, StateCorrupt, ValueError) as exc:
@@ -381,6 +412,7 @@ def _add_init_peak(parser):
     parser.add_argument("value", type=float)
     parser.add_argument("--source", required=True)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--no-check", action="store_true", help="skip the check against the account value")
 
 
 def _add_actor(parser):
@@ -402,9 +434,15 @@ def _run_notify_test(namespace, settings):
     return cmd_notify_test(settings)
 
 
-def _run_init_peak(namespace, settings):
+def _run_init_peak(namespace, settings, broker=None):
+    if broker is None:
+        from .broker import AlpacaBroker
+
+        broker = AlpacaBroker(settings)
+    reading = None if namespace.no_check else read_equity(broker, _utcnow())
     return cmd_init_peak(
-        settings.state_dir, settings, namespace.value, namespace.source, namespace.force
+        settings.state_dir, settings, namespace.value, namespace.source, namespace.force,
+        reading=reading, no_check=namespace.no_check,
     )
 
 

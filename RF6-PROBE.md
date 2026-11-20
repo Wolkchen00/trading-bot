@@ -82,3 +82,20 @@ the row it takes from the broker for a previous session it did not record itself
 account's `equity` moved from 61757.20 (19:15 ET) to 61773.20 (20:16 ET) with no trade: extended-hours prices
 do move it, which is why a reading taken later than 35 minutes after the close is never stored as a closing
 value. Not measured yet: the moment of the turnover itself (to be read before and after the next open).
+
+## Measured on 2026-11-20 at 09:13 ET, before the open (both accounts, read-only)
+
+- Practice account: `last_equity` 61729.43 and `balance_asof` 2026-11-19; the portfolio history's value for
+  2026-11-19 is 61729.43. So between 20:16 ET of the 19th (when `last_equity` was still the close of the
+  18th) and 09:13 ET of the 20th the field turned over to the close of the 19th, and `balance_asof` names
+  that session. `equity` at the same moment was 61851.67: pre-market prices move it.
+- Real account: `equity` 490.06, `last_equity` 490.06, `balance_asof` 2026-11-19, cash 490.06; buying power
+  is lower than cash by exactly the amount the owner's resting buy order reserves.
+- What follows for the engine: during a session and before its open, `last_equity` is the close of the
+  session before it, and the broker says so itself through `balance_asof`. Since fix round R5d the baseline
+  rules read that date instead of inferring it from the time of day, so the exact minute of the overnight
+  turnover no longer matters to the code.
+- After the open (09:38 ET of the 20th): `last_equity` is unchanged on both accounts (61729.43 and 490.06,
+  `balance_asof` 2026-11-19) while `equity` moves with the market. Both engines had by then taken their row
+  for 2026-11-19 from it (`equity_history`: 61729.43 on the practice account, 490.06 on the real one); the
+  peaks did not move (both closes are below them) and no brake entry was written.

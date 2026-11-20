@@ -1,7 +1,7 @@
 # RF6-DEVIR.md , v5 "Yenileme" devir notu
 
-> İlk yazım: 16 Kasım 2026 09:45 PT. Son güncelleme: 19 Kasım 2026 akşamı (bağımsız gözden geçirme sonrası).
-> Okuma sırası: önce bu belge, sonra `RF-PLAN-6.md` (Revizyon 11), gerekirse `RF6-VTO.md`, `RF6-PROBE.md`.
+> İlk yazım: 16 Kasım 2026 09:45 PT. Son güncelleme: 19 Kasım 2026 gece 23:30 PT (R5d ve üçüncü kurulum sonrası).
+> Okuma sırası: önce bu belge, sonra `RF-PLAN-6.md` (Revizyon 13), gerekirse `RF6-VTO.md`, `RF6-PROBE.md`.
 > Bu belge emir listesi değildir. Niyeti ve kanıtı aktarır. Daha iyi bir yol görürsen onu seç,
 > yalnız DEĞİŞMEZLER bölümüne dokunma.
 
@@ -78,10 +78,22 @@ tipik yıl yaklaşık 60-75 dolar artı, kötü yılda derin düşüş olağand�
 - Codex'in yarım kalan incelemesinden çıkan bulgular (R5c) Codex'e yazdırıldı, Claude denetledi: commit
   `536ddcf`, plan Revizyon 12, 795 test (Windows ve sunucuda imaj içi).
 
+- 19 Kas gece R5d: denetçinin ikinci turu (9 bulgu) + Codex'in tam denetimi (10 bulgu, 3 plan sorunu)
+  kapatıldı. A-F gruplarını Codex yazdı (kanıt koşusunda kotası bitti), G1-G6'yı ve eski testlerin
+  güncellemesini Claude yaptı. Commit `e71decf`, `main` `2bf6d0e`, plan Revizyon 13, 855 test (sunucuda imaj
+  içi). Üçüncü kurulum 23:10 PT: iki konteyner de kayıtlarını koruyarak yeni sürümle çalışıyor.
+
 ### Borç (yapılmadı ya da doğrulanmadı)
 
-- Codex'in tüm v5 ağacını denetimi: ilk koşu Codex'in kendi içerik süzgecine takıldı (yarım bulguları R5c'de
-  kapandı). 19 Kas 20:56 PT'de yeniden başlatıldı; bulguları canlı bayraktan ÖNCE işlenmeli.
+- ALTI DENETÇİLİ TARAMA (R5c ağacı üzerinde, her biri kendi betikleriyle): ilk rapor (raylar ve zaman) 7 bulgu
+  verdi; R5d sonrası kodda yeniden koşuldu: 1'i kapanmış, 6'sı AÇIK. En önemlisi: kapanıştan sonraki TEK
+  ölçüm zirveyi kalıcı yükseltiyor, ertesi gün taban doğru ölçümlerle satış başlatıyor (`RF-ISSUES-6.md`
+  madde 31). Düzeltme tarifi hazır: `rf6/fix-r5e.md` (H grubu). Öteki beş rapor geldikçe aynı dosyaya
+  eklenecek. Betikler ve çıktılar lab `wf_review_tree\wf_review\` altında; güncel koda karşı koşmak için lab
+  `wf_current\` (v5, tests_v5, tools, ops kopyası + betikler).
+- R5e'yi Codex yazar (kotası 20 Kas 02:46 PT'de döner), Claude denetler; sonra dördüncü kurulum.
+- Bildirim kanalının adı gerçek paradan ÖNCE yenilenecek; sahip önce telefonunda yeni kanala abone olmalı
+  (ayrıntı Claude belleğinde, bu depoya yazılmaz).
 - 20 Kas açılışında: ANT emrine bak, `last_equity` ölçümü, deneme hesabı temizliği + tatbikat, `decide-now` ve
   çapraz `replay`; 12:50 PT'de ilk deneme kararını ve iki özeti izle (`RF6-DEVAM.md` sonundaki liste).
 - Codex denetiminin görev yazısı hazır: lab `rf6\review-codex-tree.md`. Ayrı bir çalışma kopyasında
@@ -118,11 +130,12 @@ tatbikat -> ilk paper kararını izle -> Codex tüm ağaç denetimi -> sahibe so
 
 ## SIRADAKİ SOMUT ADIM
 
-1. `git -C trading status` ve `git log --oneline -8` ile durumu doğrula. Kanıt komutunu koş (712+ geçmeli).
+1. `git -C trading status` ve `git log --oneline -8` ile durumu doğrula. Kanıt komutunu koş (855 geçmeli).
 2. Sahibin ANT emrine bak: doldu mu, fiyat nerede (`C:\Users\ihsan\trading_lab_v5\scripts\ant_emir.py
    <depo> status-live`). Kârdaysa zarar kes seviyesini yukarı çekmeyi öner.
-3. `RF-ISSUES-6.md` sonundaki açık bulguları kapat, sonra `RF6-CALISMA-KILAVUZU.md` bölüm 7'deki deploy sırası.
-4. Canlı bayraktan önce: Codex denetimi + sahibe sor.
+3. `RF-ISSUES-6.md` madde 31'deki açık bulguları kapat (`rf6/fix-r5e.md`), sonra
+   `RF6-CALISMA-KILAVUZU.md` bölüm 7'deki deploy sırası.
+4. Canlı bayraktan önce: R5e kurulmuş olmalı, bildirim kanalı yenilenmiş olmalı, sahibe SORULMALI.
 
 ## DOSYA HARİTASI
 

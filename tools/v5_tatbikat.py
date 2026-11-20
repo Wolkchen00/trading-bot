@@ -19,7 +19,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from v5.broker import AlpacaBroker, BrokerRejected, is_terminal  # noqa: E402
-from v5.clock import Window  # noqa: E402
+from v5.clock import ET, Window, parse_calendar, window_for  # noqa: E402
 from v5.config import load_settings  # noqa: E402
 from v5.executor import CAPPED, DONE, Executor, SessionRecord, client_order_id, take_snapshot  # noqa: E402
 from v5.notify import Notifier, Outbox, default_post  # noqa: E402
@@ -27,6 +27,8 @@ from v5.packages import get_package  # noqa: E402
 
 
 STEPS = ("inventory", "flatten_foreign", "round_trip", "duplicate_id", "restart", "notify")
+ORDER_STEPS = ("flatten_foreign", "round_trip", "duplicate_id", "restart")
+TOO_CLOSE = "too close to the engine's decision window; run the drill earlier in the session"
 DRILL_WEIGHT = 0.05
 
 
@@ -58,6 +60,21 @@ class _Drill:
         self._known_client_id = None
 
     # ------------------------------------------------------------------ helpers
+    def too_close(self):
+        """The engine decides near the close on this same account. A drill order that is out at that moment
+        would be mixed up with the engine's own (the drill's exit sells the whole fund position)."""
+        now = self.now_fn()
+        today = now.astimezone(ET).date()
+        try:
+            sessions = [s for s in parse_calendar(self.broker.get_calendar(today, today)) if s.date == today]
+        except Exception:
+            return None                  # the step's own broker calls will say what is wrong
+        if not sessions:
+            return None
+        if window_for(sessions[0]).decide_from - timedelta(minutes=15) <= now < sessions[0].close:
+            return TOO_CLOSE
+        return None
+
     def _executor(self, broker=None):
         return Executor(broker or self.broker, self.settings, self.folder, self.params, self.now_fn, self.sleep_fn)
 
@@ -150,10 +167,22 @@ class _Drill:
         if not self.confirm:
             return False, "skipped: this step sells positions, run it again with --yes"
         stamp = int(self.now_fn().timestamp())
-        cancelled = sold = 0
+        cancelled = sold = skipped_engine = 0
         owners = {s.upper() for s in self.owner_symbols}
+
+        def engine_order(order):
+            client = str(order.client_order_id or "")
+            parts = client.split("-")
+            return (
+                len(parts) >= 4 and parts[0:2] == ["v5", "paper"]
+                and len(parts[2]) == 8 and parts[2].isdigit() and parts[2] >= "20100101"
+            )
+
         for order in self.broker.get_open_orders():
             if order.symbol.upper() in owners:
+                continue
+            if engine_order(order):
+                skipped_engine += 1
                 continue
             self.broker.cancel_order(order.id)
             cancelled += 1
@@ -161,7 +190,7 @@ class _Drill:
         for attempt in range(30):
             open_symbols = sorted({
                 order.symbol for order in self.broker.get_open_orders()
-                if order.symbol.upper() not in owners
+                if order.symbol.upper() not in owners and not engine_order(order)
             })
             if not open_symbols:
                 break
@@ -196,7 +225,10 @@ class _Drill:
             if not left:
                 break
             self.sleep_fn(1)
-        return not left, f"cancelled {cancelled} orders, closed {sold} positions, still held: {', '.join(left) or 'none'}"
+        return not left, (
+            f"cancelled {cancelled} orders, skipped {skipped_engine} engine orders, "
+            f"closed {sold} positions, still held: {', '.join(left) or 'none'}"
+        )
 
     def step_round_trip(self):
         snapshot = self._snapshot()
@@ -298,6 +330,11 @@ def run_steps(settings, broker, steps, now_fn, sleep_fn, post_fn, confirm=False)
     drill = _Drill(settings, broker, now_fn, sleep_fn, post_fn, confirm)
     results = {}
     for step in steps:
+        if step in ORDER_STEPS:
+            problem = drill.too_close()
+            if problem is not None:
+                results[step] = (False, problem)
+                continue
         try:
             results[step] = getattr(drill, "step_" + step)()
         except _SimulatedDeath:

@@ -31,7 +31,7 @@ FRIDAY = dt.date(2026, 11, 13)
 SECONDS = dt.timedelta(seconds=1)
 MINUTES = dt.timedelta(minutes=1)
 PENDING = "Satışa başladım ama henüz bitmedi."
-SOLD_ALL = "Her şeyi sattım ve durdum."
+SOLD_ALL = "Elimdeki Nasdaq fonunun tamamını sattım ve durdum."
 
 
 class Death(BaseException):
@@ -232,7 +232,7 @@ def test_a_safety_sale_under_way_is_gated_again_too(tmp_path, gate):
     sim.run_day(D1, hook=hook)
     assert sim.submits() == [] and sim.fb.positions[PRODUCT] == Decimal("5")
     assert sim.record(D1, "flr").status == ex.NOT_SUBMITTED
-    pending = [t for t in sim.alerts() if PENDING in t]
+    pending = [t for t in sim.alerts() if "Güvenlik satışını henüz başlatamadım" in t]
     if gate == "cleared":
         assert pending == [] and sim.rails().floor_state() == "OK"                    # no "still selling" after the go
     else:
@@ -451,9 +451,9 @@ def test_a_dry_run_says_when_the_safety_limit_is_broken(tmp_path):
     assert sim.dry is True
     sim.run_day(D1)
     assert sim.submits() == [] and sim.fb.positions[PRODUCT] == Decimal("5")
-    pending = [t for t in sim.alerts() if PENDING in t]                               # every alert carries the dry label
-    assert len(pending) == 1 and pending[0].startswith("Hesap en yüksek değerinden yüzde 61,5 düştü, şu an 500,00 dolar.")
-    assert sim.digests()[0].split("\n")[6].startswith("Durum: Güvenlik satışı hala bitmedi.")
+    pending = [t for t in sim.alerts() if "Güvenlik satışını henüz başlatamadım" in t]
+    assert len(pending) == 1 and "gerçek emir gönderme kapalı" in pending[0]
+    assert sim.digests()[0].split("\n")[6].startswith("Durum: Hesap en yüksek değerinden")
 
 
 def test_a_pending_safety_sale_with_the_broker_down_is_not_silent(tmp_path):
@@ -473,7 +473,7 @@ def test_a_pending_safety_sale_with_the_broker_down_is_not_silent(tmp_path):
     sim.run_day(D2, runner, hook=outage)
     assert sim.submits() == [] and sim.fb.positions[PRODUCT] == Decimal("5")
     assert hold_text("Alpaca'ya bağlanamadım") in sim.alerts()[before:]               # the owner is told why
-    assert sim.digests()[-1].split("\n")[6].startswith("Durum: Güvenlik satışı hala bitmedi.")
+    assert sim.digests()[-1].split("\n")[6].startswith("Durum: Hesap en yüksek değerinden")
 
 
 def test_a_sale_that_finished_unseen_is_reported_as_finished(tmp_path):
@@ -520,7 +520,10 @@ def test_decide_now_names_everything_that_would_stop_the_engine(tmp_path):
         sim.clock.now = window(sim, D1).decide_from + dt.timedelta(minutes=1)         # inside the decision window
         return vo.cmd_decide_now(sim.settings, sim.fb, sim.clock.now)
 
-    code, doc = run(Sim(tmp_path / "clean"))
+    clean = Sim(tmp_path / "clean")
+    clean.clock.now = window(clean, D1).decide_from + dt.timedelta(minutes=1)
+    vh.write_heartbeat(clean.settings.state_dir, {"time": clean.clock.now.isoformat(), "states": []})
+    code, doc = run(clean)
     assert code == 0 and doc["blockers"] == [] and doc["breaker"] is False and doc["in_window"] is True
     assert doc["plan"]["side"] == "buy"
     cases = {
@@ -547,6 +550,8 @@ def test_decide_now_names_everything_that_would_stop_the_engine(tmp_path):
     stuck.data.update(status=ex.SUBMITTED, target={"core_new": 0.3, "ovl_new": 0.0, "total_new": 0.3})
     stuck.save()
     for name, sim in cases.items():
+        sim.clock.now = window(sim, D1).decide_from + dt.timedelta(minutes=1)
+        vh.write_heartbeat(sim.settings.state_dir, {"time": sim.clock.now.isoformat(), "states": []})
         before = sorted((p.name, p.read_bytes()) for p in sim.settings.state_dir.rglob("*") if p.is_file())
         code, doc = run(sim)
         assert code == 1 and name in doc["blockers"], (name, doc["blockers"])
@@ -574,6 +579,7 @@ def test_decide_now_applies_the_breaker_and_fails_when_the_rule_is_not_ready(tmp
 def test_replay_checks_the_order_plan_and_is_strict_about_types(tmp_path):
     sim = Sim(tmp_path)
     sim.clock.now = window(sim, D1).decide_from + dt.timedelta(minutes=1)
+    vh.write_heartbeat(sim.settings.state_dir, {"time": sim.clock.now.isoformat(), "states": []})
     code, stored = vo.cmd_decide_now(sim.settings, sim.fb, sim.clock.now)
     assert code == 0 and vo.cmd_replay(stored)[0] == 0
     for section, key, value in [("plan", "side", "sell"), ("plan", "notional", "1.00"), ("plan", "capped", True),
@@ -725,6 +731,13 @@ def test_the_watchdog_labels_the_practice_service_and_logs_a_missing_topic(tmp_p
     containers(live_age=4.0, paper_age="null")                                        # the practice bot has no heartbeat
     calls, log = run()
     assert len(calls) == 1 and "DENEME HESABI. Trading botu çalışmıyor görünüyor." in calls[0]
+    containers(live_age=4.0, paper_age=4.0)
+    (work / "fake" / "exec_trading-paper-livecfg-def-1").write_text(
+        '{"heartbeat": {"states": []}, "heartbeat_age_seconds": 4, "level": 0, "owner_unreachable": true}\n',
+        encoding="utf-8",
+    )
+    calls, log = run()
+    assert "DENEME HESABI. Trading botu sana mesaj gönderemiyor." in calls[-1]
     (work / "fake" / "curl_fail").write_text("x", encoding="utf-8")
     containers(live_age=None, paper_age=4.0)
     calls, log = run()

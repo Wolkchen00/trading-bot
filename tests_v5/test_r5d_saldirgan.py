@@ -15,6 +15,7 @@ from tests_v5.test_r5b_inceleme import FRIDAY, MINUTES, PENDING, SECONDS, SOLD_A
 from tests_v5.test_r5c_saldirgan import die_inside_the_submit
 from v5 import broker as vb
 from v5 import executor as ex
+from v5 import health as vh
 from v5 import notify as vn
 from v5 import ops as vo
 from v5 import rails as vr
@@ -469,6 +470,7 @@ def test_a_dry_run_record_closed_a_day_later_says_nothing_about_today(tmp_path):
 def test_decide_now_is_only_ready_when_the_engine_itself_would_decide(tmp_path):
     def at(sim, moment):
         sim.clock.now = moment                                                        # the broker's clock follows
+        vh.write_heartbeat(sim.settings.state_dir, {"time": moment.isoformat(), "states": []})
         return vo.cmd_decide_now(sim.settings, sim.fb, moment)
     sim = Sim(tmp_path)
     w = window(sim, D1)
@@ -487,7 +489,7 @@ def test_decide_now_is_only_ready_when_the_engine_itself_would_decide(tmp_path):
 
 
 # ============================================================================ second part (written by the reviewer)
-ERROR_SENTENCE = "Bot beklenmeyen bir sorunla karşılaştı. Elimdekilere dokunmadım. Claude'a 'trading botuna bak' yaz."
+ERROR_SENTENCE = "Bot beklenmeyen bir sorunla karşılaştı. Claude'a 'trading botuna bak' yaz."
 
 
 def test_a_state_file_of_the_wrong_shape_is_corrupt_not_empty(tmp_path):

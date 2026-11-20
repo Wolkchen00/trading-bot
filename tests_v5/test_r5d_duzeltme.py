@@ -13,6 +13,7 @@ from tests_v5.test_r5b_inceleme import Death, break_call, not_sent, rows
 from v5 import broker as vb
 from v5 import clock as vc
 from v5 import executor as ex
+from v5 import health as vh
 from v5 import notify as vn
 from v5 import ops as vo
 from v5 import rails as vr
@@ -456,6 +457,7 @@ def test_f1_decide_now_reports_window_and_existing_decision_blockers(tmp_path):
     sim = Sim(tmp_path)
     w = window(sim, D1)
     sim.clock.now = w.decide_from
+    vh.write_heartbeat(sim.settings.state_dir, {"time": sim.clock.now.isoformat(), "states": []})
     code, document = vo.cmd_decide_now(sim.settings, sim.fb, sim.clock.now)
     assert code == 0 and document["blockers"] == []
     assert document["decision"] is not None and "plan" in document

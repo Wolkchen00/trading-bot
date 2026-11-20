@@ -329,7 +329,7 @@ class Executor:
             self._cache[record.path] = record.data
             getattr(self, "_stamps", {}).pop(record.path, None)     # written by us: read it back from disk next time
 
-    def _records(self, refresh=False):
+    def _records(self, refresh=False, skip_corrupt=False):
         if self._cache is not None and not refresh:
             return list(self._cache.items())
         folder = self.state_dir / "decisions"
@@ -345,9 +345,14 @@ class Executor:
                 if self._cache is not None and known.get(path) == stamp and path in self._cache:
                     obj = self._cache[path]                 # unchanged on disk since it was last read
                 else:
-                    obj = read_json(path)
-                    if not isinstance(obj, dict) or not isinstance(obj.get("intents"), list):
-                        raise StateCorrupt(path)
+                    try:
+                        obj = read_json(path)
+                        if not isinstance(obj, dict) or not isinstance(obj.get("intents"), list):
+                            raise StateCorrupt(path)
+                    except StateCorrupt:
+                        if skip_corrupt:
+                            continue
+                        raise
                 values[path], stamps[path] = obj, stamp
         self._cache, self._stamps = values, stamps
         return list(values.items())
@@ -369,8 +374,8 @@ class Executor:
                     result.add(intent["client_order_id"])
         return result
 
-    def own_client_ids(self):
-        return self._ids(self._records(refresh=True))
+    def own_client_ids(self, skip_corrupt=False):
+        return self._ids(self._records(refresh=True, skip_corrupt=skip_corrupt))
 
     def _cached_ids(self):
         return self._ids(self._records())
@@ -389,12 +394,12 @@ class Executor:
             if not obj.get("dry_run") and obj.get("status") == UNRESOLVED
         ]
 
-    def open_records(self):
+    def open_records(self, skip_corrupt=False):
         """Every strategy or floor record that has a target and is not final yet (never a dry-run record): its
         order may still exist and its bookkeeping is not done."""
         return [
             SessionRecord(path, obj)
-            for path, obj in self._records(refresh=True)
+            for path, obj in self._records(refresh=True, skip_corrupt=skip_corrupt)
             if not obj.get("dry_run") and obj.get("target") is not None and not self._final_data(obj)
         ]
 
@@ -404,7 +409,7 @@ class Executor:
         return any(
             path != record.path and not obj.get("dry_run")
             and obj.get("target") is not None and not self._final_data(obj)
-            for path, obj in self._records()
+            for path, obj in self._records(skip_corrupt=record.data.get("purpose") == "flr")
         )
 
     def load_overlay_fraction(self):
@@ -482,7 +487,16 @@ class Executor:
         record.data["hold"] = "SNAPSHOT_INVALID" if isinstance(exc, SnapshotInvalid) else "BROKER_DOWN"
         self._event(record, record.data["hold"])
 
+    def _commit_last(self, record):
+        intents = record.data.get("intents") or []
+        if record.data.get("dry_run") or not intents:
+            return
+        fraction = intents[-1].get("fraction_after")
+        if fraction is not None:
+            self._commit(record, fraction)
+
     def _final(self, record, status, detail=""):
+        self._commit_last(record)
         record.data.update(status=status, closed=True, status_detail=detail, hold=None)
         self._event(record, status)
         return record
@@ -503,6 +517,7 @@ class Executor:
 
     def _close(self, record, detail=""):
         if self._any_fill(record):
+            self._commit_last(record)
             record.data.update(status=PARTIAL, closed=True, status_detail=detail)
             self._event(record, "PARTIAL_CLOSED")
             return record
@@ -543,11 +558,11 @@ class Executor:
             overlay_fraction_committed=fraction,
             after=_snapshot_data(snapshot),
             residual=snapshot.product_weight - record.data["target"]["total_new"],
-            status=status, closed=True,
         )
-        self._event(record, status)
         if not record.data["dry_run"]:
             self._commit(record, fraction)
+        record.data.update(status=status, closed=True)
+        self._event(record, status)
         return record
 
     def _inspect(self, record):
@@ -594,7 +609,12 @@ class Executor:
         snapshot = self._inspect(record)
         if snapshot is None:
             return record
-        fraction = self.load_overlay_fraction()
+        try:
+            fraction = self.load_overlay_fraction()
+        except StateCorrupt:
+            if record.data["purpose"] != "flr":
+                raise
+            fraction = 0.0               # the safety sale ends at zero and needs no strategy allocation file
         if record.data["before"] is None:
             record.data["before"] = _snapshot_data(snapshot, fraction)
             record.data["overlay_fraction_committed"] = fraction
@@ -602,8 +622,8 @@ class Executor:
         target = record.data["target"]
         plan = plan_order(snapshot, target["total_new"], self.params)
         if self._buys_blocked and plan.side == "buy":
-            record.data["hold"] = "BREAKER"
-            self._event(record, "HOLD:BREAKER")
+            record.data["hold"] = self._buys_blocked
+            self._event(record, "HOLD:" + self._buys_blocked)
             return record
         if replan:
             attempt = record.data["intents"][-1]["attempt"]
@@ -693,8 +713,8 @@ class Executor:
                 self._event(record, "HOLD:" + str(self._blocked))
                 return record
             if self._buys_blocked and intent["side"] == "buy":
-                record.data["hold"] = "BREAKER"
-                self._event(record, "HOLD:BREAKER")
+                record.data["hold"] = self._buys_blocked
+                self._event(record, "HOLD:" + self._buys_blocked)
                 return record
             intent["submit_count"] += 1
             record.save()
@@ -740,6 +760,12 @@ class Executor:
                 order = self.broker.get_order(intent["broker_order_id"])
             if is_terminal(order.status):
                 return self._terminal(record, order, window, allow_retry)
+            if self._blocked == "HALT_CLEARED" and not canceled:
+                self._event(record, f"CANCEL:{intent['client_order_id']}")
+                self.broker.cancel_order(order.id)
+                canceled = True
+                order = None
+                continue
             if self.now_fn() >= window.cancel_at and not canceled:
                 self._event(record, f"CANCEL:{intent['client_order_id']}")
                 self.broker.cancel_order(order.id)
@@ -778,10 +804,16 @@ class Executor:
 
         after = take_snapshot(self.broker, self.params, self._cached_ids(), self._owner_symbols())
         residual = after.product_weight - record.data["target"]["total_new"]
-        record.data["after"], record.data["residual"] = _snapshot_data(after), residual
         tolerance = max(0.015, 2 / after.equity)
+        if order.status == "filled" and allow_retry and not intent["capped"] and abs(residual) > tolerance:
+            # A position list can lag the filled order by one read. Confirm before recording a false residual.
+            after = take_snapshot(self.broker, self.params, self._cached_ids(), self._owner_symbols())
+            residual = after.product_weight - record.data["target"]["total_new"]
+            tolerance = max(0.015, 2 / after.equity)
+        stored_residual = residual if allow_retry else None
+        record.data["after"], record.data["residual"] = _snapshot_data(after), stored_residual
         if order.status == "filled":
-            outcome = DONE if abs(residual) <= tolerance else CAPPED
+            outcome = DONE if not intent["capped"] or (allow_retry and abs(residual) <= tolerance) else CAPPED
             intent["outcome"] = outcome
             return self._final(record, outcome)
         intent["outcome"] = PARTIAL
@@ -797,6 +829,13 @@ class Executor:
     def _resume(self, record, window):
         intent = record.data["intents"][-1] if record.data["intents"] else None
         if record.status == PARTIAL:
+            error = str(intent.get("error") or "") if intent is not None else ""
+            if error == "403:40310000" and sum(
+                item.get("error") == "403:40310000" for item in record.data["intents"]
+            ) >= 2:
+                return self._close(record, error)
+            if error and error != "403:40310000" and error[:3].isdigit() and error[3:4] == ":":
+                return self._close(record, error)
             if self.now_fn() >= window.submit_until or self._attempt_count(record) >= 3:
                 return self._close(record, "ATTEMPTS_CLOSED")
             return self._start(record, window)
@@ -862,7 +901,7 @@ class Executor:
             self._cache[record.path] = record.data
             getattr(self, "_stamps", {}).pop(record.path, None)
         self._blocked = blocked
-        self._buys_blocked = bool(buys_blocked)
+        self._buys_blocked = "BREAKER" if buys_blocked is True else (buys_blocked or False)
         try:
             return self._resume(record, window)
         except (BrokerError, SnapshotInvalid) as exc:

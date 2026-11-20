@@ -168,7 +168,7 @@ def test_real_overlay_buy_and_next_days_sale_keep_their_sentences(tmp_path):
     assert sim.record(D2).status == ex.DONE and sim.orders()[-1].side == "buy"
 
     sim.run_day(D3, runner)
-    assert "Dünkü ek alımı sattım." in sim.digests()[2]
+    assert "Dünkü düşüş için tuttuğum ek payı sattım." in sim.digests()[2]
     assert sim.record(D3).status == ex.DONE and sim.orders()[-1].side == "sell"
     assert "OVERLAY_HELD" in vn.REASON_SENTENCES
 
@@ -249,6 +249,7 @@ def test_decide_now_uses_the_same_baseline_cross_check_as_the_engine(tmp_path):
     sim = Sim(tmp_path)
     sim.ibs[D1] = 0.0
     sim.clock.now = window(sim, D1).decide_from + dt.timedelta(minutes=1)             # inside the decision window
+    vh.write_heartbeat(sim.settings.state_dir, {"time": sim.clock.now.isoformat(), "states": []})
     sim.rails().record_close(FRIDAY, 600.0)
     sim.fb.last_equity = Decimal("490")
 

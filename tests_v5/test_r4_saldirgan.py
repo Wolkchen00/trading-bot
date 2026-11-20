@@ -429,9 +429,15 @@ ALERTS = {
     "BREAKER": (dict(pct=0.152),
                 "Hesap bugün yüzde 15,2 düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum."),
     "FLOOR_DONE": (dict(pct=0.603, equity=195.1),
-                   "Hesap en yüksek değerinden yüzde 60,3 düştü, şu an 195,10 dolar. Her şeyi sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."),
+                   "Hesap en yüksek değerinden yüzde 60,3 düştü, şu an 195,10 dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."),
+    "FLOOR_FLAT": (dict(pct=0.603, equity=195.1),
+                   "Hesap en yüksek değerinden yüzde 60,3 düştü, şu an 195,10 dolar. Elimde Nasdaq fonu yoktu, bu yüzden satış yapmadan durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."),
     "FLOOR_PENDING": (dict(pct=0.603, equity=195.1, product_pct=0.12),
                       "Hesap en yüksek değerinden yüzde 60,3 düştü, şu an 195,10 dolar. Satışa başladım ama henüz bitmedi. Şu an elimde yüzde 12 Nasdaq fonu var. Denemeye devam ediyorum."),
+    "FLOOR_WAITING": (dict(pct=0.603, equity=195.1, product_pct=0.12, cause="borsa şu an kapalı"),
+                      "Hesap en yüksek değerinden yüzde 60,3 düştü, şu an 195,10 dolar. Güvenlik satışını henüz başlatamadım, çünkü borsa şu an kapalı. Şu an elimde yüzde 12 Nasdaq fonu var. Denemeye devam ediyorum."),
+    "FLOOR_WAITING_BLIND": (dict(pct=0.603, equity=195.1, cause="Alpaca'ya bağlanamadım"),
+                            "Hesap en yüksek değerinden yüzde 60,3 düştü, şu an 195,10 dolar. Güvenlik satışını henüz başlatamadım, çünkü Alpaca'ya bağlanamadım. Denemeye devam ediyorum."),
     "RAIL_LIQUIDATING": (dict(product_pct=0.12),
                          "Güvenlik satışı hala bitmedi. Şu an elimde yüzde 12 Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler."),
     "HOLD_NOT_READY": (dict(cause="fiyat bilgisine ulaşamadım"),
@@ -450,7 +456,10 @@ ALERTS = {
     "WATCHDOG": ({}, "Trading botu çalışmıyor görünüyor. Claude'a 'trading botuna bak' yaz."),
     "READINESS": (dict(cause="Alpaca'ya bağlanamadım"),
                   "Bugün borsa açılmadan önce bir sorun gördüm: Alpaca'ya bağlanamadım. Düzelmezse bugün işlem yapmayacağım."),
-    "ERROR": ({}, "Bot beklenmeyen bir sorunla karşılaştı. Elimdekilere dokunmadım. Claude'a 'trading botuna bak' yaz."),
+    "ERROR": ({}, "Bot beklenmeyen bir sorunla karşılaştı. Claude'a 'trading botuna bak' yaz."),
+    "CLOSE_CORRECTED": (dict(equity=490.0), "Dünkü özetteki hesap değeri yanlış okunmuş. Doğru kapanış değeri 490,00 dolar."),
+    "CAPPED_FILLED": ({}, "Hedefin tamamı için boş nakit yetmedi; alabildiğim kadarını aldım."),
+    "CAPPED_IDLE": ({}, "Hedefin tamamı için boş nakit yok."),
     "TEST": ({}, "Deneme bildirimi: bu mesajı görüyorsan bildirimler çalışıyor."),
     "ORDER_UNFILLED": (dict(product_pct=0.3),
                        "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde 30 Nasdaq fonu var. Yarın yeniden karar veririm."),
@@ -490,10 +499,11 @@ def test_reason_and_cause_sentences_are_exact():
         "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım.",
         "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum.",
         "OVERLAY_WOULD": "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım.",
-        "OVERLAY_KEEP": "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum.",
-        "OVERLAY_EXIT": "Dünkü ek alımı sattım.",
+        "OVERLAY_KEEP": "Düşüş sürdü, ek payı bir gün daha tutuyorum.",
+        "OVERLAY_EXIT": "Dünkü düşüş için tuttuğum ek payı sattım.",
         "OVERLAY_DATA_MISSING": "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım.",
         "BREAKER_REDUCE_ONLY": "Bugün sert düşüş olduğu için yeni alım yapmadım.",
+        "DOUBT_REDUCE_ONLY": "Hesap değerini doğrulayamadığım için bugün yeni alım yapmadım.",
     }
     expect = {
         "fiyat bilgisine ulaşamadım": ["PRICE_STALE", "PRICE_BAD", "PRICE_JUMP", "DATA_ERROR"],
@@ -520,6 +530,8 @@ def test_reason_and_cause_sentences_are_exact():
         "UNFILLED": "Karar verdim ama emrim gerçekleşmedi.",
         "UNKNOWN": "Emrimin sonucunu henüz öğrenemedim.",
         "FLOOR": "Hesap güvenlik sınırının altına düştü.",
+        "PARTIAL": "Karar verdim ama emrimin yalnız bir kısmı gerçekleşti.",
+        "NO_CASH": "Karar verdim ama alım için boş nakit yoktu.",
     }
     for sentence, codes in expect.items():
         for code in codes:
@@ -567,7 +579,7 @@ def test_digest_is_exact_in_every_variant():
     for none in (None, [], ["NOT_A_KEY"]):
         assert digest(reason_keys=none)[4] == "Neden: Bugün karar veremedim."
     assert digest(reason_keys=["TREND_DOWN", "NOT_A_KEY", "OVERLAY_EXIT"])[4] == \
-        "Neden: Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor. Dünkü ek alımı sattım."
+        "Neden: Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor. Dünkü düşüş için tuttuğum ek payı sattım."
     assert digest(month_pct=-0.02, total_pct=-0.005)[5] == "Bu ay: yüzde 2,0 ekside. Başlangıçtan beri: yüzde 0,5 ekside."
     assert digest(month_pct=0.0, total_pct=None)[5] == "Bu ay: değişim yok. Başlangıçtan beri: bilgi yok."
     assert digest(month_pct=None, total_pct=0.0004)[5] == "Bu ay: bilgi yok. Başlangıçtan beri: değişim yok."
@@ -701,9 +713,11 @@ def test_cooldown_per_kind_and_state(tmp_path):
     assert n.alert("FOREIGN_ASSET", state_key="QQQ", symbol="QQQ")                    # another state: its own message
     assert n.alert("PAUSED")                                                          # another kind
     clock.advance(minutes=2)
-    assert n.alert("FOREIGN_ASSET", state_key="SPY", symbol="SPY")                    # 4 h 1 min later
+    assert n.alert("FOREIGN_ASSET", state_key="SPY", symbol="SPY") is None           # state keys are once per key
+    clock.advance(hours=4)
+    assert n.alert("PAUSED")                                                          # no state key keeps the four-hour rule
     assert len(post.calls) == 4
-    assert len([l for l in (s.state_dir / "outbox.jsonl").read_text(encoding="utf-8").splitlines() if '"FOREIGN_ASSET"' in l and '"text"' in l]) == 3
+    assert len([l for l in (s.state_dir / "outbox.jsonl").read_text(encoding="utf-8").splitlines() if '"FOREIGN_ASSET"' in l and '"text"' in l]) == 2
 
 
 def test_failed_posts_stay_pending_and_are_retried(tmp_path):
@@ -854,10 +868,10 @@ def ops_env(tmp_path, monkeypatch):
 
 def test_ops_commands_change_the_shared_state_and_are_logged(ops_env, capsys):
     s, rails = ops_env
-    assert run_ops(["init-peak", "491.08", "--source", "v4 record"]) == 0
+    assert run_ops(["init-peak", "491.08", "--source", "v4 record", "--no-check"]) == 0
     assert rails.peak() == 491.08
-    assert run_ops(["init-peak", "600", "--source", "again"]) != 0 and rails.peak() == 491.08
-    assert run_ops(["init-peak", "600", "--source", "forced", "--force"]) == 0 and rails.peak() == 600.0
+    assert run_ops(["init-peak", "600", "--source", "again", "--no-check"]) != 0 and rails.peak() == 491.08
+    assert run_ops(["init-peak", "600", "--source", "forced", "--force", "--no-check"]) == 0 and rails.peak() == 600.0
     assert run_ops(["pause", "--by", "owner", "--note", "tatil"]) == 0 and rails.paused() is True
     assert run_ops(["resume", "--by", "owner", "--note", "geri"]) == 0 and rails.paused() is False
     assert run_ops(["clear-halt", "--by", "owner", "--note", "x", "--new-peak", "500"]) != 0     # nothing to clear
@@ -893,7 +907,7 @@ def test_owner_status_text(tmp_path):
     tool = load_tool()
     s = settings_for(tmp_path)
     now = T0 + dt.timedelta(minutes=2, seconds=20)
-    assert tool.render(s.state_dir, now) == "\n".join(["Bot çalışmıyor görünüyor.", "Kalp atışı kaydı yok.", "Durum: bilinmiyor.",
+    assert tool.render(s.state_dir, now) == "\n".join(["Bot çalışmıyor görünüyor.", "Kalp atışı kaydı yok.", "Durum: HEARTBEAT_MISSING",
                                                          "Henüz günlük özet yok."])
     vh.write_heartbeat(s.state_dir, beat())
     assert tool.render(s.state_dir, now) == "\n".join(["Bot çalışıyor.", "Son kalp atışı: 2 dakika önce.", "Durum: Her şey normal.",
@@ -903,7 +917,7 @@ def test_owner_status_text(tmp_path):
     box.add("DIGEST", "\n".join(LINES), T0, dedupe_key="DIGEST:2026-11-16:")
     late = T0 + dt.timedelta(minutes=10, seconds=5)
     assert tool.render(s.state_dir, late) == "\n".join(["Bot çalışmıyor görünüyor.", "Son kalp atışı: 10 dakika önce.",
-                                                          "Durum: PAUSED, BREAKER_TODAY", "Son günlük özet:"] + LINES)
+                                                          "Durum: PAUSED, BREAKER_TODAY, HEARTBEAT_STALE", "Son günlük özet:"] + LINES)
 
 
 # ============================================================================ review findings (R4 Level 10)
@@ -958,7 +972,7 @@ def test_status_tool_runs_as_a_plain_script(tmp_path):
                          capture_output=True, timeout=120)
     text = out.stdout.decode("utf-8")
     assert out.returncode == 0, out.stderr.decode("utf-8", "replace")[-400:]
-    assert text.splitlines() == ["Bot çalışmıyor görünüyor.", "Kalp atışı kaydı yok.", "Durum: bilinmiyor.", "Henüz günlük özet yok."]
+    assert text.splitlines() == ["Bot çalışmıyor görünüyor.", "Kalp atışı kaydı yok.", "Durum: HEARTBEAT_MISSING", "Henüz günlük özet yok."]
 
 
 # ============================================================================ which account is speaking

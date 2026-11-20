@@ -63,7 +63,7 @@ def test_health_json_output(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(health, "load_settings", lambda: settings(tmp_path))
     assert health.main(["--json"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert set(result) == {"level", "heartbeat_age_seconds", "lines", "heartbeat"}
+    assert set(result) == {"level", "heartbeat_age_seconds", "lines", "heartbeat", "owner_unreachable"}
 
 
 def rail_reading(equity, when=NOW):
@@ -97,7 +97,7 @@ def test_owner_status_fresh_stale_missing_and_digest(tmp_path):
     missing = "\n".join([
         "Bot çalışmıyor görünüyor.",
         "Kalp atışı kaydı yok.",
-        "Durum: bilinmiyor.",
+        "Durum: HEARTBEAT_MISSING",
         "Henüz günlük özet yok.",
     ])
     assert render(tmp_path, NOW) == missing
@@ -114,7 +114,7 @@ def test_owner_status_fresh_stale_missing_and_digest(tmp_path):
     assert stale == "\n".join([
         "Bot çalışmıyor görünüyor.",
         "Son kalp atışı: 6 dakika önce.",
-        "Durum: PAUSED",
+        "Durum: PAUSED, HEARTBEAT_STALE",
         "Son günlük özet:",
         "özet satır 1",
         "özet satır 2",

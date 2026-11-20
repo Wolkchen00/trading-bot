@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 def _decimal(value) -> Decimal:
@@ -40,24 +41,31 @@ REASON_SENTENCES = {
     "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım.",
     "OVERLAY_WOULD": "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım.",
     "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum.",
-    "OVERLAY_KEEP": "Düşüş sürdü, dünkü ek alımı bir gün daha tutuyorum.",
-    "OVERLAY_EXIT": "Dünkü ek alımı sattım.",
+    "OVERLAY_KEEP": "Düşüş sürdü, ek payı bir gün daha tutuyorum.",
+    "OVERLAY_EXIT": "Dünkü düşüş için tuttuğum ek payı sattım.",
     "OVERLAY_DATA_MISSING": "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım.",
     "BREAKER_REDUCE_ONLY": "Bugün sert düşüş olduğu için yeni alım yapmadım.",
+    "DOUBT_REDUCE_ONLY": "Hesap değerini doğrulayamadığım için bugün yeni alım yapmadım.",
 }
 
 
 TEMPLATES = {
+    "CLOSE_CORRECTED": "Dünkü özetteki hesap değeri yanlış okunmuş. Doğru kapanış değeri {equity} dolar.",
     "DRAWDOWN_ALERT": "Hesap en yüksek değerinden yüzde {pct} aşağıda, şu an {equity} dolar. Bu risk seviyesinde geçmişte görülen en derin düşüşe geldik. Kurala göre çalışmaya devam ediyorum. Durdurmak istersen Claude'a 'botu durdur' yaz.",
     "BREAKER": "Hesap bugün yüzde {pct} düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum.",
-    "FLOOR_DONE": "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Her şeyi sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz.",
+    "FLOOR_DONE": "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz.",
+    "FLOOR_FLAT": "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Elimde Nasdaq fonu yoktu, bu yüzden satış yapmadan durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz.",
     "FLOOR_PENDING": "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Satışa başladım ama henüz bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum.",
+    "FLOOR_WAITING": "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Güvenlik satışını henüz başlatamadım, çünkü {cause}. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum.",
+    "FLOOR_WAITING_BLIND": "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Güvenlik satışını henüz başlatamadım, çünkü {cause}. Denemeye devam ediyorum.",
     "RAIL_LIQUIDATING": "Güvenlik satışı hala bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
     "HOLD_NOT_READY": "Bugün karar veremedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden denerim.",
     "MISSED": "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim.",
     "ORDER_FAILED": "Alpaca emrimi kabul etmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Claude'a 'trading botuna bak' yazarsan sebebini inceler.",
     "ORDER_UNFILLED": "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın yeniden karar veririm.",
     "ORDER_PARTIAL": "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın duruma yeniden bakarım.",
+    "CAPPED_FILLED": "Hedefin tamamı için boş nakit yetmedi; alabildiğim kadarını aldım.",
+    "CAPPED_IDLE": "Hedefin tamamı için boş nakit yok.",
     "UNRESOLVED": "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
     "FOREIGN_ASSET": "Hesapta benim almadığım bir varlık ya da emir var ({symbol}). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver.",
     "DATA_DOUBT": "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye satış yapmadım, izlemeye devam ediyorum.",
@@ -65,7 +73,7 @@ TEMPLATES = {
     "NOT_STARTED": "Bot başlayamadı. Claude'a 'trading botuna bak' yaz.",
     "WATCHDOG": "Trading botu çalışmıyor görünüyor. Claude'a 'trading botuna bak' yaz.",
     "READINESS": "Bugün borsa açılmadan önce bir sorun gördüm: {cause}. Düzelmezse bugün işlem yapmayacağım.",
-    "ERROR": "Bot beklenmeyen bir sorunla karşılaştı. Elimdekilere dokunmadım. Claude'a 'trading botuna bak' yaz.",
+    "ERROR": "Bot beklenmeyen bir sorunla karşılaştı. Claude'a 'trading botuna bak' yaz.",
     "NOT_SENT": "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden karar veririm.",
     "TEST": "Deneme bildirimi: bu mesajı görüyorsan bildirimler çalışıyor.",
 }
@@ -100,8 +108,23 @@ CAUSE_SENTENCES = {
     "PAUSED": "bot duraklatılmış durumda",
     "FLOOR_HALT": "güvenlik sınırı aşıldığı için durmuş durumdayım",
     "BREAKER": "bugün sert düşüş olduğu için yeni alım yapmıyorum",
+    "EQUITY_DOUBT": "hesap değerini doğrulayamadım",
     "TIME_OUT": "süre yetmedi",
     "NOT_FOUND": "emrim Alpaca'ya ulaşmadı",
+}
+
+
+FLOOR_WAIT_CAUSES = {
+    "CLOCK_DOUBT": "saat bilgisi tutarsız göründü",
+    "CALENDAR_MISSING": "bugünün borsa saatlerini öğrenemedim",
+    "MARKET_CLOSED": "borsa şu an kapalı",
+    "TOO_LATE": "kapanışa çok az kaldı",
+    "UNRESOLVED": "önceki emrimin akıbeti hala belli değil",
+    "FOREIGN_PRODUCT_ORDER": "hesapta benim vermediğim bir Nasdaq fonu emri var",
+    "BROKER_DOWN": "Alpaca'ya bağlanamadım",
+    "SNAPSHOT_INVALID": "hesap değerini doğrulayamadım",
+    "STATE_CORRUPT": "kayıt dosyam bozuk",
+    "DRY_RUN": "gerçek emir gönderme kapalı",
 }
 
 
@@ -111,6 +134,8 @@ OUTCOME_SENTENCES = {
     "NOT_SENT": "Karar verdim ama emri gönderemedim.",
     "REFUSED": "Karar verdim ama Alpaca emrimi kabul etmedi.",
     "UNFILLED": "Karar verdim ama emrim gerçekleşmedi.",
+    "PARTIAL": "Karar verdim ama emrimin yalnız bir kısmı gerçekleşti.",
+    "NO_CASH": "Karar verdim ama alım için boş nakit yoktu.",
     "UNKNOWN": "Emrimin sonucunu henüz öğrenemedim.",
     "FLOOR": "Hesap güvenlik sınırının altına düştü.",
 }
@@ -170,17 +195,34 @@ def build_digest(ctx) -> str:
 
     product = int(fmt_weight(ctx["product_weight"]))
     owner = int(fmt_weight(ctx.get("owner_weight") or 0.0))
+    other = int(fmt_weight(ctx.get("other_weight") or 0.0))
+    # Each part is rounded by itself (82 + 17 + 2): together they must never read as more than the account.
+    named = {"product": max(0, product), "owner": owner if owner >= 1 else 0, "other": other if other >= 1 else 0}
+    excess = sum(named.values()) - 100
+    while excess > 0:
+        largest = max(named, key=named.get)
+        cut = min(excess, named[largest])
+        if cut <= 0:
+            break
+        named[largest] -= cut
+        excess -= cut
+    product, owner, other = named["product"], named["owner"], named["other"]
+    cash = max(0, 100 - product - owner - other)
+    held = "Elimde şu an" if ctx.get("holdings_now") or ctx.get("as_of_now") else "Elimde"
     if owner >= 1:
         # The owner's own shares sit beside the fund: say so, or the cash figure would be wrong.
         label = ctx["owner_label"]
-        held = "Elimde şu an" if ctx.get("as_of_now") else "Elimde"
-        lines.append(
-            f"{held}: yüzde {product} Nasdaq fonu, yüzde {owner} senin aldığın hisse ({label}), "
-            f"yüzde {max(0, 100 - product - owner)} nakit."
-        )
+        parts = [f"yüzde {product} Nasdaq fonu", f"yüzde {owner} senin aldığın hisse ({label})"]
+        if other >= 1:
+            parts.append(f"yüzde {other} benim almadığım varlık")
+        parts.append(f"yüzde {cash} nakit")
+        lines.append(f"{held}: " + ", ".join(parts) + ".")
     else:
-        held = "Elimde şu an" if ctx.get("as_of_now") else "Elimde"
-        lines.append(f"{held}: yüzde {product} Nasdaq fonu, yüzde {100 - product} nakit.")
+        parts = [f"yüzde {product} Nasdaq fonu"]
+        if other >= 1:
+            parts.append(f"yüzde {other} benim almadığım varlık")
+        parts.append(f"yüzde {cash} nakit")
+        lines.append(f"{held}: " + ", ".join(parts) + ".")
     action = ctx["action"]
     if action not in {
         "none", "buy", "sell", "sell_all", "unknown",
@@ -256,7 +298,7 @@ class Outbox:
         messages = []
         by_id = {}
         attempts = {}
-        delivered = set()
+        delivered = {}
         corrupt = 0
         try:
             handle = self.path.open(encoding="utf-8", errors="replace")
@@ -285,7 +327,7 @@ class Outbox:
                         if row["event"] == "attempt":
                             attempts[row["id"]].append(event_time)
                         else:
-                            delivered.add(row["id"])
+                            delivered[row["id"]] = event_time
                 except (KeyError, TypeError, ValueError, OverflowError, RecursionError):
                     corrupt += 1
         return messages, attempts, delivered, corrupt
@@ -369,6 +411,22 @@ class Outbox:
         ]
         return max(ages) if ages else None
 
+    def owner_unreachable(self, now) -> bool:
+        messages, _, delivered, _ = self._scan()
+        undelivered = [message for message in messages if message["id"] not in delivered]
+        if any(
+            120 * 60 < _seconds(now, _parse_time(message["time"])) < 48 * 60 * 60
+            for message in undelivered
+        ):
+            return True
+        for message in undelivered:
+            written = _parse_time(message["time"])
+            if _seconds(now, written) < 48 * 60 * 60:
+                continue
+            if not any(moment >= written for moment in delivered.values()):
+                return True
+        return False
+
     def last(self, kind) -> dict | None:
         messages = self._scan()[0]
         for message in reversed(messages):
@@ -392,6 +450,7 @@ class Notifier:
         self.outbox = outbox
         self.post_fn = post_fn
         self.now_fn = now_fn
+        self._posted_successfully = set()
 
     @property
     def configured(self) -> bool:
@@ -407,20 +466,30 @@ class Notifier:
 
     @staticmethod
     def _priority(kind):
-        return 5 if kind in {"FLOOR_DONE", "FLOOR_PENDING", "RAIL_LIQUIDATING", "NOT_STARTED"} else 4
+        return 5 if kind in {
+            "FLOOR_DONE", "FLOOR_FLAT", "FLOOR_PENDING", "FLOOR_WAITING", "FLOOR_WAITING_BLIND",
+            "RAIL_LIQUIDATING", "NOT_STARTED",
+        } else 4
 
-    def alert(self, kind, state_key="", **fields):
-        text = self._label() + build_alert(kind, **fields)
+    def alert(self, kind, state_key="", real=False, **fields):
+        text = ("" if real else self._label()) + build_alert(kind, **fields)
         now = self.now_fn()
+        future_key = False
         for message in self.outbox._messages():
             if message["kind"] == kind and message.get("state_key", "") == state_key:
-                if _seconds(now, _parse_time(message["time"])) < 4 * 60 * 60:
+                age = _seconds(now, _parse_time(message["time"]))
+                if state_key and age >= 0:
+                    return None
+                if state_key:
+                    future_key = True
+                if 0 <= age < 4 * 60 * 60:
                     return None
         identifier = self.outbox.add(
             kind,
             text,
             now,
             state_key=state_key,
+            dedupe_key=f"ALERT:{kind}:{state_key}" if state_key and not future_key else None,
             priority=self._priority(kind),
         )
         self.flush()
@@ -455,23 +524,46 @@ class Notifier:
             return 0
         delivered = 0
         for message in self.outbox.pending(self.now_fn()):
+            if message["id"] in self._posted_successfully:
+                continue
             headers = {
                 "Title": "Trading bot",
                 "Priority": str(message["priority"]),
                 "Tags": "bar_chart" if message["kind"] == "DIGEST" else "warning",
             }
             try:
+                now = self.now_fn()
+                body = message["text"]
+                if message["kind"] != "DIGEST" and _seconds(now, _parse_time(message["time"])) > 60 * 60:
+                    written = _parse_time(message["time"]).astimezone(ZoneInfo("America/New_York"))
+                    delayed = f"Gecikmiş mesaj ({written:%d.%m.%Y}): "
+                    for label in (PAPER_LABEL, DRY_RUN_LABEL):
+                        if body.startswith(label):
+                            body = label + delayed + body[len(label):]
+                            break
+                    else:
+                        body = delayed + body
                 status = self.post_fn(
                     self.settings.ntfy_base_url.rstrip("/") + "/" + self.settings.ntfy_topic,
-                    message["text"].encode("utf-8"),
+                    body.encode("utf-8"),
                     headers,
                     10,
                 )
                 if 200 <= status <= 299:
-                    self.outbox.mark_delivered(message["id"], self.now_fn())
+                    self._posted_successfully.add(message["id"])
                     delivered += 1
+                    try:
+                        self.outbox.mark_delivered(message["id"], self.now_fn())
+                    except Exception:
+                        pass
                 else:
-                    self.outbox.mark_attempt(message["id"], self.now_fn())
+                    try:
+                        self.outbox.mark_attempt(message["id"], self.now_fn())
+                    except Exception:
+                        pass
             except Exception:
-                self.outbox.mark_attempt(message["id"], self.now_fn())
+                try:
+                    self.outbox.mark_attempt(message["id"], self.now_fn())
+                except Exception:
+                    pass
         return delivered

@@ -39,7 +39,7 @@ EARLY = {dt.date(2026, 11, 27)}
 PAUSED_TEXT = "Bot duraklatılmış durumda. Elimdekiler duruyor, yeni işlem yapmıyorum."
 MISSED_TEXT = "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim."
 UNRESOLVED_TEXT = "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler."
-ERROR_TEXT = "Bot beklenmeyen bir sorunla karşılaştı. Elimdekilere dokunmadım. Claude'a 'trading botuna bak' yaz."
+ERROR_TEXT = "Bot beklenmeyen bir sorunla karşılaştı. Claude'a 'trading botuna bak' yaz."
 
 
 def hold_text(cause):
@@ -390,7 +390,7 @@ def test_dip_day_adds_the_overlay_and_removes_it_the_next_day(tmp_path):
     assert "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım." in sim.digests()[1].split("\n")[4]
     sim.run_day(D3, runner)                                                           # no fresh signal: it expires
     assert sim.record(D3).status == ex.DONE and abs(sim.weight() - w1) < 0.03
-    assert "Dünkü ek alımı sattım." in sim.digests()[2].split("\n")[4]
+    assert "Dünkü düşüş için tuttuğum ek payı sattım." in sim.digests()[2].split("\n")[4]
     assert [o.side for o in sim.orders()] == ["buy", "buy", "sell"]
     assert_only_known_sentences(sim)
 
@@ -746,7 +746,7 @@ def test_floor_confirms_then_sells_everything_and_stays_stopped(tmp_path):
     assert [o.client_order_id for o in sim.orders()] == ["v5-paper-20261116-flr-1"] and sim.orders()[0].qty == "5"
     w = window(sim, D1)
     assert sim.orders()[0].submitted_at >= w.decide_from + dt.timedelta(seconds=60)   # only after the second reading
-    done = [t for t in sim.alerts() if "Her şeyi sattım ve durdum." in t]
+    done = [t for t in sim.alerts() if "Elimdeki Nasdaq fonunun tamamını sattım ve durdum." in t]
     assert len(done) == 1 and done[0].startswith("Hesap en yüksek değerinden yüzde 61,5 düştü, şu an 500,00 dolar.")
     assert sim.record(D1, "flr").status == ex.DONE
     dec = sim.record(D1)
@@ -758,7 +758,7 @@ def test_floor_confirms_then_sells_everything_and_stays_stopped(tmp_path):
         sim.ibs[day] = 0.0
         runner = sim.run_day(day, runner)
         assert len(sim.submits()) == 1 and sim.digests()[-1].split("\n")[6].startswith("Durum: Hesap en yüksek değerinden")
-    assert len([t for t in sim.alerts() if "Her şeyi sattım ve durdum." in t]) <= 3   # at most one a day, never a flood
+    assert len([t for t in sim.alerts() if "Elimdeki Nasdaq fonunun tamamını sattım ve durdum." in t]) <= 3   # at most one a day, never a flood
     sim.rails().clear_halt("owner", "devam", 500.0)
     day4 = dt.date(2026, 11, 19)
     sim.run_day(day4, runner)
@@ -786,8 +786,8 @@ def test_floor_waits_while_the_clock_is_in_doubt(tmp_path):
     sim.fb.skew = 95.0
     runner = sim.run_day(D1)
     assert sim.rails().floor_state() == "HALT" and sim.submits() == [] and sim.fb.positions[PRODUCT] == Decimal("5")
-    pending = [t for t in sim.alerts() if "Satışa başladım ama henüz bitmedi." in t]
-    assert len(pending) >= 1 and "Şu an elimde yüzde 50 Nasdaq fonu var." in pending[0]
+    pending = [t for t in sim.alerts() if "Güvenlik satışını henüz başlatamadım" in t]
+    assert len(pending) >= 1 and "saat bilgisi tutarsız göründü" in pending[0] and "Şu an elimde yüzde 50 Nasdaq fonu var." in pending[0]
     assert sim.rails().liquidating() is True
     sim.fb.skew = 0.0
     sim.run_day(D2, runner)                                                           # retried the next session
@@ -918,6 +918,7 @@ def test_decide_now_is_read_only_and_replays_identically(tmp_path):
     sim = Sim(tmp_path)
     w = window(sim, D1)
     sim.clock.now = w.decide_from + dt.timedelta(minutes=1)                           # inside the decision window
+    vh.write_heartbeat(sim.settings.state_dir, {"time": sim.clock.now.isoformat(), "states": []})
     before_files = sorted(p.name for p in sim.settings.state_dir.rglob("*"))
     out = tmp_path / "decision.json"
     code, doc = vo.cmd_decide_now(sim.settings, sim.fb, sim.clock.now, out_path=out)

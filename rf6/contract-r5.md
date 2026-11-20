@@ -327,3 +327,61 @@ Claude with `tests_v5/test_r5c_saldirgan.py`; plan Revision 12)
     record's last intent (floor record first); `OVERLAY_ENTER` / `OVERLAY_EXIT` filtered by what was filled.
 22. `rails.breaker_cause(reading, stored_close, breaker_day)` with the sentinel `NO_ROW` is the one breaker
     rule; `Rails.check_breaker` and `ops._blockers` both use it.
+
+AS BUILT, fourth part (2026-11-19, fix round R5d; builder Codex for groups A to F from `rf6/fix-r5d.md`, Claude
+for G1 to G6 from `rf6/fix-r5d-2.md`; reviewer suite `tests_v5/test_r5d_saldirgan.py`; plan Revision 13)
+23. `Executor.run_chain(record, window, blocked=None, buys_blocked=False)`: `_check_provenance` first (mode
+    and client ids, else `StateCorrupt`); a buy planned or re-planned while `buys_blocked` is held with
+    `hold = "BREAKER"`; `_resume` inspects the account before it re-sends a PLANNED intent.
+24. `_continue_block` returns `(code, problem, breaker)` and blocks on a reading that is not ok;
+    `_floor_block` takes the snapshot and the foreign product orders into account.
+25. `EquityReading.last_equity_asof` (from the account's `balance_asof`); `last_equity_is_close_of`;
+    `breaker_cause(..., previous_session)` can answer `BASELINE_PENDING`; `check_breaker(..., decisive)`.
+    `record_close` only appends a session later than every stored row.
+26. Runner state: `closed_sessions` (the newest fifteen; `closed_session` is their maximum),
+    `unknown_sessions`; `_after_close` and `_catch_up` return whether the session is done; `_correction_step`
+    sends the one correction summary; `LATE_CLOSE` is five minutes.
+27. `_failure_kind(record)`: REFUSED (a broker status code in the detail), NOT_SENT (NOT_FOUND, VALIDATION),
+    else UNFILLED; `_after_chain(record, session, late)` sends no alert for a strategy record when `late`.
+28. `_load_state` raises `StateCorrupt` for a file that is not an object of the known field types; the file
+    is left as it is.
+29. `ops`: `_blockers` adds `OUTSIDE_DECISION_WINDOW` and `ALREADY_DECIDED`; `clear_halt_refusal(reading,
+    new_peak)` and `clear-halt --force`. `tools/v5_tatbikat.py`: `_exit(bought)` sells only when the account
+    holds exactly what the step bought. `ops/vps/v5_watchdog.sh`: lookup by the label
+    `com.docker.compose.service`, the name prefix is the fallback.
+
+AS BUILT, fifth part (2026-11-20, fix round R5e; builder Codex from `rf6/fix-r5e.md` and `rf6/fix-r5e-2.md`,
+Claude for `rf6/fix-r5e-3.md`; reviewer suite `tests_v5/test_r5e_saldirgan.py`; plan Revision 14)
+30. `Rails.record_close(session, equity, raise_peak=True, current_equity=None)`: with `raise_peak=False` the
+    row is `provisional` and the peak is untouched; answers "stored", "stored_peak_refused" or None.
+    `Rails.confirm_close(session, official, named, current_equity)`: "confirmed", "confirmed_peak_refused",
+    "corrected" or None. The bound: no raise when `current_equity <= (1 - alert_dd) * value`.
+    `_after_close` stores its on-time reading with `raise_peak=False`; `_watch_breaker` confirms the previous
+    session's row before `check_breaker`.
+31. `tick()`: after the clock step, `effective = min(now, self._broker_now)` while `clock_skewed`;
+    housekeeping and the session step get `effective`. `_clock_step` asks on every tick while in doubt and
+    accepts a broker timestamp between `before - 60 s` and `after + 60 s`. `_catch_up` returns at once while
+    skewed. Every `read_equity` is stamped with `self.now_fn()`.
+32. `_continue_block` measures the floor (`check_floor`) and returns the hold code of the brake ("BREAKER" or
+    "EQUITY_DOUBT"); `run_chain(..., buys_blocked=<code>)`; `reduce_only(decision, doubt)`.
+33. `_decision_step`: the fresh path is `_fresh_decision`; `StateCorrupt` from it marks the day STATE_CORRUPT
+    (unless it is a halt day) and is raised again. `_session_step` with a corrupt `runner.json`: READINESS
+    only before the open, the floor part in the decision window, then the exception.
+34. Floor messages: `_floor_done` (FLOOR_DONE or FLOOR_FLAT, key `halt:<New York date>`, only while HALT),
+    `_floor_pending(day, drawdown, equity, held, reason, holding_known)` (FLOOR_PENDING after a submit, else
+    FLOOR_WAITING or FLOOR_WAITING_BLIND with a cause from `FLOOR_WAIT_CAUSES`), `_floor_filled` counts floor
+    records since the halt's date. `Rails.set_liquidating(True)` answers False unless the rail is HALT;
+    `_poll` cancels at once when the block is HALT_CLEARED.
+35. Reports: `_reported_records(day)` gives a dry process the real records of a day that has a submitted
+    order; `_cutoff` and the dry decision skip such a day; the summary's prefix follows the records.
+    `_digest_context(..., late)`: `holdings_now`, `other_weight`, `cash_weight`; outcomes PARTIAL and NO_CASH;
+    a `BrokerError` from its last fallback makes `_after_close` return False.
+36. `Notifier.alert(kind, state_key, real)`: with a key once per key (a future-dated row does not count),
+    without a key the four-hour cooldown; `flush` remembers what it posted and prefixes late alerts;
+    `Outbox.owner_unreachable(now)`; `v5.health --json` prints `owner_unreachable`.
+37. `Executor`: `_records(skip_corrupt)`, `_commit_last` in `_final` and `_close`, `_no_order` commits before
+    the final status, `_terminal` decides DONE or CAPPED from the order, `_resume` closes a refused record.
+38. `ops`: `ENGINE_FAULT` blocker, the floor plan in `decide-now`, `init-peak --no-check`.
+    `tools/v5_durum.py`: status from `health.assess`. `tools/v5_tatbikat.py`: `too_close()` and
+    `ORDER_STEPS`; the clean-up skips the engine's own orders. `ops/vps/v5_watchdog.sh`: `DOCKER_DEAD`,
+    `owner_unreachable`, the `/dev/shm` stamp.

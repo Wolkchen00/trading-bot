@@ -235,7 +235,7 @@ class Rails:
 
         return self._change(change)
 
-    def record_close(self, session_date, equity):
+    def record_close(self, session_date, equity, raise_peak=True, current_equity=None):
         number = _number(equity)
         if number is None or number <= 0.0:
             raise ValueError("equity must be a finite number greater than zero")
@@ -245,11 +245,56 @@ class Rails:
             history = document.setdefault("equity_history", [])
             if history and session <= max(str(row.get("session", "")) for row in history):
                 return None, False
-            history.append({"session": session, "equity": number})
+            row = {"session": session, "equity": number}
+            if not raise_peak:
+                row["provisional"] = True
+            history.append(row)
             peak = document.get("peak")
-            if peak is not None:
-                document["peak"] = max(float(peak), number)
-            return None, True
+            if not raise_peak or peak is None or number <= float(peak):
+                return "stored", True
+            current = _number(current_equity)
+            if current is not None and current <= (1.0 - self.settings.rails.alert_dd) * number:
+                return "stored_peak_refused", True
+            document["peak"] = number
+            return "stored", True
+
+        return self._change(change)
+
+    def confirm_close(self, session_date, official, named, current_equity):
+        # Accepted limit: a provisional row older than the previous session is never confirmed and never raises
+        # the peak; the broker no longer reports that close, so the floor stays based on the slightly lower peak.
+        number = _number(official)
+        if number is None or number <= 0.0:
+            raise ValueError("official equity must be a finite number greater than zero")
+        session = _iso(session_date)
+
+        def change(document):
+            row = next(
+                (
+                    item for item in document.get("equity_history", [])
+                    if item.get("session") == session and item.get("provisional") is True
+                ),
+                None,
+            )
+            if row is None:
+                return None, False
+            stored = float(row["equity"])
+            agrees = abs(stored - number) <= 0.02 * number
+            if not agrees and not named:
+                return None, False
+            row["equity"] = number
+            row.pop("provisional", None)
+            if not agrees:
+                row["corrected_from"] = stored
+                return "corrected", True
+            peak = document.get("peak")
+            if peak is None or number <= float(peak):
+                return "confirmed", True
+            current = _number(current_equity)
+            if current is not None and current <= (1.0 - self.settings.rails.alert_dd) * number:
+                return "confirmed_peak_refused", True
+            document["peak"] = number
+            return "confirmed", True
 
         return self._change(change)
 
@@ -318,13 +363,28 @@ class Rails:
             active = bool(document.get("alert_active", False))
             if not active and dd >= self.settings.rails.alert_dd:
                 document["alert_active"] = True
+                document["alert_told"] = False
                 return dd, True
             if active and dd < self.settings.rails.alert_dd - 0.05:
                 document["alert_active"] = False
+                document.pop("alert_told", None)
                 return None, True
             return None, False
 
         return self._change(change)
+
+    def alert_pending(self) -> bool:
+        document = self._read()
+        return bool(document.get("alert_active") and not document.get("alert_told", False))
+
+    def mark_alert_told(self) -> None:
+        def change(document):
+            if not document.get("alert_active") or document.get("alert_told", False):
+                return None, False
+            document["alert_told"] = True
+            return None, True
+
+        self._change(change)
 
     def check_floor(self, reading) -> str:
         def change(document):
@@ -375,10 +435,12 @@ class Rails:
         flag = bool(flag)
 
         def change(document):
+            if flag and document.get("floor_state") != "HALT":
+                return False, False
             if bool(document.get("liquidating", False)) == flag:
-                return None, False
+                return True, False
             document["liquidating"] = flag
-            return None, True
+            return True, True
 
         return self._change(change)
 
@@ -433,14 +495,14 @@ class Rails:
         return self._read()
 
 
-def reduce_only(decision: Decision) -> Decision:
+def reduce_only(decision: Decision, doubt=False) -> Decision:
     if decision.status != READY:
         return decision
     core_new = min(decision.core_new, decision.core_held)
     ovl_new = min(decision.ovl_new, decision.ovl_held)
     total_new = core_new + ovl_new
-    core_trade = abs(core_new - decision.core_held) > 1e-12
-    trade = core_trade or abs(ovl_new - decision.ovl_held) > 1e-12
+    core_trade = decision.core_trade and abs(core_new - decision.core_held) > 1e-12
+    trade = decision.trade and (core_trade or abs(ovl_new - decision.ovl_held) > 1e-12)
     fraction = ovl_new / total_new if total_new != 0.0 else 0.0
     changed = core_new != decision.core_new or ovl_new != decision.ovl_new
     keys = decision.reason_keys
@@ -448,8 +510,9 @@ def reduce_only(decision: Decision) -> Decision:
         if ovl_new <= 1e-12:
             # The extra buy was suppressed: the owner must not read that it was made.
             keys = tuple(key for key in keys if key != "OVERLAY_ENTER")
-        if "BREAKER_REDUCE_ONLY" not in keys:
-            keys = keys + ("BREAKER_REDUCE_ONLY",)
+        key = "DOUBT_REDUCE_ONLY" if doubt else "BREAKER_REDUCE_ONLY"
+        if key not in keys:
+            keys = keys + (key,)
     return replace(
         decision,
         core_new=core_new,

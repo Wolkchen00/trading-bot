@@ -1,7 +1,7 @@
 # RF6-DEVIR.md , v5 "Yenileme" devir notu
 
-> İlk yazım: 16 Kasım 2026 09:45 PT. Son güncelleme: 20 Kasım 2026 14:00 PT (R5e ve dördüncü kurulum sonrası).
-> Okuma sırası: önce bu belge, sonra `RF6-DEVAM.md` (kurulum kayıtları), `RF-PLAN-6.md` (Revizyon 14), gerekirse
+> İlk yazım: 16 Kasım 2026 09:45 PT. Son güncelleme: 25 Kasım 2026 08:45 PT (gerçek emir gönderme AÇILDIKTAN sonra).
+> Okuma sırası: önce bu belge, sonra `RF6-DEVAM.md` (kurulum kayıtları), `RF-PLAN-6.md` (Revizyon 16), gerekirse
 > `RF6-VTO.md`, `RF6-PROBE.md`.
 > Bu belge emir listesi değildir. Niyeti ve kanıtı aktarır. Daha iyi bir yol görürsen onu seç,
 > yalnız DEĞİŞMEZLER bölümüne dokunma.
@@ -22,7 +22,9 @@ tipik yıl yaklaşık 60-75 dolar artı, kötü yılda derin düşüş olağand�
    ters fon yok. Felaket tabanı zirvenin %60 altı (zirve 491,08 dolar, taban 196 dolar), düşüş uyarısı
    %37, günlük kesici %15 (kesici satmaz, yalnız o gün alımı durdurur). VPS tam kesinti riski kabul edildi.
 2. "Doğrudan gerçek para" seçildi, ama canlı bayrağı (`LIVE_TRADING_ENABLED`) çevrilmeden HEMEN ÖNCE
-   İhsan'a bir kez daha sorulacak. Bu söz verildi. Onay olmadan canlı emir yok.
+   İhsan'a bir kez daha sorulacak. Bu söz verildi. Onay olmadan canlı emir yok. (25 Kasım 2026'da soruldu,
+   cevabı "evet ac"; bayrak o gün 16:31 UTC'de çevrildi. Bayrağı KAPATMAK da sahibin kararıdır; tek
+   istisna para kaybettiren açık bir arızadır, o zaman da hemen haber verilir.)
 3. Yaklaşık 490 dolar tek paradır. Üstüne para eklemeyi asla önerme.
 4. Gizlilik: `.env`, `master.env`, `credentials/` içeriği hiçbir yere gönderilmez ve okunmaz. Depo HERKESE
    AÇIK: fixture'lar maskeli kalır, ntfy konusu hiçbir dosyaya, loga ya da commit'e yazılmaz, anahtar asla
@@ -37,7 +39,7 @@ tipik yıl yaklaşık 60-75 dolar artı, kötü yılda derin düşüş olağand�
 8. Deploy, `main` dalına birleştirme ve canlı bayrak sahibin onayına bağlıdır. v4 konteynerlerine
    R6 adımlarına gelmeden dokunulmaz (canlı v4 kendi kendini kilitlemiş durumda, hesap %100 nakit).
 
-## DURUM (20 Kasım 2026 öğleden sonrası itibarıyla)
+## DURUM (25 Kasım 2026, gerçek emir gönderme açıldıktan sonra)
 
 ### Doğrulandı (kanıtıyla)
 
@@ -71,7 +73,8 @@ tipik yıl yaklaşık 60-75 dolar artı, kötü yılda derin düşüş olağand�
   eklendi (konu adı hostta `/root/.v5_paper_topic`, izin 600). v4 paper konteyner hala çalışıyor.
 - Sahibin ANT emri canlı hesapta bekliyor: 1 adet, kâr al ve zarar kes bacaklı GTC bracket,
   `owner-ant-20261119-1`. 20 Kas açılışında dolması beklenir. Fiyat seviyeleri bu herkese açık depoda değil,
-  Claude belleğinde (`trading-bot-stock-engine`) durur.
+  Claude belleğinde (`trading-bot-stock-engine`) durur. (Emir 20 Kasım'da doldu; hisse 24 Kasım'da sahibin
+  kendi zarar kes emriyle satıldı, aşağıya bak.)
 
 - 19 Kas akşamı KURULDU (sahip onayı: "Başlat"). Kayıt: `RF6-DEVAM.md`. Canlı konteyner KURU çalışıyor (emir
   göndermez), deneme hesabı konteyneri gerçek gibi çalışıyor. `main` iki commit aldı (`96d510b`, `7196c39`);
@@ -97,20 +100,80 @@ tipik yıl yaklaşık 60-75 dolar artı, kötü yılda derin düşüş olağand�
   boyunca yürütüldü (hiçbir mesaj ikinci kez gitmedi, ek pay tek emirle satıldı); ayrıca dört bağımsız denetçi
   geçişin kendisini inceledi: engel yok (`RF-ISSUES-6.md` madde 33). Kurulumdan sonra iki konteynerde dosya
   özetleri, kayıtlar, kalp atışı, sağlık raporu ve günlük doğrulandı; bekçi betiği hostta yenilendi.
+- 20 Kas R5f ve BEŞİNCİ KURULUM (14:30 PT): geçiş denetiminin üç küçük bulgusu ve o tur okunurken çıkan
+  dördüncüsü kapatıldı: şüphe uyarısı "güvenlik satışı yapmadım" diyor ve bot güvenlik satışı yapmışken
+  (HALT) hiç gönderilmiyor; düzeltilen kapanış mesajı özetin tarihini söylüyor; sağlık aracı mesaj dosyasını
+  okuyamasa da cevap veriyor. Codex aracı o öğleden sonra bu makinede açılır açılmaz kapandı (6 denemenin 5'i,
+  çıkış kodu 127), turu Claude yazdı; testler koddan ÖNCE sözleşmeden yazıldı ve eski kodda kaldı; taze bir okuyucu
+  farkı iki kez okudu. Commit `2cfead1`, `main` = `405d2fc`, plan Revizyon 15, 946 test (Windows ve sunucuda
+  imaj içi). `RF-ISSUES-6.md` madde 33 ve 34.
+- 21 Kas HAFTA SONU KONTROLÜ ve KÜÇÜK OPERATÖR ADIMI (15:45 PT): iki konteyner kurulumdan beri kesintisiz
+  çalışıyor, kodları yayınlanan ağaçla aynı (özetle karşılaştırıldı), bekçi sessiz, hiçbir mesaj gitmedi.
+  Bulunan: R5d'nin 20 Kasım için yazdığı kapanış satırları aracının RESMİ kapanışıyla aynı değil (deneme
+  61.900,58 yerine 61.825,47; gerçek hesapta bir doların küçük bir kesri). Güvenlik kuralları etkilenmiyordu
+  ama pazartesi özeti "bugünkü değişim"i eski satıra göre ölçecek ve hiç oynamayan hesap için "arttı"
+  ya da "azaldı" diyecekti. Çözüm: iki satıra yalnız `"provisional": true` işareti kondu (R5e'nin kendi
+  satırlarına verdiği biçim); motor pazartesi ilk fren adımında satırı aracının değeriyle kendisi
+  değiştirecek. Deneme hesabının zirvesi olağan komutla resmi kapanışa çekildi. Önce gerçek kayıtların
+  kopyasında prova (28 durum), sonra üç bağımsız denetçi (engel yok), sonra uygulama ve geri okuma.
+  Yedekler sunucuda (konteyner dışında). Geri alma yolu ve bütün ayrıntı `RF6-DEVAM.md` 21 Kasım bölümünde,
+  `RF-ISSUES-6.md` madde 35.
+
+- 23 Kas YENİ KODUN (R5e + R5f) İLK SEANSI TEMİZ. Sabah, ilk fren adımında (14:30:05 UTC) motor 20 Kasım
+  satırlarını aracının resmi kapanışıyla KENDİSİ onayladı: işaret kalktı, deneme satırı aracının değeri
+  (61825.4749575993), zirveler aynı, hiçbir mesaj gitmedi. 15:50 ET'de iki bot aynı kararı verdi (eğilim
+  aşağı, ikinci düşüş yok): deneme botu 20 Kasım'da aldığı ek payı TEK emirle sattı (499,318566932 pay, dolum
+  49,10; alışı 41,31 idi), gerçek hesap emir göndermedi (`NO_TRADE`, kuru; aracıda botun emri yok). İki özet
+  ilk denemede gitti. Kararların her alanı kayıtlı girdilerden, özetlerin her rakamı kayıtlardan yeniden
+  hesaplandı: hepsi tutuyor ve "Bugün ..." cümlesi ONAYLANMIŞ satırlara göre ölçülmüş. Pazartesi satırları
+  "provisional" yazıldı, zirveler değişmedi, fren ve taban temiz. Günlüklerde yalnız üç olağan satır, bekçi
+  hiç konuşmadı. Gerçek hesapta 1 Kasım'dan beri botun kimliğini taşıyan tek emir yok (aracıdan okundu).
+  Üç bağımsız denetçi kanıtın kopyasını koda karşı okudu (kayıt dosyaları, rakamlar ve cümleler, aracı
+  kayıtları ve önümüzdeki günler): ENGEL YOK. Buldukları bir ifade kusuru (`RF-ISSUES-6.md` madde 36) ve bir
+  gözlem listesi (madde 37). Kayıt: `RF6-DEVAM.md`, 23 Kasım'ın iki bölümü.
+
+- 24 Kas SABAHI: motor pazartesi satırlarını ilk fren adımında aracının kapanışıyla onayladı. Deneme
+  hesabında zirve İLK KEZ kendiliğinden yükseldi (65769.57; pazartesi satışının 0,52 dolarlık düzenleyici
+  ücreti gece işlendiği için 65770.09 değil; `peak_source` ve `peak_time` eski elle ayarı gösteriyor, bu
+  olağan). Gerçek hesapta zirve 491,08 kaldı. Hiçbir mesaj gitmedi.
+- 24 Kas SAHİBİN HİSSESİ SATILDI: sahibin kendi zarar kes emri 14:38 UTC'de çalıştı, aracı öbür çıkış emrini
+  iptal etti. Bu botun emri değil. Motor sessiz kaldı (yazı yok, mesaj yok, hazırlık durumu temiz). Gerçek
+  hesap yeniden tamamı nakit; botun payı artık hesabın tamamı. `V5_OWNER_SYMBOLS` olduğu gibi kalabilir.
+  Hisse takibi bitti. Rakamlar Claude belleğinde.
+- 25 Kas SABAHI: salı satırları ilk fren adımında onaylandı, zirveler aynı, mesaj yok. Sahip yazdı: durumu
+  kontrol et, düzeltilecekleri düzelt, gerçek paraya aç.
+- 25 Kas GERÇEK EMİR GÖNDERME AÇILDI (16:31 UTC, seans içinde, karar penceresinden 4 saat 19 dakika önce).
+  Önce gerçek kayıtların kopyasında on senaryoluk prova, üç bağımsız denetçi (engel yok; prosedür için
+  istenen altı düzeltme yapıldı), betiğin sahte sunucuda seksenden çok hata durumuyla sınanması, sahibe
+  HEMEN ÖNCE son soru (cevap: "evet ac"). Bayrak ortam deposunda, host `.env` içinde ve çalışan canlı
+  konteynerde; YALNIZ canlı konteyner aynı imajla yeniden oluşturuldu; bayrak dışındaki ortamı, komutu ve
+  bağları aynı; deneme konteynerine dokunulmadı. Yeni süreç: `session`, durum listesi boş, emirler açık,
+  sağlık 0; hiçbir mesaj gitmedi, ray dosyası aynı. Aracı: gerçek hesap tamamı nakit, emir yok. Kayıt:
+  `RF6-DEVAM.md` 25 Kasım bölümleri, `RF-ISSUES-6.md` madde 38, kılavuz bölüm 7.
+- 25 Kas R5g YAZILDI (madde 36, plan Revizyon 16): sahibe giden on bir cümle artık "yarın / dünkü / bir gün
+  daha" demiyor, işlem gününü söylüyor. Codex o sabah kapalıydı, taze bir Claude yardımcısı sözleşmeden
+  yazdı; denetçi paketleri inşadan önce yeni cümlelere çekildi; 964 test (Windows); taze okuyucu ve (kotası
+  dönünce) Codex okudu. Commit `4156448` + `df2ee2a`. HENÜZ KURULMADI: sunucuda `405d2fc` (R5f) çalışıyor.
 
 ### Borç (yapılmadı ya da doğrulanmadı)
 
-- R5e HENÜZ GERÇEK BİR SEANS GÖRMEDİ. İlk seansı 23 Kasım Pazartesi: açılıştan sonra (20 Kasım satırları
-  değişmemeli, uyarı olmamalı), 15:50 ET kararı (deneme botu 20 Kasım'da aldığı ek payı kurala göre satmalı ya
-  da tutmalı), iki özet; salı sabahı pazartesi satırlarının aracının kapanış değeriyle onaylanması.
-- R5f (üç küçük iş, `rf6/fix-r5f.md`, `RF-ISSUES-6.md` madde 33): şüphe uyarısı "güvenlik satışı" diyecek,
-  düzeltilen kapanış mesajı özetin tarihini söyleyecek, sağlık aracı mesaj dosyasını okuyamasa da cevap
-  verecek. Codex yazar, Claude denetler, sonra beşinci kurulum (yükseltme sırası
-  `RF6-CALISMA-KILAVUZU.md` bölüm 7'de).
-- Bildirim kanalının adı gerçek paradan ÖNCE yenilenecek; sahip önce telefonunda yeni kanala abone olmalı
-  (ayrıntı Claude belleğinde, bu depoya yazılmaz).
-- Canlıya geçiş: sahibe 20 Kasım'da SORULDU (söz verilmişti), cevabı bekleniyor. Öneri: R5e pazartesi seansını
-  temiz geçsin, kanal adı yenilensin, sonra `LIVE_TRADING_ENABLED=true`. Cevap gelmeden bayrağa dokunulmaz.
+- Bu hafta takvimin iki özel günü sunucuda ilk kez yaşanacak: perşembe 26 Kasım kapalı, cuma 27 Kasım yarım
+  gün (kapanış 13:00 ET, karar 12:50 ET). Cuma sabahı aracının son kapanış için hangi günü adlandırdığına
+  bak (26'sını adlandırırsa çarşamba satırı onaylanmaz; güvenli ama bilinmeli). Cuma akşamı karar kaydında
+  gün içi aralığın kapsamına bak.
+- R5g'nin KURULUMU: kod ve testler hazır (yukarıda), sunucuya alınmadı. Seans DIŞINDA, kılavuz bölüm 7
+  sırasıyla (kopya üstünde prova, imaj içi test, yayın taraması, bekleyen mesaj yok, on dakikalık işaretin
+  hemen ardı). Kurulumdan sonra canlı motorda emirlerin AÇIK kaldığını doğrula (bayrak depoda durmalı).
+  Kurulana dek özetler eski cümleleri kullanır: "yarın" bir sonraki işlem günü demektir.
+- İlk gerçek emir: bayrak açıldıktan sonraki ilk alım ya da satım, gerçek hesapta emir çağrılarının İLK
+  kez çalıştığı andır (okuma çağrıları altı gündür çalışıyor). İzle: kayıt, emir, dolum, özet, aracı.
+- Codex 25 Kasım 16:03 UTC'den beri yeniden çalışıyor (20 Kasım'da açılır açılmaz kapanmış, sonra haftalık
+  sınırı dolmuştu). Kod işini o yazar, Claude denetler; her kod işinden önce küçük bir denemeyle sına;
+  çalışmıyorsa sahibin kuralı geçerli: Claude devralır, testi koddan önce sözleşmeden yazar ve farkı taze bir
+  okuyucuya okutur.
+- Bildirim kanalı konusu sahip tarafından ertelendi; ayrıntı operatörün özel notlarında.
+- Canlıya geçişin ardından açık kalan notlar `RF-ISSUES-6.md` madde 38'de (bekçinin ağır durumları
+  bildirmemesi, fren gününde özetin son satırı, emir reddinin kayıttaki kısa biçimi).
 - Sahibin geliştirme listesinden seçimi bekleniyor (sunucu dışı ikinci bekçi, boşta nakde faiz, anahtar
   yenileme, bölünme koruması, günlük karşılaştırma, sunucu dışı yedek).
 - Kabul edilen sınırlar: `RF-ISSUES-6.md` madde 26 ve plan Revizyon 14'ün "accepted limits" listesi.
@@ -132,29 +195,61 @@ tatbikat -> ilk paper kararını izle -> Codex tüm ağaç denetimi -> sahibe so
   destekli ama sınırı gevşeten de benim.
 - Sahibin hissesi için alım, kâr al ve zarar kes seviyelerini ben seçtim. Sahip yalnız "1 hisse,
   yarın açılışta, takibini sen yap, kârımızı koyalım" dedi.
-- Raylar bütün hesabı izliyor (ANT dahil). ANT sert düşerse günlük kesici o gün botun alımını durdurabilir.
+- Raylar bütün hesabı izliyor (sahibin kendi hissesi varsa o da dahil). Öyle bir hisse sert düşerse günlük
+  kesici o gün botun alımını durdurabilir. (24 Kasım'dan beri hesapta sahibin hissesi yok.)
 - Kesicinin taban çapraz kontrolü (%2) yarım günlerde ve para giriş çıkışında yanlış "veri şüphesi" verebilir.
 - Kapanıştan sonra hesap okunamazsa günlük özet geç gelir ya da o gün hiç gelmez.
 - Deneme hesabının mesajları artık sahibin telefonuna düşmüyor (ayrı konu). O konuyu yalnız Claude okur;
   oturum açılmazsa deneme hesabındaki bir sorun fark edilmeyebilir (bekçi yalnız sürecin canlılığını izler).
-- R5e büyük bir tur (33 + 9 + 5 madde) ve sunucuda henüz bir seans geçirmedi. Prova gerçek kayıtlarla yapıldı ama
-  aracı sahteydi: gerçek aracının pazartesi sabahı döndüreceği değerler (kapanış değeri, tarih alanı) provadakinden
-  farklı davranabilir. Pazartesi kontrolü bu yüzden canlı bayraktan ÖNCE şart.
-- R5d'nin 20 Kasım için yazdığı kapanış satırı "kesin" sayılıyor (R5e yalnız kendi yazdığı satırları ertesi gün
-  aracının değeriyle onaylar). Deneme hesabının zirvesi o satırla 61.900,58'e çıktı; aracının resmi kapanışı
-  birkaç dolar farklı olabilir. Etkisi yok denecek kadar küçük, ama bilinen bir geçiş izi.
+- R5f'yi yazan da denetleyen de bendim (Codex çalışmadı). Taze okuyucu bir açık buldu ve o kapatıldı; yine de
+  bu turun ikinci gözü öncekiler kadar bağımsız değildi.
+- R5e büyük bir tur (33 + 9 + 5 madde). 23 Kasım'da sunucuda ilk seansını gerçek aracının cevaplarıyla temiz
+  geçirdi, ama bir seans her yolu denemez. Görülenler: kapanış satırının onayı (eşit değer ve küçük fark), ek
+  payın satışı, kuru "işlem yok" günü, iki özet, zirvenin kendiliğinden yükselmesi (24 Kasım). Sunucuda
+  henüz GÖRÜLMEYENLER: ana pay alımı (eğilim yukarı dönünce), günlük fren, taban, uyarı, düzeltme mesajı,
+  kısa gün (27 Kasım), gerçek hesapta gerçek emir (bayrak 25 Kasım'da açıldı, ilk emir kuralın ilk işlem
+  gününde gider).
+- Canlı geçişi planlayan da uygulayan da bendim. Üç bağımsız denetçi ve betiğin sahte sunucudaki sınaması
+  hatalarımı yakaladı (betiğin "doğrulandı" demesi için yeterli olmayan ilk kalp atışı gibi), ama onların
+  sahte araçları gerçek sunucunun birer modeliydi. Gerçekte görülen: bir kez, sorunsuz.
+- Bayrağı seans İÇİNDE çevirdim; 23 Kasım notumda "seans dışında" yazıyordu. Gerekçe prova ile değişti
+  (`RF6-DEVAM.md` 25 Kasım): gün içi geçişte o günün kuru kaydı yok ve ilk gerçek karar olağan bir günde,
+  ben izlerken veriliyor. Bedeli: ilk gerçek alım sert düşüş gününe ve tatil öncesine denk gelebilir
+  (sahibe son soruda söylendi).
+- R5g'yi Codex yerine taze bir Claude yardımcısı yazdı (Codex o saatte kapalıydı), denetleyen bendim. Değişiklik
+  yalnız cümle; Codex sonradan salt okuma ile baktı. Yine de "işlem günü" sözünün sahibe sade gelip
+  gelmediğini sahibin kendisi söyler.
+- R5d'nin 20 Kasım satırları için "etkisi yok denecek kadar küçük" demiştim; yanılmışım: fark pazartesi
+  özetinde olmamış bir değişimi söyletecekti. 21 Kasım'da ölçüldü ve satırlar işaretlenerek kapatıldı
+  (yukarıda). Ders: "küçük" dediğim bir izi sayıyla ölçmeden kapatma.
+- 21 Kasım adımını planlayan da uygulayan da bendim. Sonucu 23 Kasım sabahı gerçek aracının cevabıyla
+  görüldü: provadaki gibi. O adımdan geri alınacak bir şey kalmadı.
+- 23 Kasım akşamının kontrolünü yapan da bendim; kanıtın kopyasını üç bağımsız denetçi ayrıca okudu
+  (`RF6-DEVAM.md`). Yine de "temiz" sözü yalnız o gün yaşanan yollar için geçerli.
 
 ## SIRADAKİ SOMUT ADIM
 
-1. `git -C trading status` ve `git log --oneline -8` ile durumu doğrula. Kanıt komutunu koş (R5e ağacında 937
-   geçmeli; R5f bittiyse daha fazla).
-2. Sahibin ANT hissesine bak: fiyat nerede, iki çıkış emri yerinde mi
-   (`C:\Users\ihsan\trading_lab_v5\scripts\ant_durum2.py <depo>`, salt okuma). Kârdaysa zarar kes seviyesini
+1. `git -C trading status` ve `git log --oneline -8` ile durumu doğrula. Kanıt komutunu koş (964 geçmeli;
+   sunucuda R5g kurulana dek 946 testlik `405d2fc` çalışır).
+2. Sahibin ANT hissesi 24 Kasım'da kendi zarar kes emriyle satıldı; takip edilecek hisse kalmadı. Sahip
+   yeniden kendi adına bir hisse alırsa kural aynı: her oturumda bak
+   (`C:\Users\ihsan\trading_lab_v5\scripts\ant_durum2.py <depo>`, salt okuma), kardaysa zarar kes seviyesini
    alışın üstüne çekmeyi ÖNER (kendiliğinden değiştirme).
 3. Sunucuda iki konteynerin son seansına bak (`RF6-DEVAM.md` içindeki "first decision day" bölümü örnek:
    karar kaydı, emir, dolum, özet metni, raylar, günlük, bekçi). Sonucu `RF6-DEVAM.md` dosyasına yaz.
-4. R5f bitmediyse bitir ve kur. Canlı bayraktan önce: R5e en az bir seansı temiz geçmiş olmalı, bildirim kanalı
-   yenilenmiş olmalı, sahip AÇIKÇA onay vermiş olmalı.
+   Her sabah ilk bakışta önce iki ray dosyasında bir önceki seansın satırına bak: işaret kalkmış ve değer
+   aracının resmi kapanışı olmalı. Akşam iki özetin "Bugün ..." cümlesini bu satıra göre hesapla. Salt okuma
+   araçları: lab `scripts\sunucu_bak.sh` (sunucuya dosya bırakmaz), `scripts\piyasa_bak.py`,
+   `scripts\last_equity_olcumu2.py`.
+4. GERÇEK EMİR GÖNDERME 25 Kasım 2026 16:31 UTC'den beri AÇIK. Her oturumda önce canlı konteynere bak:
+   `orders_enabled true`, sağlık 0, durum listesi boş; sonra aracıdaki pozisyonu ve nakdi botun kaydıyla
+   karşılaştır (salt okuma: lab `scripts\canli_emirler.py <depo> <gün>`). Bot bir emir gönderdiyse kaydın
+   `intents` listesini, dolumu ve özet metnini oku. Kendiliğinden satış, emir iptali ya da bayrağı kapatma
+   YOK: bunlar sahibin kararı (tek istisna para kaybettiren açık bir arıza; geri alma betiği lab
+   `rf6\canli_gecis_20261125\`, satış yapmaz). Canlı konteyner karar penceresinde ve günün özeti gidene
+   kadar yeniden başlatılmaz.
+5. R5g'yi seans dışında kur (`RF6-CALISMA-KILAVUZU.md` bölüm 7; önce iki konteynerde bekleyen mesaj
+   olmadığına bak). Kurulumdan sonra canlı motorda emirlerin açık kaldığını doğrula.
 
 ## DOSYA HARİTASI
 

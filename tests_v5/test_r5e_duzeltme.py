@@ -779,7 +779,7 @@ def test_i6_a_reassigned_overlay_is_never_called_an_extra_purchase(tmp_path):
     assert sim.submits() == []
     sim.run_day(D2, runner)
     assert all("ek alımı" not in digest for digest in sim.digests())
-    assert "Dünkü düşüş için tuttuğum ek payı sattım." in sim.digests()[1]
+    assert "Düşüş için tuttuğum ek payı sattım." in sim.digests()[1]
 
 
 def test_i9_capped_fills_and_idle_days_are_told_truthfully(tmp_path):

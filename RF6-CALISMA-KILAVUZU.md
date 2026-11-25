@@ -10,7 +10,7 @@
 
 | hizmet | hesap | durum klasörü | emir gönderir mi |
 |---|---|---|---|
-| `trading-live` | gerçek | `/app/state_live/v5` | yalnız `LIVE_TRADING_ENABLED=true` iken; yoksa kuru çalışma |
+| `trading-live` | gerçek | `/app/state_live/v5` | yalnız `LIVE_TRADING_ENABLED=true` iken; yoksa kuru çalışma. 25 Kasım 2026 16:31 UTC'den beri AÇIK |
 | `trading-paper-livecfg` | deneme | `/app/state_paper/v5` | evet |
 
 Bot günde bir kez, kapanıştan 10 dakika önce karar verir (olağan gün 15:50 ET, 12:50 PT). Kapanıştan 1 ile 5
@@ -118,7 +118,9 @@ Sahip başka bir hisse alırsa sembolü bu değişkene ekle ve konteyneri yenide
    kanal adı, adres ve sahibin emir seviyeleri için tara (seviyelerden türeyen sayılar da sayılır: nakit ile
    alım gücü arasındaki fark gibi).
 3. Kurulumu bekçinin on dakikalık turundan HEMEN SONRA başlat (kurulum yaklaşık 80 saniye sürer). Tur tam o
-   boşluğa denk gelirse sahibe bir kez "bot çalışmıyor" mesajı gider.
+   boşluğa denk gelirse sahibe bir kez "bot çalışmıyor" mesajı gider. Başlamadan önce iki konteynerde
+   bekleyen sahip mesajı olmadığına bak (`python -m v5.health --json` içinde `outbox_oldest_minutes` boş
+   olmalı): bekleyen bir mesaj, yazıldığı sürümün cümleleriyle gider (`RF-ISSUES-6.md` madde 36).
 4. Kurulumdan sonra iki konteynerde: değişen dosyaların özeti yayınlanan ağaçla aynı mı, kayıt dosyalarının
    değişme zamanı aynı kaldı mı (zirve, kapanış satırları, ek pay, `started_at`), kalp atışı taze mi,
    `python -m v5.health --json` ne diyor (deneme 0; canlı kuru çalışırken 1 ve `DRY_RUN`, bu beklenen durumdur),
@@ -126,11 +128,41 @@ Sahip başka bir hisse alırsa sembolü bu değişkene ekle ve konteyneri yenide
 5. Bekçi betiğini imajdan hosta kopyala, özetini depodakiyle karşılaştır, `sh -n` ile sına, eskisini yanında
    bırak, bir kez elle koş (sessiz kalmalı, günlük ve sayaç dosyası oluşmamalı).
 6. Sunucudaki geçici imajı, klasörü ve kayıt kopyasını sil.
+7. Yükseltmeden sonraki İLK SEANSTAN ÖNCE, eski sürümün yazdığı son kapanış satırını aracının resmi
+   kapanışıyla karşılaştır (hesabın `last_equity` değeri, `balance_asof` o günü adlandırdıktan sonra; ya da
+   günlük portföy geçmişi). Yeni sürüm bir kayıt alanına yeni anlam verdiyse eski satırlar bu anlamı
+   taşımaz: 21 Kasım'da R5d'nin işaretsiz kapanış satırı hiç onaylanmayacaktı ve ertesi günün özeti günlük
+   değişimi ona göre ölçecekti (`RF-ISSUES-6.md` madde 35).
+
+Ray dosyasına elle dokunma kuralı: `rails.json` üstüne dosya KOPYALANMAZ (okuyanlar kilit almaz, yarım
+dosya görebilirler). Değişiklik motorun kendi kilitli, doğrulamalı, tek hamlelik yazımıyla yapılır (`python
+-m v5.ops ...` komutları, ya da 21 Kasım'daki gibi `Rails._change` kullanan küçük bir betik); önce yedek
+alınır, betik önce yalnız bakar, hangi hesabı ve hangi değeri beklediğini söyler, geri alma yolu da aynı
+kilitten geçer.
+
+Canlı bayrak 25 Kasım 2026'da böyle çevrildi (6. adım; kayıt `RF6-DEVAM.md`, betikler operatörün özel
+klasöründe, çünkü sunucunun yollarını adlandırırlar):
+1. Önce kanıt: gerçek hesabın kayıt klasörünün kopyası üstünde, bayrak farklı anlarda açılarak prova; sonra
+   bağımsız denetçiler; sonra betiğin kendisi sahte bir sunucuda hata durumlarıyla.
+2. Betik önce yalnız bakar (hiçbir şeyi değiştirmeyen kipi vardır): tek canlı konteyner, beklenen imaj, seans
+   günü ve saat, çalışan bir kurulum yok, dosyada ve depoda bayrak yok, çalışan konteynerin ortamı dosyaların
+   vereceği ortamla AYNI (yalnız adlar yazdırılır), motor düz kuru durumda ve `session` evresinde.
+3. Sıra: ortam deposu (sonraki kurulum bayrağı korusun), host `.env` (yedek, son satırın yeni satırla
+   bitmediğini unutma), bekçinin on dakikalık turundan 1 ile 6 dakika sonra YALNIZ canlı konteyner
+   `docker compose ... up -d --no-build --no-deps trading-live` ile aynı imajdan yeniden oluşturulur.
+4. Doğrulama: ortamın bayrak dışındaki özeti aynı, komut / günlük / ağ / bağlar aynı, deneme konteyneri
+   dokunulmamış, yeni sürecin `session` evresinde TAM bir turu (ilk kalp atışı tur bitmeden yazılır, o
+   sayılmaz), sağlık 0, başlangıç satırında `live_trading_enabled=True`, mesaj kuyruğa girmemiş, ray dosyası aynı.
+5. Bayrağın yönü hangi yöne olursa olsun şu anlarda DEĞİŞTİRİLMEZ: karar penceresinde, ve karar bitiminden
+   (kapanıştan 4 dakika önce) günün özeti gidene kadar. O arada öbür ayarla başlayan süreç gün için kendi
+   türünden kayıt bulamaz ve "karar saatini kaçırdım" der (`RF-ISSUES-6.md` madde 38).
 
 Geri alma: bayrağı İKİ yerden de kaldır (Coolify ortam deposu ve host `.env`; biri kalırsa sonraki deploy
 bayrağı geri getirir) ve konteyneri yeniden oluştur; `pause`; açık emir varsa iptal et. Pozisyon sahibin kararı
 olmadan satılmaz. Bayrak kapalıyken taban aşılırsa bot satamaz, ama "DENEME, gerçek emir gönderilmedi." etiketiyle
-her gün haber verir.
+her gün haber verir. Bayrak kapalıyken elde fon varsa kuru süreç onu SATMAZ, yalnız ne yapacağını söyler;
+bayrak yeniden açılınca kural kaldığı yerden satar (25 Kasım provasında görüldü). Geri alma yalnız sahibin
+sözüyle ya da para kaybettiren açık bir arızada yapılır.
 
 ## 8. Testler
 

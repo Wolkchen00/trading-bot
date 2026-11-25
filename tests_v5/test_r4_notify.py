@@ -22,14 +22,14 @@ NOW = datetime(2026, 11, 16, 21, tzinfo=timezone.utc)
 
 EXPECTED_TEMPLATES = {
     "DRAWDOWN_ALERT": "Hesap en yüksek değerinden yüzde 37,1 aşağıda, şu an 512,30 dolar. Bu risk seviyesinde geçmişte görülen en derin düşüşe geldik. Kurala göre çalışmaya devam ediyorum. Durdurmak istersen Claude'a 'botu durdur' yaz.",
-    "BREAKER": "Hesap bugün yüzde 15,0 düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum.",
+    "BREAKER": "Hesap bugün yüzde 15,0 düştü. Bugün yeni alım yapmıyorum. Sonraki işlem gününde normal çalışmaya dönerim. Senden bir şey beklemiyorum.",
     "FLOOR_DONE": "Hesap en yüksek değerinden yüzde 60,0 düştü, şu an 196,00 dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz.",
     "FLOOR_PENDING": "Hesap en yüksek değerinden yüzde 60,0 düştü, şu an 196,00 dolar. Satışa başladım ama henüz bitmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Denemeye devam ediyorum.",
     "RAIL_LIQUIDATING": "Güvenlik satışı hala bitmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
-    "HOLD_NOT_READY": "Bugün karar veremedim, çünkü fiyat bilgisine ulaşamadım. Elimdekilere dokunmadım. Yarın yeniden denerim.",
-    "MISSED": "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim.",
+    "HOLD_NOT_READY": "Bugün karar veremedim, çünkü fiyat bilgisine ulaşamadım. Elimdekilere dokunmadım. Sonraki işlem gününde yeniden denerim.",
+    "MISSED": "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Sonraki işlem gününde normal devam ederim.",
     "ORDER_FAILED": "Alpaca emrimi kabul etmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Claude'a 'trading botuna bak' yazarsan sebebini inceler.",
-    "ORDER_PARTIAL": "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Yarın duruma yeniden bakarım.",
+    "ORDER_PARTIAL": "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde 9 Nasdaq fonu var. Sonraki işlem gününde duruma yeniden bakarım.",
     "UNRESOLVED": "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler.",
     "FOREIGN_ASSET": "Hesapta benim almadığım bir varlık ya da emir var (XYZ). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver.",
     "DATA_DOUBT": "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye güvenlik satışı yapmadım, izlemeye devam ediyorum.",

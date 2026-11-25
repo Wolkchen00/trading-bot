@@ -427,7 +427,7 @@ ALERTS = {
     "DRAWDOWN_ALERT": (dict(pct=0.371, equity=309.38),
                        "Hesap en yüksek değerinden yüzde 37,1 aşağıda, şu an 309,38 dolar. Bu risk seviyesinde geçmişte görülen en derin düşüşe geldik. Kurala göre çalışmaya devam ediyorum. Durdurmak istersen Claude'a 'botu durdur' yaz."),
     "BREAKER": (dict(pct=0.152),
-                "Hesap bugün yüzde 15,2 düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum."),
+                "Hesap bugün yüzde 15,2 düştü. Bugün yeni alım yapmıyorum. Sonraki işlem gününde normal çalışmaya dönerim. Senden bir şey beklemiyorum."),
     "FLOOR_DONE": (dict(pct=0.603, equity=195.1),
                    "Hesap en yüksek değerinden yüzde 60,3 düştü, şu an 195,10 dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."),
     "FLOOR_FLAT": (dict(pct=0.603, equity=195.1),
@@ -441,12 +441,12 @@ ALERTS = {
     "RAIL_LIQUIDATING": (dict(product_pct=0.12),
                          "Güvenlik satışı hala bitmedi. Şu an elimde yüzde 12 Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler."),
     "HOLD_NOT_READY": (dict(cause="fiyat bilgisine ulaşamadım"),
-                       "Bugün karar veremedim, çünkü fiyat bilgisine ulaşamadım. Elimdekilere dokunmadım. Yarın yeniden denerim."),
-    "MISSED": ({}, "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim."),
+                       "Bugün karar veremedim, çünkü fiyat bilgisine ulaşamadım. Elimdekilere dokunmadım. Sonraki işlem gününde yeniden denerim."),
+    "MISSED": ({}, "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Sonraki işlem gününde normal devam ederim."),
     "ORDER_FAILED": (dict(product_pct=0.3),
                      "Alpaca emrimi kabul etmedi. Şu an elimde yüzde 30 Nasdaq fonu var. Claude'a 'trading botuna bak' yazarsan sebebini inceler."),
     "ORDER_PARTIAL": (dict(product_pct=0.3),
-                      "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde 30 Nasdaq fonu var. Yarın duruma yeniden bakarım."),
+                      "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde 30 Nasdaq fonu var. Sonraki işlem gününde duruma yeniden bakarım."),
     "UNRESOLVED": ({}, "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler."),
     "FOREIGN_ASSET": (dict(symbol="SPY"),
                       "Hesapta benim almadığım bir varlık ya da emir var (SPY). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver."),
@@ -463,9 +463,9 @@ ALERTS = {
     "CAPPED_IDLE": ({}, "Hedefin tamamı için boş nakit yok."),
     "TEST": ({}, "Deneme bildirimi: bu mesajı görüyorsan bildirimler çalışıyor."),
     "ORDER_UNFILLED": (dict(product_pct=0.3),
-                       "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde 30 Nasdaq fonu var. Yarın yeniden karar veririm."),
+                       "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde 30 Nasdaq fonu var. Sonraki işlem gününde yeniden karar veririm."),
     "NOT_SENT": (dict(cause="Alpaca'ya bağlanamadım"),
-                 "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü Alpaca'ya bağlanamadım. Elimdekilere dokunmadım. Yarın yeniden karar veririm."),
+                 "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü Alpaca'ya bağlanamadım. Elimdekilere dokunmadım. Sonraki işlem gününde yeniden karar veririm."),
 }
 
 
@@ -497,11 +497,11 @@ def test_reason_and_cause_sentences_are_exact():
         "VOL_HIGH": "Piyasa çok oynak, bu yüzden payı küçük tutuyorum.",
         "VOL_CALM": "Piyasa sakin.",
         "BAND_HOLD": "Ana pay hedefe yeterince yakın.",
-        "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım.",
-        "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum.",
-        "OVERLAY_WOULD": "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım.",
-        "OVERLAY_KEEP": "Düşüş sürdü, ek payı bir gün daha tutuyorum.",
-        "OVERLAY_EXIT": "Dünkü düşüş için tuttuğum ek payı sattım.",
+        "OVERLAY_ENTER": "Bugün sert bir düşüş oldu, sonraki işlem günü için küçük bir ek alım yaptım.",
+        "OVERLAY_HELD": "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını sonraki işlem gününe kadar tutuyorum.",
+        "OVERLAY_WOULD": "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı sonraki işlem günü için küçük bir ek alım yapardım.",
+        "OVERLAY_KEEP": "Düşüş sürdü, ek payı bir işlem günü daha tutuyorum.",
+        "OVERLAY_EXIT": "Düşüş için tuttuğum ek payı sattım.",
         "OVERLAY_DATA_MISSING": "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım.",
         "BREAKER_REDUCE_ONLY": "Bugün sert düşüş olduğu için yeni alım yapmadım.",
         "DOUBT_REDUCE_ONLY": "Hesap değerini doğrulayamadığım için bugün yeni alım yapmadım.",
@@ -580,7 +580,7 @@ def test_digest_is_exact_in_every_variant():
     for none in (None, [], ["NOT_A_KEY"]):
         assert digest(reason_keys=none)[4] == "Neden: Bugün karar veremedim."
     assert digest(reason_keys=["TREND_DOWN", "NOT_A_KEY", "OVERLAY_EXIT"])[4] == \
-        "Neden: Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor. Dünkü düşüş için tuttuğum ek payı sattım."
+        "Neden: Nasdaq düşüş eğiliminde, bu yüzden ana para nakitte bekliyor. Düşüş için tuttuğum ek payı sattım."
     assert digest(month_pct=-0.02, total_pct=-0.005)[5] == "Bu ay: yüzde 2,0 ekside. Başlangıçtan beri: yüzde 0,5 ekside."
     assert digest(month_pct=0.0, total_pct=None)[5] == "Bu ay: değişim yok. Başlangıçtan beri: bilgi yok."
     assert digest(month_pct=None, total_pct=0.0004)[5] == "Bu ay: bilgi yok. Başlangıçtan beri: değişim yok."

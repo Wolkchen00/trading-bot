@@ -37,13 +37,13 @@ HOLIDAYS = {dt.date(2025, 9, 1), dt.date(2025, 11, 27), dt.date(2025, 12, 25), d
             dt.date(2027, 2, 15)}
 EARLY = {dt.date(2026, 11, 27)}
 PAUSED_TEXT = "Bot duraklatılmış durumda. Elimdekiler duruyor, yeni işlem yapmıyorum."
-MISSED_TEXT = "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim."
+MISSED_TEXT = "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Sonraki işlem gününde normal devam ederim."
 UNRESOLVED_TEXT = "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler."
 ERROR_TEXT = "Bot beklenmeyen bir sorunla karşılaştı. Claude'a 'trading botuna bak' yaz."
 
 
 def hold_text(cause):
-    return "Bugün karar veremedim, çünkü %s. Elimdekilere dokunmadım. Yarın yeniden denerim." % cause
+    return "Bugün karar veremedim, çünkü %s. Elimdekilere dokunmadım. Sonraki işlem gününde yeniden denerim." % cause
 
 
 class Clock:
@@ -387,10 +387,10 @@ def test_dip_day_adds_the_overlay_and_removes_it_the_next_day(tmp_path):
     sim.ibs[D2] = 0.0                                                                 # the price sits at the day's low
     runner = sim.run_day(D2, runner)
     assert sim.record(D2).status == ex.DONE and sim.weight() > w1 + 0.25
-    assert "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım." in sim.digests()[1].split("\n")[4]
+    assert "Bugün sert bir düşüş oldu, sonraki işlem günü için küçük bir ek alım yaptım." in sim.digests()[1].split("\n")[4]
     sim.run_day(D3, runner)                                                           # no fresh signal: it expires
     assert sim.record(D3).status == ex.DONE and abs(sim.weight() - w1) < 0.03
-    assert "Dünkü düşüş için tuttuğum ek payı sattım." in sim.digests()[2].split("\n")[4]
+    assert "Düşüş için tuttuğum ek payı sattım." in sim.digests()[2].split("\n")[4]
     assert [o.side for o in sim.orders()] == ["buy", "buy", "sell"]
     assert_only_known_sentences(sim)
 
@@ -670,7 +670,7 @@ def test_order_still_open_at_the_cancel_time(tmp_path):
     rec = sim.record(D1)
     assert rec.status == ex.PARTIAL and rec.is_final and len(sim.orders()) == 1 and sim.orders()[0].status == "canceled"
     held = vn.fmt_weight(sim.weight())
-    expected = "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde %s Nasdaq fonu var. Yarın duruma yeniden bakarım." % held
+    expected = "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde %s Nasdaq fonu var. Sonraki işlem gününde duruma yeniden bakarım." % held
     assert sim.digests()[0].split("\n")[6] == "Durum: " + expected
     assert 0.10 < sim.weight() < 0.20
     assert_only_known_sentences(sim)
@@ -714,7 +714,7 @@ def test_breaker_day_buys_nothing_but_still_sells(tmp_path):
     sim.ibs[D1] = 0.0                                                                 # the rule wants the overlay
     runner = sim.run_day(D1, runner, hook=crash)
     breaker = [t for t in sim.alerts() if t.startswith("Hesap bugün yüzde ")]
-    assert len(breaker) == 1 and breaker[0].endswith("Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum.")
+    assert len(breaker) == 1 and breaker[0].endswith("Bugün yeni alım yapmıyorum. Sonraki işlem gününde normal çalışmaya dönerim. Senden bir şey beklemiyorum.")
     assert breaker[0].startswith("Hesap bugün yüzde 18,0 düştü.")
     assert all(c[1]["side"] == "sell" for c in sim.submits())                         # never a buy today
     assert "BREAKER_TODAY" in sim.heartbeat()["states"] or sim.heartbeat()["phase"] == "after_close"

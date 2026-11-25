@@ -141,6 +141,12 @@
 > names that and not a dead engine. No owner sentence begins with a placeholder. (4) `DATA_DOUBT` is not
 > sent while the floor state is `HALT`: the safety sale has then been made or is under way, and the floor
 > messages and the status line of the summary speak for it.
+> **Revision 16** (2026-11-25) , fix round R5g, words only (`RF-ISSUES-6.md` item 36): no sentence the owner
+> reads names a calendar day relative to today. The engine works in sessions, and the session after today is
+> three days away on a Friday and two before a market holiday; on Monday 23 November the summary called the
+> fall of Friday "dünkü". Eleven sentences change (Appendix A): "yarın" becomes "sonraki işlem günü",
+> "bir gün daha" becomes "bir işlem günü daha", and the sentence about the sold extra share names no day at
+> all (the share may be sold one session after the fall or later). No number, order, key or rule changes.
 > Builder note: Codex's quota ran out on 2026-11-16 08:49 PT in the R1 fix round. From there the builder is a
 > fresh Claude agent per rock working from the same written contracts; Claude (this session) stays the
 > reviewer with its own adversarial suites; Codex reviews the whole v5 tree when its quota returns.
@@ -640,15 +646,16 @@ Reason keys returned by `decide` and their sentences:
 - `VOL_CALM`: "Piyasa sakin." (used when `target_vol / vol >= 3`)
 - `BAND_HOLD`: "Ana pay hedefe yeterince yakın." (Revision 13: it no longer says that no trade was made;
   the overlay may still trade on such a day)
-- `OVERLAY_ENTER`: "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım." (Revision 12: shown
-  only on a day with a filled buy)
+- `OVERLAY_ENTER`: "Bugün sert bir düşüş oldu, sonraki işlem günü için küçük bir ek alım yaptım." (Revision 12: shown
+  only on a day with a filled buy; Revision 16: it names the next session, not "yarın")
 - `OVERLAY_HELD` (Revision 12; replaces `OVERLAY_ENTER` in the summary when the books took the overlay without
-  a buy, for example when the core's exit and the overlay's entry cancel out): "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum."
-- `OVERLAY_WOULD` (Revision 13; a dry run on a day the rule wants the extra buy): "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı yarın için küçük bir ek alım yapardım."
-- `OVERLAY_KEEP`: "Düşüş sürdü, ek payı bir gün daha tutuyorum." (Revision 14: the extra part may have
-  come from a re-assignment, so the sentence no longer speaks of a purchase)
-- `OVERLAY_EXIT`: "Dünkü düşüş için tuttuğum ek payı sattım." (Revision 12: shown only on a day with a
-  filled sale; Revision 14: reworded for the same reason)
+  a buy, for example when the core's exit and the overlay's entry cancel out): "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını sonraki işlem gününe kadar tutuyorum." (Revision 16)
+- `OVERLAY_WOULD` (Revision 13; a dry run on a day the rule wants the extra buy): "Bugün sert bir düşüş oldu; gerçek emir açık olsaydı sonraki işlem günü için küçük bir ek alım yapardım." (Revision 16)
+- `OVERLAY_KEEP`: "Düşüş sürdü, ek payı bir işlem günü daha tutuyorum." (Revision 14: the extra part may have
+  come from a re-assignment, so the sentence no longer speaks of a purchase; Revision 16: one more SESSION)
+- `OVERLAY_EXIT`: "Düşüş için tuttuğum ek payı sattım." (Revision 12: shown only on a day with a
+  filled sale; Revision 14: reworded for the same reason; Revision 16: it names no day, the fall may be one
+  session back or more)
 - `OVERLAY_DATA_MISSING`: "Bugün gün içi fiyat aralığına ulaşamadım, bu yüzden ek alım kuralını çalıştırmadım."
 - `BREAKER_REDUCE_ONLY` (added by the rails when the breaker is active): "Bugün sert düşüş olduğu için yeni alım yapmadım."
 - `DOUBT_REDUCE_ONLY` (Revision 14; added instead when the brake's cause is a doubt about the baseline, not a fall): "Hesap değerini doğrulayamadığım için bugün yeni alım yapmadım."
@@ -696,7 +703,7 @@ Alerts and reminders (Revision 10: every alert or reminder from a paper process 
 digest; in paper mode `NTFY_TOPIC_PAPER`, when set, replaces `NTFY_TOPIC`, so the practice account does not
 write to the owner's phone):
 - `DRAWDOWN_ALERT`: "Hesap en yüksek değerinden yüzde {pct} aşağıda, şu an {equity} dolar. Bu risk seviyesinde geçmişte görülen en derin düşüşe geldik. Kurala göre çalışmaya devam ediyorum. Durdurmak istersen Claude'a 'botu durdur' yaz."
-- `BREAKER`: "Hesap bugün yüzde {pct} düştü. Bugün yeni alım yapmıyorum. Yarın normal çalışmaya dönerim. Senden bir şey beklemiyorum."
+- `BREAKER` (Revision 16: the next session, not "yarın"; the same in `HOLD_NOT_READY`, `NOT_SENT`, `MISSED`, `ORDER_UNFILLED` and `ORDER_PARTIAL` below): "Hesap bugün yüzde {pct} düştü. Bugün yeni alım yapmıyorum. Sonraki işlem gününde normal çalışmaya dönerim. Senden bir şey beklemiyorum."
 - `FLOOR_DONE` (Revision 14: it speaks of the fund only; the owner's own share is not touched): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Elimdeki Nasdaq fonunun tamamını sattım ve durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."
 - `FLOOR_FLAT` (Revision 14; the halt found no fund to sell): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Elimde Nasdaq fonu yoktu, bu yüzden satış yapmadan durdum. Devam etmemi istersen Claude'a 'botu devam ettir' yaz."
 - `FLOOR_WAITING` (Revision 14; the sale is owed but no order could be sent yet; `FLOOR_PENDING` and `RAIL_LIQUIDATING` are only used once an order of the sale was sent): "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Güvenlik satışını henüz başlatamadım, çünkü {cause}. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum."
@@ -708,18 +715,18 @@ write to the owner's phone):
 - `CLOSE_CORRECTED` (Revision 14; the broker's official close contradicts the value of the summary of that session; Revision 15: the session is named by its date, written like the summary's first line): "Gün sonu özetindeki hesap değeri yanlış okunmuş ({date}). Doğru kapanış değeri {equity} dolar."
 - `FLOOR_PENDING`: "Hesap en yüksek değerinden yüzde {pct} düştü, şu an {equity} dolar. Satışa başladım ama henüz bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum."
 - `RAIL_LIQUIDATING`: "Güvenlik satışı hala bitmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Denemeye devam ediyorum. Claude'a 'trading botuna bak' yazarsan inceler."
-- `HOLD_NOT_READY`: "Bugün karar veremedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden denerim."
+- `HOLD_NOT_READY`: "Bugün karar veremedim, çünkü {cause}. Elimdekilere dokunmadım. Sonraki işlem gününde yeniden denerim."
   `{cause}`: "fiyat bilgisine ulaşamadım" | "geçmiş fiyatlar eksik geldi" | "Alpaca'ya bağlanamadım" |
   "bugünün borsa saatlerini öğrenemedim" | "saat bilgisi tutarsız göründü" | "kayıt dosyam bozuk" |
   "hesap değerini doğrulayamadım" | (Revision 11) "hesapta benim almadığım bir varlık ya da emir var" |
   "önceki emrimin akıbeti hala belli değil" | "bot duraklatılmış durumda" |
   "güvenlik sınırı aşıldığı için durmuş durumdayım" | "bugün sert düşüş olduğu için yeni alım yapmıyorum" |
   "süre yetmedi" | (Revision 12) "emrim Alpaca'ya ulaşmadı"
-- `NOT_SENT` (Revision 11; a trade was decided but its order was never sent): "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü {cause}. Elimdekilere dokunmadım. Yarın yeniden karar veririm."
-- `MISSED`: "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim."
+- `NOT_SENT` (Revision 11; a trade was decided but its order was never sent): "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü {cause}. Elimdekilere dokunmadım. Sonraki işlem gününde yeniden karar veririm."
+- `MISSED`: "Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Sonraki işlem gününde normal devam ederim."
 - `ORDER_FAILED`: "Alpaca emrimi kabul etmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Claude'a 'trading botuna bak' yazarsan sebebini inceler."
-- `ORDER_UNFILLED` (Revision 13; the order was accepted, never filled and cancelled): "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın yeniden karar veririm."
-- `ORDER_PARTIAL`: "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Yarın duruma yeniden bakarım."
+- `ORDER_UNFILLED` (Revision 13; the order was accepted, never filled and cancelled): "Emrim gerçekleşmedi ve iptal oldu. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Sonraki işlem gününde yeniden karar veririm."
+- `ORDER_PARTIAL`: "Emrimin tamamı gerçekleşmedi. Şu an elimde yüzde {product_pct} Nasdaq fonu var. Sonraki işlem gününde duruma yeniden bakarım."
 - `UNRESOLVED`: "Son emrimin akıbetini öğrenemedim. Netleşene kadar yeni işlem yapmıyorum. Claude'a 'trading botuna bak' yazarsan inceler."
 - `FOREIGN_ASSET`: "Hesapta benim almadığım bir varlık ya da emir var ({symbol}). Karışmamak için işlem yapmıyorum. Bunu sen yaptıysan Claude'a haber ver."
 - `DATA_DOUBT` (Revision 15: it speaks of the safety sale; the rule's own sale can still happen that day; never sent while the engine is halted): "Hesap değeri tutarsız göründü. Yanlış alarm olmasın diye güvenlik satışı yapmadım, izlemeye devam ediyorum."

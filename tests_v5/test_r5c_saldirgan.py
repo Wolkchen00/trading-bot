@@ -19,9 +19,9 @@ from v5 import rails as vr
 
 FOREIGN_SPY = ("Hesapta benim almadığım bir varlık ya da emir var (SPY). Karışmamak için işlem yapmıyorum. "
                "Bunu sen yaptıysan Claude'a haber ver.")
-HELD = "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını yarına kadar tutuyorum."
-BOUGHT = "Bugün sert bir düşüş oldu, yarın için küçük bir ek alım yaptım."
-SOLD = "Dünkü düşüş için tuttuğum ek payı sattım."
+HELD = "Bugün sert bir düşüş oldu, bu yüzden elimdekinin bir kısmını sonraki işlem gününe kadar tutuyorum."
+BOUGHT = "Bugün sert bir düşüş oldu, sonraki işlem günü için küçük bir ek alım yaptım."
+SOLD = "Düşüş için tuttuğum ek payı sattım."
 
 
 def die_inside_the_submit(sim, day):

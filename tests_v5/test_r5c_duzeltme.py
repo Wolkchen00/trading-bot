@@ -27,7 +27,7 @@ class Death(BaseException):
 def _not_sent(cause):
     return (
         "Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü %s. "
-        "Elimdekilere dokunmadım. Yarın yeniden karar veririm." % cause
+        "Elimdekilere dokunmadım. Sonraki işlem gününde yeniden karar veririm." % cause
     )
 
 
@@ -168,7 +168,7 @@ def test_real_overlay_buy_and_next_days_sale_keep_their_sentences(tmp_path):
     assert sim.record(D2).status == ex.DONE and sim.orders()[-1].side == "buy"
 
     sim.run_day(D3, runner)
-    assert "Dünkü düşüş için tuttuğum ek payı sattım." in sim.digests()[2]
+    assert "Düşüş için tuttuğum ek payı sattım." in sim.digests()[2]
     assert sim.record(D3).status == ex.DONE and sim.orders()[-1].side == "sell"
     assert "OVERLAY_HELD" in vn.REASON_SENTENCES
 

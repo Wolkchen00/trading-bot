@@ -47,7 +47,7 @@ def test_a_doubtful_reading_and_the_rules_own_sale_on_the_same_day_do_not_contra
     assert len(doubts) == 1
     assert [o.side for o in sim.orders()][-1] == "sell" and sim.fb.positions[PRODUCT] < held
     digest = [text for text in today if "Gün sonu özeti (" in text]
-    assert len(digest) == 1 and "Dünkü düşüş için tuttuğum ek payı sattım." in digest[0]
+    assert len(digest) == 1 and "Düşüş için tuttuğum ek payı sattım." in digest[0]
     assert not [text for text in today if "diye satış yapmadım" in text]             # nothing says "I did not sell"
     assert_only_known_sentences(sim)
 

@@ -281,3 +281,131 @@
       pinned the old sentences were changed in the builder's files (`tests_v5/test_r4_notify.py`,
       `tests_v5/test_r5e_duzeltme.py`) and four in the reviewer's. The rehearsal on the copy of the real
       state was repeated on the new code: unchanged.
+35. [done, 2026-11-21] The last rows R5d wrote were never going to be confirmed, and they were not the
+    broker's official close (found in the weekend check the owner asked for).
+    - Measured on the 21st, read-only: practice row 61900.58 against the official 61825.47; the real row a
+      fraction of a dollar below the official close. Far inside the 2 percent tolerance; no safety rule
+      affected. But the next summary measures the day's change against the stored row, so Monday's summaries
+      would have reported a change that did not happen, and the practice peak stood on a value that never was
+      a close. The upgrade review (item 33) had run its timelines with a broker close equal to the stored row
+      or far from it, not a little off; the handover note had called the trace harmless without measuring it.
+    - Closed without new code: a one-off operator step gave both rows the flag R5e gives its own closing
+      rows, so the engine confirms them itself in Monday's first brake step; the practice peak was set to the
+      official close with `init-peak --force`. Rehearsed on the copy of the real state (28 cases), attacked by
+      three independent reviewers before applying (no blocker; their four improvements were built in), applied
+      and read back on the 21st. Record: `RF6-DEVAM.md`, section of 2026-11-21.
+    - Checked on Monday the 23rd: in the first brake step (14:30:05 UTC) the engine took the flag off both
+      rows and wrote the broker's values (practice 61825.4749575993, the broker's `last_equity` to the last
+      digit; the practice peak untouched); no `CLOSE_CORRECTED`, no other message; and both evening summaries
+      measured the day against those values (practice: 3.944,62 dollars, where the old row would have given
+      3.869,51). Record: `RF6-DEVAM.md`, the two sections of 2026-11-23.
+    - For the next upgrade that changes what a stored value means: on the first day after it, compare the last
+      stored row with the broker's official close BEFORE the next session (`RF6-CALISMA-KILAVUZU.md`,
+      section 7).
+36. [done, 2026-11-25; wording only] Owner sentences that say "dün" or "yarın" are not true next to a weekend
+    or a closed day. Seen on the first real sale: on Monday the 23rd the practice summary said "Dünkü düşüş
+    için tuttuğum ek payı sattım." about the dip of Friday the 20th. The trade and every number were right;
+    the word was not.
+    - The same kind as the `CLOSE_CORRECTED` sentence that R5f changed (item 34: "Friday is not yesterday");
+      that round changed only that one. The whole list in `v5/notify.py`: the reason sentences `OVERLAY_ENTER`,
+      `OVERLAY_WOULD`, `OVERLAY_HELD` ("yarın") and `OVERLAY_EXIT` ("Dünkü"); the templates `BREAKER`,
+      `HOLD_NOT_READY`, `MISSED`, `ORDER_UNFILLED`, `ORDER_PARTIAL`, `NOT_SENT` ("Yarın ...").
+    - "Yarın" is untrue whenever the next session is not the next calendar day: every Friday (the real
+      account's dry-run summary of Friday the 20th already said "yarın için"), and in the week of the 23rd also
+      Wednesday the 25th (no session on Thursday). "Dünkü" is untrue on Mondays and after a closed day (in
+      that week: Monday the 23rd and Friday the 27th), and after `OVERLAY_KEEP` (the dip is then two sessions
+      back).
+    - For the next code round (a plan revision of the sentence table, its tests, a deploy): name the session,
+      not the calendar day, for example "Önceki işlem günündeki düşüş için tuttuğum ek payı sattım." and
+      "sonraki işlem günü" where the sentences now say "yarın". No number, no order and no safety rule depends
+      on these words, so this does not hold back the live flag.
+    - Done on 2026-11-25 as fix round R5g (`rf6/fix-r5g.md`, plan Revision 16). Eleven sentences: the ten
+      listed above and `OVERLAY_KEEP` ("bir gün daha" had the same flaw: on a Friday the share is kept for
+      three days). `OVERLAY_EXIT` names no day at all ("Düşüş için tuttuğum ek payı sattım."): after a kept
+      share or a session without a decision the fall is more than one session back. Codex's quota was
+      closed until the 26th, so by the owner's rule a fresh Claude agent built it from the written contract
+      in a separate working copy; the reviewer's own suites were moved to the new sentences BEFORE the
+      build (they failed on the old code), and the reviewer's new suite `tests_v5/test_r5g_saldirgan.py`
+      (14 tests, 12 of them failing on the old code) was written from the contract before reading the build.
+      One guard for the future is in both new test files: no text of the five sentence tables may contain a
+      word that begins with "yarın" or "dün", nor "ertesi gün", nor "bir gün daha". Proof: 964 passed
+      (Windows). The diff of `v5/notify.py` is the eleven lines and nothing else.
+      A fresh reader (an independent agent that saw only the diff and the contract) compared the eleven
+      texts with the contract by program, looked for code that depends on the old words (none) and for
+      other texts that name a day relative to today (none). Its one suggestion, a wider guard pattern
+      ("ertesi", "öbür gün", "önceki gün", "geçen gün"), is in the reviewer's suite.
+    - Codex's quota returned the same morning and it reviewed the commit read-only (a second model that
+      had no part in the build). It compared `HEAD^` and `HEAD` by program: eleven lines removed, eleven
+      added, every text equal to the contract, nothing else in the module changed, no code in `v5/`,
+      `tools/` or `ops/` depends on the old words, Appendix A matches. Its one finding: a message that was
+      queued BEFORE the upgrade and is delivered after it still carries the old words (the outbox stores
+      the finished text and retries it for 48 hours). Not changed in code: sending a stored text as it was
+      written is the outbox's contract, and without the upgrade the same text would go out the same way.
+      Instead the upgrade is only done while nothing is waiting (`outbox_oldest_minutes` empty in both
+      containers); that line is now in the upgrade steps of `RF6-CALISMA-KILAVUZU.md`, section 7.
+37. [observations, 2026-11-23] What three independent reviewers noted on the evidence of the first session on
+    R5e + R5f besides item 36 (no blocker; record `RF6-DEVAM.md`, 2026-11-23). None is a fault of that day;
+    each is how the engine is built, written down so that nobody is surprised later.
+    - The account value in a summary is the reading about a minute after the close; the next day's change is
+      measured against the broker's official close. So "yesterday's value plus today's change" can miss
+      today's value by the small difference between the two (20th to 23rd: 75.11 on the practice account, a
+      fraction of a dollar on the real one). Under 2 percent the row is replaced silently, by design
+      (Revision 14). After a sale the official close is also lower by the regulatory fees booked overnight
+      (cents). An idea for later: build the closing value some minutes after the close from the official
+      closing prices.
+    - On the real account the lines "Bugün", "Bu ay" and "Başlangıçtan beri" include the owner's own share
+      (Revision 10: the account is watched as a whole). On the 23rd the whole change of the day was that
+      share; the engine held cash. A product choice for the owner, if wanted: show the engine's own result
+      apart from it.
+    - "Bu ay" equals "Başlangıçtan beri" until 1 December: the history starts on 19 November and the month's
+      base falls back to the first row.
+    - The decision price and the session's range come from the IEX feed, the closes from the consolidated
+      one (known since the build, measured in the lab). On the 23rd IBS was 0.64 with the IEX range and 0.63
+      with the consolidated one; near 0.2 the two could disagree.
+    - An automatic raise of the peak (first expected on the 24th, practice account) writes the value only:
+      `peak_source` and `peak_time` keep naming the last manual setting, and no event line is written.
+    - If the broker ever answers WITHOUT `balance_asof`, the engine cannot tell which day `last_equity`
+      belongs to: a provisional row is then confirmed with it whenever the two are within 2 percent, also
+      when the value is still the close of the day before. With the field present (as it has always been) a
+      stale value names its day and nothing is confirmed. If the broker names the previous session only after
+      that day's last brake step, the row is never confirmed (the accepted limit written in `confirm_close`).
+    - The heartbeat's `last_decision` shows the last decision known, so until the day's decision exists it
+      names the session before.
+    - The one-off script of item 35 (`mark-close-provisional` in both `ops_log.jsonl` files) is not in this
+      repository; it is kept with the operator's rehearsal files, which hold account values.
+    - Added on the 24th: when a share of the owner's own leaves the account (the owner's stop order sold it
+      that morning), the real account's summary shows the day's fall and "İşlem yapmadım." and does not say
+      where the fall came from. True, but puzzling to read. An idea for a later round: one sentence in that
+      day's summary when an owner-held position is gone or new.
+    - Not yet seen on the server and worth a look on the day: after the holiday of the 26th, which day the
+      broker names in `balance_asof` on the 27th; on the half day, the minute-bar coverage of the range (the
+      extra-purchase rule is skipped below 70 percent, the core rule still runs).
+38. [done, 2026-11-25, with notes that stay open] The live flag was switched on (record: `RF6-DEVAM.md`,
+    2026-11-25). What the reviewers of that step wrote down beyond the switch itself; none held it back.
+    - The moments at which the flag must NOT change in either direction: from the decision cutoff until the
+      running process has closed the day (about 20:56 to 21:02 UTC on a full day), a process with the other
+      setting finds no record of its own kind for the day and reports a missed decision; inside the window
+      after a dry decision, a process with orders on decides again, for real. The operator's scripts refuse
+      these times. If the two kinds of record ever have to be told apart in code: `_cutoff` looks only in the
+      folder of its own kind.
+    - The owner hears nothing while the broker cannot be reached after an order was accepted: the record
+      stays open, the states are in the heartbeat only, and the watchdog speaks only for a stale heartbeat or
+      an unreachable owner, never for a level-2 state. Bounded (one day order of at most a third of the
+      account), and the same silence existed before the flag. An idea: let the watchdog report level 2.
+    - The first real order is itself the test of the order calls on the real endpoint (the reads had run
+      there for six days). What a failure looks like, from runs on the state copy: a buying-power refusal
+      sends the same amount once more and ends FAILED with the message "Alpaca emrimi kabul etmedi"; a partial
+      fill is cancelled before the close and the held part is sold at the next decision; a never-filled
+      order says so; an ambiguous answer ends with exactly one order.
+    - Two notes on the gateway, not changed: any refusal carrying the code of a duplicate order id is treated
+      as "already sent" and looked up (it ends UNRESOLVED if nothing is found, never in a second order); a
+      refusal is stored as status and code only, the broker's text is in the log.
+    - On the first session after the holiday a doubt message is possible in one compound case only: no closing
+      row for Wednesday AND the broker naming the holiday as the day of its last close.
+    - On a day with the daily brake active the summary's last line still says "Durum: Her şey normal." (the
+      status line has no brake branch; the brake's own message is sent and the reasons line names it). For a
+      later round of the sentence table.
+    - The engine only writes to its notification channel and never reads it: there is no way from the
+      channel to the account.
+    - The switch and undo scripts are not in this repository (they name the host's paths); a description of
+      the step is in `RF6-CALISMA-KILAVUZU.md`, section 7.

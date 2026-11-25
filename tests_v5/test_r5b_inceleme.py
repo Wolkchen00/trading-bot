@@ -40,7 +40,7 @@ class Death(BaseException):
 
 def not_sent(cause):
     return ("Bugün bir işlem yapmam gerekiyordu ama emri gönderemedim, çünkü %s. Elimdekilere dokunmadım. "
-            "Yarın yeniden karar veririm." % cause)
+            "Sonraki işlem gününde yeniden karar veririm." % cause)
 
 
 def break_call(sim, name, after_calls=0, until=None):
@@ -924,7 +924,7 @@ def test_a_dry_run_record_left_open_is_closed_not_called_an_unknown_order(tmp_pa
 
 
 # ============================================================================ no session is left without its summary
-MISSED_LINE = "Durum: Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Yarın normal devam ederim."
+MISSED_LINE = "Durum: Bugünkü karar saatini kaçırdım. Elimdekilere dokunmadım. Sonraki işlem gününde normal devam ederim."
 
 
 def test_two_missed_closes_are_both_reported_oldest_first(tmp_path):
